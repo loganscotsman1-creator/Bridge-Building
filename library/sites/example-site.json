@@ -1,0 +1,17 @@
+{
+  "kind": "bridge-site",
+  "name": "Example site (not official)",
+  "year": "example",
+  "notes": "Invented layout for trying the app. Replace with the real layout from this year's rules.",
+  "width": 600,
+  "depth": 360,
+  "cell": 6,
+  "zones": [
+    { "id": "z-con", "name": "Construction zone", "type": "construction", "x": 90, "y": 105, "w": 330, "h": 150 },
+    { "id": "z-river", "name": "River", "type": "nogo", "x": 215, "y": 105, "w": 80, "h": 150 },
+    { "id": "z-stage", "name": "Staging yard", "type": "staging", "x": 430, "y": 30, "w": 160, "h": 220 },
+    { "id": "z-asm", "name": "Assembly area", "type": "assembly", "x": 430, "y": 260, "w": 160, "h": 90 }
+  ],
+  "bridge": { "x": 150, "y": 165, "rotation": 0 },
+  "hardware": { "x": 445, "y": 235 }
+}

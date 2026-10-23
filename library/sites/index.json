@@ -1,0 +1,10 @@
+{
+  "sites": [
+    {
+      "name": "Example site (not official)",
+      "year": "example",
+      "file": "example-site.json",
+      "description": "Invented layout for trying the app"
+    }
+  ]
+}
