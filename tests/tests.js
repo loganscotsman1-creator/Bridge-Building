@@ -5,6 +5,7 @@ import { SiteGrid } from '../js/sim/grid.js';
 import { simulate } from '../js/sim/simulate.js';
 import { createExampleProject } from '../js/model/example.js';
 import { normalizeProject } from '../js/model/schema.js';
+import { autoBolts, detachSegment, moveSegment, splitSegment } from '../js/model/edit.js';
 
 const results = [];
 function test(name, fn) {
@@ -62,6 +63,39 @@ test('mirroring creates a truss B copy of every truss A member and bolt', () => 
   assert(a === 21 && b === 21, `${a} A, ${b} B`);
   assert(m.nodes.get('b3~B').y === p.design.trussSpacing);
   assert(m.bolts.filter((x) => x.memberId.endsWith('~B')).length === m.bolts.filter((x) => m.memberById.get(x.memberId).plane === 'A').length);
+});
+
+test('adding a joint partway along a line splits it and keeps bolts in place', () => {
+  const p = normalizeProject(createExampleProject());
+  p.design.nodes.push({ id: 'mid', plane: 'A', x: 17.5, y: 0, z: 0, bearing: false });
+  splitSegment(p, 'm-BC1', 0, 'mid', 0.5);
+  const m = p.design.members.find((x) => x.id === 'm-BC1');
+  assert(JSON.stringify(m.segments) === JSON.stringify([['b0', 'mid'], ['mid', 'b1']]), JSON.stringify(m.segments));
+  const model = buildModel(p);
+  const xs = model.bolts.filter((b) => b.memberId === 'm-BC1').map((b) => Math.round(b.pos[0] * 100) / 100).sort((a, b) => a - b);
+  assert(JSON.stringify(xs) === JSON.stringify([1.4, 3.15, 31.85, 33.6]), 'bolt x ' + xs);
+  assert(near(model.memberById.get('m-BC1').length, 35, 1e-6));
+});
+
+test('grouping moves a line and its bolts into another member', () => {
+  const p = normalizeProject(createExampleProject());
+  moveSegment(p, 'm-BC2', 0, 'm-BC1');
+  assert(!p.design.members.some((m) => m.id === 'm-BC2'), 'emptied member is removed');
+  const m = buildModel(p).memberById.get('m-BC1');
+  assert(m.segments.length === 2 && near(m.length, 70, 1e-6));
+  assert(p.design.bolts.filter((b) => b.memberId === 'm-BC1').length === 8, 'bolts moved');
+  assert(!m.box.fits, 'a 70 in member is too long');
+  const id = detachSegment(p, 'm-BC1', 1);
+  assert(id !== 'm-BC1' && p.design.members.find((x) => x.id === id).segments.length === 1);
+});
+
+test('auto-fill puts bolts at member ends that meet other members', () => {
+  const p = normalizeProject(createExampleProject());
+  p.design.bolts = [];
+  const added = autoBolts(p, buildModel(p), 'A', 2);
+  // 21 truss A members, both ends meet something: 21 * 2 ends * 2 bolts
+  assert(added === 84, 'added ' + added);
+  assert(autoBolts(p, buildModel(p), 'A', 2) === 0, 'running again adds nothing');
 });
 
 const pos = nodesOf([

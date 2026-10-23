@@ -2,7 +2,7 @@
 // bridge (two trusses, 6 panels) on an invented site. Not an official AISC layout.
 import { emptyProject } from './schema.js';
 import { MIRROR_SUFFIX as B } from './ids.js';
-import { buildModel } from './geometry.js';
+import { buildModel, calibFromPoints } from './geometry.js';
 import { autoOrderSteps } from './plan.js';
 
 export function exampleSite() {
@@ -62,6 +62,7 @@ export function createExampleProject() {
     });
   }
 
+  if (typeof document !== 'undefined') addExampleScreenshots(p);
   p.site = exampleSite();
   p.tools = [
     { id: 't-impact', name: 'Impact driver', kind: 'fastener', count: 2, boltTime: 4, placeTime: 0, removeTime: 0, start: { x: 490, y: 235 }, notes: 'Battery impact with socket' },
@@ -91,4 +92,73 @@ export function createExampleProject() {
     { id: 's-j4', kind: 'support', action: 'remove', toolId: 't-jack', nodeId: 'b1' + B, builder: 'auto' },
   ];
   return p;
+}
+
+// Draw stand-in "CAD screenshots" of the example bridge (side, top, isometric) so the markup
+// workflow has something to show. Real projects use screenshots from your CAD program.
+function addExampleScreenshots(p) {
+  const model = buildModel(p);
+  const S = 5, M = 60; // pixels per inch, margin
+  const nodes = [...model.nodes.values()];
+  const maxX = Math.max(...nodes.map((n) => n.x)), maxZ = Math.max(...nodes.map((n) => n.z));
+  const canvas = (w, h) => {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    const grad = g.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, '#eef2f7'); grad.addColorStop(1, '#cfd8e3');
+    g.fillStyle = grad; g.fillRect(0, 0, w, h);
+    g.lineCap = 'round';
+    return { c, g };
+  };
+  const tube = (g, a, b, width) => {
+    g.strokeStyle = '#3f4a59'; g.lineWidth = width + 2; g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.stroke();
+    g.strokeStyle = '#8b97a8'; g.lineWidth = width; g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.stroke();
+  };
+  const add = (key, c, img) => { p.images[key] = { url: c.toDataURL('image/png'), w: c.width, h: c.height, name: img }; };
+
+  // Side view of truss A
+  {
+    const w = Math.round(maxX * S + 2 * M), h = Math.round(maxZ * S + 2 * M + 30);
+    const { c, g } = canvas(w, h);
+    const P = (n) => [M + n.x * S, h - M - 30 - n.z * S];
+    g.fillStyle = '#9aa5b4';
+    for (const n of nodes.filter((x) => x.plane === 'A' && x.bearing)) { const [x, y] = P(n); g.fillRect(x - 30, y + 3, 60, 24); }
+    for (const m of model.members.filter((x) => x.plane === 'A')) for (const [a, b] of m.segments) tube(g, P(model.nodes.get(a)), P(model.nodes.get(b)), S);
+    g.fillStyle = '#5b6677';
+    for (const n of nodes.filter((x) => x.plane === 'A')) { const [x, y] = P(n); g.beginPath(); g.arc(x, y, 7, 0, 7); g.fill(); }
+    g.fillStyle = '#1f2937';
+    for (const b of model.bolts.filter((x) => model.memberById.get(x.memberId).plane === 'A')) { const [x, y] = P({ x: b.pos[0], z: b.pos[2] }); g.beginPath(); g.arc(x, y, 2.2, 0, 7); g.fill(); }
+    g.fillStyle = '#475569'; g.font = '14px sans-serif'; g.fillText('Example CAD screenshot · side elevation', 12, 20);
+    add('img-ex-side', c, 'example-side-view.png');
+    const p1 = { px: M, py: h - M - 30, u: 0, v: 0 }, p2 = { px: M + maxX * S, py: h - M - 30, u: maxX, v: 0 };
+    p.design.views.sideA = { imageId: 'img-ex-side', calib: calibFromPoints(true, p1, p2), scaled: true, opacity: 0.7 };
+  }
+  // Top view
+  {
+    const sp = p.design.trussSpacing;
+    const w = Math.round(maxX * S + 2 * M), h = Math.round(sp * S + 2 * M);
+    const { c, g } = canvas(w, h);
+    const P = (n) => [M + n.x * S, M + n.y * S];
+    for (const m of model.members.filter((x) => x.plane !== 'L')) for (const [a, b] of m.segments) tube(g, P(model.nodes.get(a)), P(model.nodes.get(b)), S);
+    for (const m of model.members.filter((x) => x.plane === 'L')) for (const [a, b] of m.segments) tube(g, P(model.nodes.get(a)), P(model.nodes.get(b)), S);
+    g.fillStyle = '#475569'; g.font = '14px sans-serif'; g.fillText('Example CAD screenshot · plan view', 12, 20);
+    add('img-ex-top', c, 'example-top-view.png');
+    const p1 = { px: M, py: M, u: 0, v: 0 }, p2 = { px: M + maxX * S, py: M + sp * S, u: maxX, v: sp };
+    p.design.views.top = { imageId: 'img-ex-top', calib: calibFromPoints(false, p1, p2), scaled: true, opacity: 0.7 };
+  }
+  // Isometric reference
+  {
+    const az = (-32 * Math.PI) / 180, el = (24 * Math.PI) / 180;
+    const proj = (n) => { const x1 = n.x * Math.cos(az) - n.y * Math.sin(az), y1 = n.x * Math.sin(az) + n.y * Math.cos(az); return [x1, -(n.z * Math.cos(el) + y1 * Math.sin(el))]; };
+    const pts = nodes.map(proj);
+    const minX = Math.min(...pts.map((q) => q[0])), minY = Math.min(...pts.map((q) => q[1]));
+    const s = 4, w = Math.round((Math.max(...pts.map((q) => q[0])) - minX) * s + 2 * M), h = Math.round((Math.max(...pts.map((q) => q[1])) - minY) * s + 2 * M);
+    const { c, g } = canvas(w, h);
+    const P = (n) => { const q = proj(n); return [M + (q[0] - minX) * s, M + (q[1] - minY) * s]; };
+    for (const m of model.members) for (const [a, b] of m.segments) tube(g, P(model.nodes.get(a)), P(model.nodes.get(b)), 4);
+    g.fillStyle = '#475569'; g.font = '14px sans-serif'; g.fillText('Example CAD screenshot · isometric', 12, 20);
+    add('img-ex-iso', c, 'example-isometric.png');
+    p.design.isoRefs = [{ imageId: 'img-ex-iso', caption: 'Example isometric' }];
+  }
 }

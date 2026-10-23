@@ -94,3 +94,83 @@ export function nextMemberName(project, plane) {
 export function newNode(plane, x, y, z) {
   return { id: uid('n'), plane, x, y, z, bearing: false };
 }
+
+// Put a new joint partway along a segment (fraction t from its first node), splitting it in two.
+// Bolts stay where they were.
+export function splitSegment(project, memberId, segIndex, nodeId, t) {
+  const m = project.design.members.find((x) => x.id === memberId);
+  const [a, b] = m.segments[segIndex];
+  m.segments.splice(segIndex, 1, [a, nodeId], [nodeId, b]);
+  for (const bolt of project.design.bolts) {
+    if (bolt.memberId !== memberId) continue;
+    if (bolt.seg > segIndex) bolt.seg += 1;
+    else if (bolt.seg === segIndex) {
+      if (bolt.s <= t) bolt.s = t ? bolt.s / t : 0;
+      else { bolt.seg += 1; bolt.s = (bolt.s - t) / (1 - t); }
+    }
+  }
+}
+
+// Move one segment (and its bolts) from one member to another. A member left with no
+// segments is deleted.
+export function moveSegment(project, fromId, segIndex, toId) {
+  const d = project.design;
+  const from = d.members.find((x) => x.id === fromId);
+  const to = d.members.find((x) => x.id === toId);
+  if (!from || !to || from === to) return;
+  const [seg] = from.segments.splice(segIndex, 1);
+  const newIndex = to.segments.length;
+  to.segments.push(seg);
+  for (const bolt of d.bolts) {
+    if (bolt.memberId !== fromId) continue;
+    if (bolt.seg === segIndex) { bolt.memberId = toId; bolt.seg = newIndex; }
+    else if (bolt.seg > segIndex) bolt.seg -= 1;
+  }
+  if (!from.segments.length) removeMember(project, fromId);
+}
+
+// Take one segment out of its member into a member of its own; returns the new member's id.
+export function detachSegment(project, memberId, segIndex) {
+  const m = project.design.members.find((x) => x.id === memberId);
+  if (!m) return null;
+  if (m.segments.length === 1) return memberId;
+  const id = uid('m');
+  project.design.members.push({ id, name: nextMemberName(project, m.plane), plane: m.plane, segments: [] });
+  moveSegment(project, memberId, segIndex, id);
+  return id;
+}
+
+// Give every member end that meets another member `perEnd` bolts, counting bolts that are
+// already there.
+export function autoBolts(project, model, plane, perEnd) {
+  const d = project.design;
+  const touching = new Map();
+  for (const m of model.members) for (const n of m.nodeIds) touching.set(n, (touching.get(n) || 0) + 1);
+  let added = 0;
+  for (const m of d.members) {
+    if (m.plane !== plane) continue;
+    const mm = model.memberById.get(m.id);
+    if (!mm) continue;
+    const ends = new Map(); // nodeId -> [{seg, atStart, len}]
+    m.segments.forEach(([a, b], seg) => {
+      const pa = model.nodes.get(a), pb = model.nodes.get(b);
+      if (!pa || !pb) return;
+      const len = Math.hypot(pb.x - pa.x, pb.y - pa.y, pb.z - pa.z);
+      for (const [n, atStart] of [[a, true], [b, false]]) {
+        if (!ends.has(n)) ends.set(n, []);
+        ends.get(n).push({ seg, atStart, len });
+      }
+    });
+    for (const [n, list] of ends) {
+      if ((touching.get(n) || 0) - 1 <= 0) continue; // nothing else connects here
+      const have = d.bolts.filter((b) => b.memberId === m.id && (b.s < 0.5 ? m.segments[b.seg]?.[0] : m.segments[b.seg]?.[1]) === n).length;
+      const { seg, atStart, len } = list[0];
+      for (let i = have; i < perEnd; i++) {
+        const off = Math.min(0.45, (1.5 + 1.5 * i) / Math.max(1, len));
+        d.bolts.push({ id: uid('b'), memberId: m.id, seg, s: atStart ? off : 1 - off });
+        added++;
+      }
+    }
+  }
+  return added;
+}

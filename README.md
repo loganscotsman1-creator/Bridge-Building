@@ -1,7 +1,8 @@
 # Steel Bridge Build Sequencer
 
 A free, browser-based tool for planning, animating and comparing **build sequences** for the
-AISC Student Steel Bridge Competition. Enter your bridge design, the site layout, your tools and
+AISC Student Steel Bridge Competition. Bring screenshots of the bridge you designed in your CAD
+program, mark which pieces are members and where the bolts go, set up the site, your tools and
 your crew, then try different build orders and see how long each one takes, who is busy when,
 and how long someone has to hold each piece while it is aligned and bolted.
 
@@ -19,31 +20,41 @@ you can send to teammates.
 Work through the tabs left to right. The app opens with an example bridge so you can try each
 step before entering your own (**New** starts empty, **Example** reloads the sample).
 
-### 1 · Bridge design
-Bridges are usually two trusses joined by laterals, so the design is entered from views:
+### 1 · Members & bolts (from your screenshots)
+Your bridge is already designed in another program; this tab turns screenshots of it into the
+pieces the simulator works with. Bridges are usually two trusses joined by laterals, so you mark
+up a few views:
 
-| View | What you do |
+| View | Screenshot to use |
 |---|---|
-| **Side view · truss A** | Load a side-view screenshot from your CAD model, calibrate it, then trace the members and bolts. |
-| **Side view · truss B** | Only shown if you untick *Truss B mirrors truss A*. Otherwise truss B is generated as a mirror copy (members, joints and bolts). |
-| **Top view · laterals** | Draw the members that connect the two trusses. Pick the chord level first so clicks snap to top-chord or bottom-chord joints. Truss members are drawn at their real tube width so you can check thicknesses. |
-| **Isometric references** | Add one or more isometric screenshots to compare against the 3D view the app builds from your annotations. |
-| **Members & size check** | Every member with its length, weight, outline and whether it fits the size box (4 × 6 × 42 in by default, editable). |
+| **Side view** | A side elevation of one truss. If the other truss is a mirror image (the usual case), that's all you need: truss B is copied automatically, members, joints and bolts included. |
+| **Side view · truss B** | Only shown if you untick *Truss B mirrors truss A* (Bridge settings). Mark up the second truss the same way. |
+| **Top view · laterals** | A plan view. The trusses appear on it automatically; you only trace the laterals that connect them. Truss members are drawn at their real tube width, so you can compare thicknesses. |
+| **Isometric screenshots** | One or more for reference, shown next to the 3D view built from your markup. If they don't match, something is marked wrong. |
+| **Member list & size check** | Every member's length, weight and outline, and whether it fits the size box (4 × 6 × 42 in by default, editable). |
 
-Tools in the drawing views (keyboard shortcut in brackets):
-- **Calibrate image (C):** click two points you know (both bearings works well), type their real
-  coordinates in inches, Apply. x runs along the span, z is up (y is across, in the top view).
-- **Draw member (M):** click joints in order. A member can bend through several joints (a
-  welded piece). Click empty space to add a joint there. Finish with Enter, a double-click, or
-  by clicking the last joint again.
-- **Add bolt (B):** click a member near the joint where the bolt goes. Each bolt belongs to the
-  nearest end joint of the segment it sits on. **Two or more bolts at one member end make that
-  joint rigid** (it can cantilever). This threshold is a setting.
-- **Add node (N)** / **Select (V):** drag joints to adjust, or type exact coordinates in the panel.
-  Tick **Bearing** on the joints that rest on the footings.
-- Scroll to zoom, drag empty space to pan, Delete removes the selection, Ctrl+Z undoes.
+Each view has a checklist on the right that walks you through it:
 
-Members that don't fit the box are drawn red. "Fits tilted" means it only fits diagonally in the box.
+1. **Add the screenshot:** drag it onto the canvas, paste it with **Ctrl+V** straight from a
+   screen-capture tool, or choose a file.
+2. **Set the scale (S):** click two points you know (both bearings work well) and type their
+   real positions in inches. x runs along the span from the left bearing, z is height (y is
+   across, from truss A to truss B, in the top view).
+3. **Trace the lines (T):** click joint to joint along the bridge. Clicking an existing joint
+   connects to it; clicking partway along a line you already traced puts a joint there. Press
+   Enter or click the same joint twice to lift the pen.
+4. **Group into members (G):** by default every traced line is its own member. Click a line to
+   start a member, then click the other lines that are welded into the same piece. Members are
+   color-coded and labeled while you group, and any member that won't fit the box turns red.
+5. **Mark the bolts (B):** click on a member near the joint each bolt goes through (click a bolt
+   again to remove it), or use **Auto-fill** to put N bolts at every member end that meets
+   another member. **Two or more bolts at one member end make that joint rigid** (it can
+   cantilever). The threshold is in Bridge settings.
+6. **Mark the bearings (R):** click the joints that rest on the footings.
+
+**Select (V)** lets you drag joints or type exact coordinates. Scroll to zoom, drag empty space
+to pan, Delete removes the selection, Ctrl+Z undoes. "Fits tilted" means a member only fits the
+box diagonally.
 
 ### 2 · Site & zones
 Lay out the ground: **staging yard**, **construction zone**, **ground assembly areas**, **no-go

@@ -15,7 +15,7 @@ import { SequenceTab } from './SequenceTab.js';
 import { SimulateTab } from './SimulateTab.js';
 
 const TABS = [
-  ['design', '1 · Bridge design'],
+  ['design', '1 · Members & bolts'],
   ['site', '2 · Site & zones'],
   ['tools', '3 · Tools'],
   ['crew', '4 · Crew & timing'],

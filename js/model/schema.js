@@ -1,7 +1,8 @@
 // The shape of a project file, plus defaults. All lengths are inches, all times are seconds.
 //
 // project
-//   design   – truss geometry: nodes (joints), members (made of segments between nodes), bolts
+//   design   – the bridge as marked up on screenshots: nodes (joints), members (made of
+//              segments between nodes), bolts, and the screenshots with their scale
 //   site     – ground layout: zones, where the bridge sits, where hardware and pieces start
 //   tools    – impact drivers, jack stands, etc.
 //   timing   – how long things take
@@ -47,7 +48,7 @@ export const DEFAULT_TIMING = {
 export const DEFAULT_COLORS = ['#e11d48', '#2563eb', '#16a34a', '#d97706', '#7c3aed', '#0891b2', '#db2777', '#65a30d'];
 
 export function emptyView() {
-  return { imageId: null, calib: null, opacity: 0.6 };
+  return { imageId: null, calib: null, scaled: false, opacity: 0.6 };
 }
 
 export function emptySite() {
