@@ -35,7 +35,7 @@ export function CrewTab({ project }) {
   });
 
   return html`<div class="page two-col">
-    <div>
+    <div data-tour="crew">
       <div class="row"><button class="primary" onClick=${add}>+ Builder</button>
         <span class="muted">${project.builders.length} builder${project.builders.length === 1 ? '' : 's'}. Start points are dragged in the Site tab.</span></div>
       <div class="cards">
@@ -66,7 +66,7 @@ export function CrewTab({ project }) {
         </div>`)}
       </div>
     </div>
-    <div>
+    <div data-tour="timing">
       <${Section} title="Timing">
         ${TIMING_FIELDS.map(([k, label, unit, title]) => html`<${NumField} label=${label} unit=${unit} title=${title} value=${T[k]} min=${0}
           onChange=${(v) => updateProject((p) => { p.timing[k] = v; }, { key: 't' + k })} />`)}

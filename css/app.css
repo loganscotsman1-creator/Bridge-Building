@@ -44,6 +44,7 @@ header.top { display: flex; align-items: center; gap: 14px; padding: 8px 14px; b
 .file-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 header .file-actions button:not(.primary) { background: #1e293b; color: #e2e8f0; border-color: #334155; }
 header .file-actions button:not(.primary):hover:not(:disabled) { background: #334155; }
+header .file-actions .sep { width: 1px; height: 22px; background: #334155; margin: 0 2px; }
 .status { margin-left: auto; display: flex; gap: 12px; font-weight: 600; }
 .status .ok { color: #86efac; }
 .status .bad { color: #fca5a5; }
@@ -226,6 +227,20 @@ table.grid tr.bad td { color: var(--bad); }
 .sim-reports .panel-section { background: #fff; border: 1px solid var(--line); border-radius: 10px; }
 .sim-reports .panel-section:last-child { grid-column: 1 / -1; }
 .sim-reports .problems { max-height: none; border-top: none; padding: 0; }
+
+/* tutorial */
+.tour { position: fixed; inset: 0; z-index: 1000; }
+.tour-shade { position: absolute; inset: 0; background: rgba(15, 23, 42, 0.55); }
+.tour-hole { position: absolute; border-radius: 10px; box-shadow: 0 0 0 4px #facc15, 0 0 0 9999px rgba(15, 23, 42, 0.55); pointer-events: none; }
+.tour-card { position: absolute; background: #fff; border-radius: 12px; padding: 16px 18px 14px; box-shadow: 0 18px 48px rgba(15, 23, 42, 0.35); }
+.tour-card h3 { margin: 2px 0 6px; font-size: 16px; }
+.tour-card p { margin: 0 0 12px; line-height: 1.5; color: #334155; font-size: 13.5px; }
+.tour-count { font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.tour-dots { display: flex; gap: 5px; margin-bottom: 12px; flex-wrap: wrap; }
+.tour-dots i { width: 7px; height: 7px; border-radius: 50%; background: #cbd5e1; cursor: pointer; }
+.tour-dots i.on { background: var(--accent); }
+button.link { border: none; background: none; color: var(--muted); padding: 5px 2px; text-decoration: underline; }
+button.link:hover:not(:disabled) { background: none; color: var(--ink); }
 
 @media (max-width: 1000px) {
   .tab-layout { grid-template-columns: 1fr; grid-template-rows: minmax(420px, 1fr) auto; overflow-y: auto; }

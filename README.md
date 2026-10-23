@@ -18,7 +18,10 @@ you can send to teammates.
 ## How to use it
 
 Work through the tabs left to right. The app opens with an example bridge so you can try each
-step before entering your own (**New** starts empty, **Example** reloads the sample).
+step before entering your own (**New** starts empty, **Example** reloads the sample). A short
+click-through tutorial runs on your first visit; skip it, or replay it any time with the
+**Tutorial** button in the header. (Its steps live in [`js/ui/Tour.js`](js/ui/Tour.js); edit
+the text there when the app changes.)
 
 ### 1 · Members & bolts (from your screenshots)
 Your bridge is already designed in another program; this tab turns screenshots of it into the

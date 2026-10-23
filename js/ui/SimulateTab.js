@@ -51,7 +51,7 @@ export function SimulateTab({ project, model, sim }) {
   const selBuilder = sel && sel.type === 'builder' ? state.builders.find((b) => b.id === sel.id) : null;
 
   return html`<div class="sim">
-    <div class="toolbar">
+    <div class="toolbar" data-tour="play">
       <button class="primary" onClick=${() => { if (t >= end) setT(0); setPlaying(!playing); }}>${playing ? '❚❚ Pause' : '▶ Play'}</button>
       <button onClick=${() => { setPlaying(false); setT(0); }}>⏮</button>
       <select value=${speed} onChange=${(e) => setSpeed(parseFloat(e.target.value))} title="Playback speed">
@@ -76,7 +76,7 @@ export function SimulateTab({ project, model, sim }) {
         </div>
       </div>
     </div>
-    <${Gantt} result=${sim} t=${t} setT=${(v) => { setPlaying(false); setT(v); }} />
+    <div data-tour="gantt"><${Gantt} result=${sim} t=${t} setT=${(v) => { setPlaying(false); setT(v); }} /></div>
     <div class="sim-reports">
       <${Section} title=${`Holding time (${fmt(totalHold)} total)`}>
         <p class="hint">How long someone had to hold each piece after placing it: waiting for a fastener, then aligning and bolting, then until the piece became stable.</p>

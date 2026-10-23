@@ -42,7 +42,7 @@ export function DesignTab({ project, model }) {
       ${current === 'members' && html`<${MemberTable} project=${project} model=${model} sel=${sel} setSel=${setSel} />`}
     </div>
     <aside class="side">
-      ${isMarkup && html`<${Checklist} project=${project} model=${model} viewKey=${current} mode=${mode} setMode=${setMode} />`}
+      ${isMarkup && html`<div data-tour="checklist"><${Checklist} project=${project} model=${model} viewKey=${current} mode=${mode} setMode=${setMode} /></div>`}
       ${sel && html`<${SelectionPanel} project=${project} model=${model} sel=${sel} setSel=${setSel} />`}
       <${BridgeSettings} project=${project} model=${model} open=${false} />
     </aside>

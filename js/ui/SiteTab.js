@@ -25,7 +25,7 @@ export function SiteTab({ project, model }) {
   };
 
   return html`<div class="tab-layout">
-    <div class="main">
+    <div class="main" data-tour="site-canvas">
       <div class="toolbar">
         <span class="muted">Add zone:</span>
         ${Object.entries(ZONE_TYPES).map(([t, z]) => html`<button onClick=${() => addZone(t)}><span class="dot" style=${{ background: z.color }}></span>${z.label}</button>`)}
@@ -53,7 +53,7 @@ export function SiteTab({ project, model }) {
           <span class="dot" style=${{ background: ZONE_TYPES[z.type]?.color }}></span>${z.name}<span class="muted"> ${Math.round(z.w)}×${Math.round(z.h)} in</span></li>`)}</ul>
         <${Hint}>Builders who aren't restricted can walk anywhere in the site except no-go zones. Restrict builders to zones in the Crew tab.<//>
       <//>
-      <${SiteLibrary} project=${project} />
+      <div data-tour="site-library"><${SiteLibrary} project=${project} /></div>
     </aside>
   </div>`;
 }

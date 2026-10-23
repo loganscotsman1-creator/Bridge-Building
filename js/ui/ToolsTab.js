@@ -23,7 +23,7 @@ export function ToolsTab({ project }) {
     for (const pl of p.plans) pl.steps = pl.steps.filter((s) => !(s.kind === 'support' && s.toolId === id));
   });
 
-  return html`<div class="page">
+  return html`<div class="page" data-tour="tools">
     <div class="row">
       <button class="primary" onClick=${() => add('fastener')}>+ Fastening tool</button>
       <button class="primary" onClick=${() => add('support')}>+ Temporary support</button>

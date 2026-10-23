@@ -13,6 +13,7 @@ import { ToolsTab } from './ToolsTab.js';
 import { CrewTab } from './CrewTab.js';
 import { SequenceTab } from './SequenceTab.js';
 import { SimulateTab } from './SimulateTab.js';
+import { Tour, tourSeen } from './Tour.js';
 
 const TABS = [
   ['design', '1 · Members & bolts'],
@@ -29,6 +30,7 @@ export function App() {
     try { return localStorage.getItem('bss.tab') || 'design'; } catch { return 'design'; }
   });
   const [saveOk, setSaveOk] = useState(true);
+  const [touring, setTouring] = useState(() => !tourSeen());
   useEffect(() => onAutosaveStatus(setSaveOk), []);
   useEffect(() => { try { localStorage.setItem('bss.tab', tab); } catch { /* private mode */ } }, [tab]);
 
@@ -66,7 +68,7 @@ export function App() {
       <div class="brand">Steel Bridge<br /><b>Build Sequencer</b></div>
       <input class="project-name" type="text" value=${project.name} title="Project name"
         onInput=${(e) => updateProject((p) => { p.name = e.target.value; }, { key: 'pname' })} />
-      <div class="file-actions">
+      <div class="file-actions" data-tour="file">
         <button onClick=${() => confirm('Start a new, empty project? (Save the current one first if you need it.)') && setProject(emptyProject(), { resetHistory: false })}>New</button>
         <button onClick=${() => confirm('Load the example project? Your current project will be replaced (you can undo).') && setProject(normalizeProject(createExampleProject()), { resetHistory: false })}>Example</button>
         <button onClick=${openFile}>Open…</button>
@@ -74,13 +76,15 @@ export function App() {
         <span class="sep"></span>
         <button disabled=${!canUndo()} onClick=${undo} title="Undo (Ctrl+Z)">↶</button>
         <button disabled=${!canRedo()} onClick=${redo} title="Redo (Ctrl+Shift+Z)">↷</button>
+        <span class="sep"></span>
+        <button onClick=${() => setTouring(true)} title="A short walk-through of the program">Tutorial</button>
       </div>
       <div class="status">
         ${!saveOk && html`<span class="bad" title="Your browser's storage is full (usually big images). Use Save file to keep your work.">⚠ Autosave failed, use Save file</span>`}
         ${sim && html`<span class=${sim.errors.length ? 'bad' : 'ok'}>${sim.aborted ? 'Plan incomplete' : 'Build time ' + fmt(sim.endTime)}</span>`}
       </div>
     </header>
-    <nav class="tabs">
+    <nav class="tabs" data-tour="tabs">
       ${TABS.map(([k, label]) => html`<button class=${tab === k ? 'on' : ''} onClick=${() => setTab(k)}>${label}</button>`)}
       <span class="spacer"></span>
       <a class="help-link" href="https://github.com/loganscotsman1-creator/Bridge-Building#readme" target="_blank" rel="noopener">Help</a>
@@ -93,5 +97,6 @@ export function App() {
       ${tab === 'sequence' && html`<${SequenceTab} project=${project} model=${model} sim=${sim} />`}
       ${tab === 'simulate' && html`<${SimulateTab} project=${project} model=${model} sim=${sim} />`}
     </main>
+    ${touring && html`<${Tour} setTab=${setTab} onClose=${() => setTouring(false)} />`}
   </div>`;
 }

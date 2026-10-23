@@ -385,7 +385,7 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode,
   const showDrop = !img && !noImage && !viewMembers.some(editableMember);
 
   return html`<div class="annotator">
-    <div class="toolbar">
+    <div class="toolbar" data-tour="modes">
       ${MODES.map(([m, label, key], i) => html`<button class=${'step-btn ' + (mode === m ? 'on' : '')} title=${label + ' (' + key + ')'} disabled=${m === 'calibrate' && !img}
         onClick=${() => setMode(m)}>${i > 0 && html`<span class="n">${i}</span>`}${label}</button>`)}
     </div>
@@ -410,7 +410,7 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode,
       <button onClick=${async () => loadFile(await pickFile('image/*'))}>${img ? 'Replace screenshot' : 'Add screenshot'}</button>
       <button onClick=${() => cam.fit(bounds)}>Fit</button>
     </div>
-    <div class=${'canvas-wrap' + (dropping ? ' dropping' : '')}
+    <div class=${'canvas-wrap' + (dropping ? ' dropping' : '')} data-tour="canvas"
       onDragOver=${(e) => { e.preventDefault(); setDropping(true); }} onDragLeave=${() => setDropping(false)}
       onDrop=${(e) => { e.preventDefault(); setDropping(false); loadFile(e.dataTransfer.files[0]); }}>
       <svg ref=${cam.svgRef} class=${'canvas mode-' + mode} onPointerDown=${onPointerDown} onPointerMove=${onPointerMove} onPointerUp=${onPointerUp}

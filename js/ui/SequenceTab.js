@@ -146,7 +146,7 @@ export function SequenceTab({ project, model, sim }) {
           });
         }}>Auto order</button>
         <span class="spacer"></span>
-        <span class=${'total ' + (sim.errors.length ? 'bad' : '')}>${sim.aborted ? 'Stops at step ' + ((sim.errors.at(-1)?.step ?? 0) + 1) : 'Build time ' + fmt(sim.endTime)}</span>
+        <span data-tour="total" class=${'total ' + (sim.errors.length ? 'bad' : '')}>${sim.aborted ? 'Stops at step ' + ((sim.errors.at(-1)?.step ?? 0) + 1) : 'Build time ' + fmt(sim.endTime)}</span>
       </div>
       ${compare && html`<div class="compare">
         <table class="grid"><thead><tr><th>Plan</th><th>Build time</th><th>Total holding</th><th>Problems</th><th></th></tr></thead>
@@ -154,7 +154,7 @@ export function SequenceTab({ project, model, sim }) {
           <td><button class="small" onClick=${() => updateProject((p) => { p.activePlanId = c.id; })}>Open</button></td></tr>`)}</tbody></table>
         <button class="small" onClick=${() => setCompare(null)}>Close</button></div>`}
       <div class="seq-body">
-        <ol class="steps-list">
+        <ol class="steps-list" data-tour="steps">
           ${!steps.length && html`<li class="empty">No steps yet. Use <b>Auto order</b> or add pieces from the list on the right.</li>`}
           ${steps.map((s, i) => {
             const t = sim.stepTimes[i];
@@ -206,6 +206,7 @@ export function SequenceTab({ project, model, sim }) {
             pl.steps.push(installStep(u));
           })}>Add</button></li>`)}</ul>
       <//>
+      <div data-tour="assemblies">
       <${Section} title=${`Ground assemblies (${plan.assemblies.length})`}>
         <${Hint}>Members bolted together on the ground in an assembly area, then carried and installed as one piece.<//>
         <button class="primary" onClick=${createAssembly}>+ New assembly</button>
@@ -222,6 +223,7 @@ export function SequenceTab({ project, model, sim }) {
         </div>`)}
       <//>
       <${AddSupport} project=${project} model=${model} selIndex=${selIndex} setPlan=${setPlan} />
+      </div>
     </aside>
   </div>`;
 }
