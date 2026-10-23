@@ -162,6 +162,7 @@ pull request. Describe what you changed and how you tested it.
 
 ### Publishing the link
 The app is served by GitHub Pages straight from the repository, with no build step. A repo admin
-turns it on once: **Settings → Pages → Build and deployment → Source: Deploy from a branch →
-Branch: `main`, folder `/ (root)` → Save**. The link above works a minute later and updates
-with every push to `main`.
+turns it on once: **Settings → Pages → Build and deployment → Source: GitHub Actions**. The
+workflow in [`.github/workflows/pages.yml`](.github/workflows/pages.yml) then publishes the site
+on every push to `main` (watch it under the repo's **Actions** tab). The link above works a
+minute or two after each push.
