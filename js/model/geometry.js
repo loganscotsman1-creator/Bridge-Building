@@ -1,152 +1,262 @@
-// Geometry: turns the stored design into a 3D model, checks members against the size box,
-// and maps bridge coordinates onto the site plan.
+// Geometry: turns the box members marked on the screenshots into a 3D model, finds where boxes
+// touch (connections), and maps bridge coordinates onto the site plan.
 //
-// Bridge coordinates: x along the span, y across (truss A at y = 0, truss B at y = trussSpacing), z up.
+// Bridge coordinates: x along the span, y across (truss A at y = 0, truss B at y = trussSpacing),
+// z up. Side views use (u, v) = (x, z); the top view uses (u, v) = (x, y).
 import { MIRROR_SUFFIX } from './ids.js';
+import { boxLimits } from './schema.js';
 
-export const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-export const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
-export const scale = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
-export const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-export const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-export const len = (a) => Math.hypot(a[0], a[1], a[2]);
-export const norm = (a) => { const l = len(a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
-export const nodeVec = (n) => [n.x, n.y, n.z];
+const EPS_EDGE = 0.15; // in: edges this close count as touching
+const MIN_CONTACT = 0.1; // in: shortest touching length that counts
+const BOLT_TOL = 0.35; // in: a bolt this close to a connection belongs to it
 
+// ---------- 2D helpers (points are [u, v]) ----------
+const rad = (deg) => (deg * Math.PI) / 180;
+const dot2 = (a, b) => a[0] * b[0] + a[1] * b[1];
+const cross2 = (a, b) => a[0] * b[1] - a[1] * b[0];
+const sub2 = (a, b) => [a[0] - b[0], a[1] - b[1]];
+const len2 = (a) => Math.hypot(a[0], a[1]);
+
+export function boxAxes(m) {
+  const a = rad(m.angle || 0);
+  return { d: [Math.cos(a), Math.sin(a)], n: [-Math.sin(a), Math.cos(a)] };
+}
+
+// Corners counter-clockwise: back-bottom, front-bottom, front-top, back-top (in the box's own frame).
+export function boxCorners(m) {
+  const { d, n } = boxAxes(m);
+  const hl = m.len / 2, hd = m.depth / 2;
+  return [[-hl, -hd], [hl, -hd], [hl, hd], [-hl, hd]].map(([s, t]) => [m.u + d[0] * s + n[0] * t, m.v + d[1] * s + n[1] * t]);
+}
+
+// Edges: 0 bottom side, 1 front end, 2 top side, 3 back end.
+export function polyEdges(poly) {
+  return poly.map((p, i) => [p, poly[(i + 1) % poly.length]]);
+}
+
+export function polyArea(poly) {
+  let a = 0;
+  for (let i = 0; i < poly.length; i++) a += cross2(poly[i], poly[(i + 1) % poly.length]);
+  return a / 2;
+}
+
+export function polyCentroid(poly) {
+  let cx = 0, cy = 0, a = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i], q = poly[(i + 1) % poly.length], c = cross2(p, q);
+    a += c; cx += (p[0] + q[0]) * c; cy += (p[1] + q[1]) * c;
+  }
+  if (Math.abs(a) < 1e-9) return [poly.reduce((s, p) => s + p[0], 0) / poly.length, poly.reduce((s, p) => s + p[1], 0) / poly.length];
+  return [cx / (3 * a), cy / (3 * a)];
+}
+
+function ccw(poly) {
+  return polyArea(poly) < 0 ? [...poly].reverse() : poly;
+}
+
+// Sutherland–Hodgman clip of convex polygons.
+export function clipPoly(subject, clip) {
+  let out = ccw(subject);
+  const c = ccw(clip);
+  for (let i = 0; i < c.length && out.length; i++) {
+    const a = c[i], b = c[(i + 1) % c.length];
+    const inside = (p) => cross2(sub2(b, a), sub2(p, a)) >= -1e-9;
+    const input = out;
+    out = [];
+    for (let j = 0; j < input.length; j++) {
+      const p = input[j], q = input[(j + 1) % input.length];
+      const pin = inside(p), qin = inside(q);
+      if (pin) out.push(p);
+      if (pin !== qin) {
+        const e = sub2(b, a), dpq = sub2(q, p);
+        const t = cross2(e, sub2(a, p)) / cross2(e, dpq);
+        out.push([p[0] + dpq[0] * t, p[1] + dpq[1] * t]);
+      }
+    }
+  }
+  return out;
+}
+
+export function pointInPoly(p, poly, tol = 0) {
+  const c = ccw(poly);
+  for (let i = 0; i < c.length; i++) {
+    const a = c[i], b = c[(i + 1) % c.length];
+    const e = sub2(b, a);
+    if (cross2(e, sub2(p, a)) / (len2(e) || 1) < -tol) return false;
+  }
+  return true;
+}
+
+export function distToSegment2(p, a, b) {
+  const ab = sub2(b, a), l2 = dot2(ab, ab);
+  const t = l2 ? Math.max(0, Math.min(1, dot2(sub2(p, a), ab) / l2)) : 0;
+  const q = [a[0] + ab[0] * t, a[1] + ab[1] * t];
+  return { d: len2(sub2(p, q)), t, q };
+}
+
+// Where two convex outlines touch: {kind: 'overlap', poly} | {kind: 'edge', seg: [p, q]} | null.
+export function contact2d(P, Q) {
+  const inter = clipPoly(P, Q);
+  if (inter.length >= 3 && Math.abs(polyArea(inter)) > 0.05) return { kind: 'overlap', poly: inter };
+  let best = null;
+  for (const [a, b] of polyEdges(P)) {
+    const e = sub2(b, a), el = len2(e);
+    if (el < 1e-6) continue;
+    const u = [e[0] / el, e[1] / el];
+    for (const [c, d] of polyEdges(Q)) {
+      const f = sub2(d, c), fl = len2(f);
+      if (fl < 1e-6) continue;
+      if (Math.abs(cross2(u, f)) / fl > 0.01) continue; // not parallel
+      if (Math.abs(cross2(u, sub2(c, a))) > EPS_EDGE) continue; // not on the same line
+      const t0 = dot2(sub2(c, a), u), t1 = dot2(sub2(d, a), u);
+      const lo = Math.max(0, Math.min(t0, t1)), hi = Math.min(el, Math.max(t0, t1));
+      if (hi - lo < MIN_CONTACT) continue;
+      if (!best || hi - lo > best.l) best = { l: hi - lo, seg: [[a[0] + u[0] * lo, a[1] + u[1] * lo], [a[0] + u[0] * hi, a[1] + u[1] * hi]] };
+    }
+  }
+  return best && { kind: 'edge', seg: best.seg };
+}
+
+// ---------- model ----------
 function mirrorName(name) {
   if (/^A[-_ ]/.test(name)) return 'B' + name.slice(1);
   return name + ' (B)';
 }
 
-// Build the full 3D model, including generated truss-B copies when mirrorB is on.
+export const pairKey = (a, b) => (a < b ? a + '|' + b : b + '|' + a);
+
+// Build the 3D model: members (with truss-B mirror copies when mirrorB is on), connections
+// where members touch, and bolts assigned to those connections.
 export function buildModel(project) {
   const d = project.design;
-  const nodes = new Map();
-  for (const n of d.nodes) {
-    if (d.mirrorB && n.plane === 'B') continue;
-    const y = n.plane === 'A' ? 0 : n.plane === 'B' ? d.trussSpacing : n.y;
-    nodes.set(n.id, { ...n, y });
-  }
-  if (d.mirrorB) {
-    for (const n of d.nodes) {
-      if (n.plane !== 'A') continue;
-      const id = n.id + MIRROR_SUFFIX;
-      nodes.set(id, { ...n, id, plane: 'B', y: d.trussSpacing, mirrorOf: n.id });
-    }
-  }
-
-  const rawMembers = [];
+  const S = d.trussSpacing;
+  const lim = boxLimits(project);
+  const raw = [];
   for (const m of d.members) {
     if (d.mirrorB && m.plane === 'B') continue;
-    rawMembers.push(m);
-    if (d.mirrorB && m.plane === 'A') {
-      rawMembers.push({
-        ...m,
-        id: m.id + MIRROR_SUFFIX,
-        name: mirrorName(m.name),
-        plane: 'B',
-        segments: m.segments.map(([a, b]) => [a + MIRROR_SUFFIX, b + MIRROR_SUFFIX]),
-        mirrorOf: m.id,
-      });
-    }
+    raw.push(m);
+    if (d.mirrorB && m.plane === 'A') raw.push({ ...m, id: m.id + MIRROR_SUFFIX, name: mirrorName(m.name), plane: 'B', mirrorOf: m.id });
   }
 
-  const members = [];
-  const memberById = new Map();
-  for (const m of rawMembers) {
-    const segments = m.segments.filter(([a, b]) => nodes.has(a) && nodes.has(b) && a !== b);
-    if (!segments.length) continue;
-    const nodeIds = [...new Set(segments.flat())];
-    const tube = { ...d.tube, ...(m.tube || {}) };
-    let length = 0;
-    let cx = 0, cy = 0, cz = 0;
-    for (const [a, b] of segments) {
-      const pa = nodeVec(nodes.get(a)), pb = nodeVec(nodes.get(b));
-      const l = len(sub(pb, pa));
-      length += l;
-      cx += (pa[0] + pb[0]) / 2 * l; cy += (pa[1] + pb[1]) / 2 * l; cz += (pa[2] + pb[2]) / 2 * l;
+  const members = raw.map((m) => {
+    const poly = boxCorners(m);
+    const planeY = m.plane === 'A' ? 0 : m.plane === 'B' ? S : null;
+    const to3 = m.plane === 'L' ? ([u, v]) => [u, v, m.z || 0] : ([u, v]) => [u, planeY, v];
+    const corners3 = poly.map(to3);
+    const xs = poly.map((p) => p[0]);
+    let footprint, zRange;
+    if (m.plane === 'L') {
+      footprint = poly;
+      zRange = [(m.z || 0) - m.thick / 2, (m.z || 0) + m.thick / 2];
+    } else {
+      footprint = [[Math.min(...xs), planeY - m.thick / 2], [Math.max(...xs), planeY - m.thick / 2], [Math.max(...xs), planeY + m.thick / 2], [Math.min(...xs), planeY + m.thick / 2]];
+      const vs = poly.map((p) => p[1]);
+      zRange = [Math.min(...vs), Math.max(...vs)];
     }
-    const centroid = length ? [cx / length, cy / length, cz / length] : nodeVec(nodes.get(nodeIds[0]));
+    const low = corners3.reduce((best, c) => (c[2] < best[2] - 1e-9 ? c : best), corners3[0]);
+    const lowAll = corners3.filter((c) => Math.abs(c[2] - low[2]) < 0.05);
+    const bearingPoint = [lowAll.reduce((s, c) => s + c[0], 0) / lowAll.length, lowAll.reduce((s, c) => s + c[1], 0) / lowAll.length, low[2]];
+    const c2 = [m.u, m.v];
+    const centroid = to3(c2);
+    const { d: dir } = boxAxes(m);
+    const ends = [to3([m.u - dir[0] * m.len / 2, m.v - dir[1] * m.len / 2]), to3([m.u + dir[0] * m.len / 2, m.v + dir[1] * m.len / 2])];
+    const dims = [m.len, m.depth, m.thick];
+    const fits = m.len <= lim.len + 1e-6 && m.depth <= lim.depth + 1e-6 && m.thick <= lim.thick + 1e-6;
     const lbPerFt = m.lbPerFt ?? d.lbPerFt;
-    const mm = { ...m, segments, nodeIds, tube, length, centroid, weight: (length / 12) * lbPerFt };
-    mm.box = boxFit(mm, nodes, d.box);
-    members.push(mm);
-    memberById.set(mm.id, mm);
-  }
+    return { ...m, poly, corners3, footprint, zRange, centroid, ends, bearingPoint, length: m.len, weight: (m.len / 12) * lbPerFt, box: { dims, fits } };
+  });
+  const memberById = new Map(members.map((m) => [m.id, m]));
 
-  const bolts = [];
-  const pushBolt = (b, memberId) => {
-    const m = memberById.get(memberId);
-    if (!m) return;
-    const raw = rawMembers.find((r) => r.id === memberId);
-    const seg = raw && raw.segments[b.seg];
-    if (!seg || !nodes.has(seg[0]) || !nodes.has(seg[1])) return;
-    const pa = nodeVec(nodes.get(seg[0])), pb = nodeVec(nodes.get(seg[1]));
-    const s = Math.min(1, Math.max(0, b.s));
-    bolts.push({ ...b, memberId, s, nodeId: s < 0.5 ? seg[0] : seg[1], pos: add(pa, scale(sub(pb, pa), s)) });
-  };
-  for (const b of d.bolts) {
-    const m = d.members.find((x) => x.id === b.memberId);
-    if (!m || (d.mirrorB && m.plane === 'B')) continue;
-    pushBolt(b, b.memberId);
-    if (d.mirrorB && m.plane === 'A') pushBolt({ ...b, id: b.id + MIRROR_SUFFIX }, b.memberId + MIRROR_SUFFIX);
-  }
-
-  return { nodes, members, memberById, bolts };
-}
-
-// Does the member fit inside the size box (any orientation)? Members are treated as bars of the
-// tube cross-section, so their outline grows by the tube size on every side (a conservative check).
-export function boxFit(member, nodes, box) {
-  const pts = member.nodeIds.map((id) => nodeVec(nodes.get(id)));
-  const { w, d } = member.tube;
-  const target = [...box].sort((a, b) => a - b);
-  // Find the member's plane from its segment directions.
-  const dirs = member.segments.map(([a, b]) => sub(nodeVec(nodes.get(b)), nodeVec(nodes.get(a)))).filter((v) => len(v) > 1e-6);
-  let u = dirs.length ? norm(dirs[0]) : [1, 0, 0];
-  let normal = null;
-  for (const v of dirs) {
-    const c = cross(u, v);
-    if (len(c) > 1e-3 * len(v)) { normal = norm(c); break; }
-  }
-  if (!normal) {
-    // Straight member: pick any normal, preferring the truss plane normal (y) so w/d stay meaningful.
-    const guess = Math.abs(u[1]) < 0.9 ? [0, 1, 0] : [0, 0, 1];
-    normal = norm(cross(u, cross(guess, u)));
-  }
-  const v = cross(normal, u);
-  const p0 = pts[0];
-  const local = pts.map((p) => { const q = sub(p, p0); return [dot(q, u), dot(q, v), dot(q, normal)]; });
-  const ns = local.map((p) => p[2]);
-  const thickness = Math.max(...ns) - Math.min(...ns) + w;
-
-  const evalAngle = (deg) => {
-    const a = (deg * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a);
-    let minA = Infinity, maxA = -Infinity, minB = Infinity, maxB = -Infinity;
-    for (const p of local) {
-      const pa = p[0] * c + p[1] * s, pb = -p[0] * s + p[1] * c;
-      if (pa < minA) minA = pa; if (pa > maxA) maxA = pa;
-      if (pb < minB) minB = pb; if (pb > maxB) maxB = pb;
+  // Connections
+  const contacts = [];
+  const byPlane = { A: [], B: [], L: [] };
+  for (const m of members) byPlane[m.plane].push(m);
+  const add = (a, b, plane, c, pos3) => contacts.push({ id: 'j:' + pairKey(a.id, b.id) + ':' + plane, key: pairKey(a.id, b.id), a: a.id, b: b.id, plane, ...c, pos: pos3 });
+  for (const plane of ['A', 'B']) {
+    const list = byPlane[plane];
+    for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+      const c = contact2d(list[i].poly, list[j].poly);
+      if (!c) continue;
+      const mid = c.kind === 'edge' ? [(c.seg[0][0] + c.seg[1][0]) / 2, (c.seg[0][1] + c.seg[1][1]) / 2] : polyCentroid(c.poly);
+      add(list[i], list[j], plane, c, [mid[0], plane === 'A' ? 0 : S, mid[1]]);
     }
-    const dims = [maxA - minA + d, maxB - minB + d, thickness].sort((x, y) => x - y);
-    const score = Math.max(dims[0] / target[0], dims[1] / target[1], dims[2] / target[2]);
-    return { dims, score, deg };
-  };
-  // `best` = orientation that fits most easily (may be tilted inside the box);
-  // `snug` = tightest outline (smallest area), which is what we report as the member's size.
-  let best = evalAngle(0), snug = best;
-  const area = (r) => r.dims[0] * r.dims[1] * r.dims[2]; // thickness is the same at every angle
-  for (let deg = 0; deg < 180; deg += 1) {
-    const r = evalAngle(deg);
-    if (r.score < best.score) best = r;
-    if (area(r) < area(snug) - 1e-9) snug = r;
   }
-  for (let deg = best.deg - 1; deg <= best.deg + 1; deg += 0.05) { const r = evalAngle(deg); if (r.score < best.score) best = r; }
-  for (let deg = snug.deg - 1; deg <= snug.deg + 1; deg += 0.05) { const r = evalAngle(deg); if (area(r) < area(snug) - 1e-9) snug = r; }
-  const round = (x) => Math.round(x * 100) / 100;
-  return { dims: snug.dims.map(round), fits: best.score <= 1 + 1e-9, tilted: best.score <= 1 + 1e-9 && snug.score > 1 + 1e-9, score: best.score };
+  const lats = byPlane.L;
+  for (let i = 0; i < lats.length; i++) {
+    for (let j = i + 1; j < lats.length; j++) {
+      const a = lats[i], b = lats[j];
+      if (a.zRange[1] < b.zRange[0] - EPS_EDGE || b.zRange[1] < a.zRange[0] - EPS_EDGE) continue;
+      const c = contact2d(a.poly, b.poly);
+      if (!c) continue;
+      const mid = c.kind === 'edge' ? [(c.seg[0][0] + c.seg[1][0]) / 2, (c.seg[0][1] + c.seg[1][1]) / 2] : polyCentroid(c.poly);
+      add(a, b, 'L', c, [mid[0], mid[1], ((a.z || 0) + (b.z || 0)) / 2]);
+    }
+    // Lateral against a truss member: touch in the top view, and their heights overlap there.
+    for (const t of [...byPlane.A, ...byPlane.B]) {
+      const a = lats[i];
+      let c = contact2d(a.poly, t.footprint);
+      if (!c) continue;
+      const pts = c.kind === 'edge' ? c.seg : c.poly;
+      const x0 = Math.min(...pts.map((p) => p[0])) - EPS_EDGE, x1 = Math.max(...pts.map((p) => p[0])) + EPS_EDGE;
+      const band = [[x0, a.zRange[0] - EPS_EDGE], [x1, a.zRange[0] - EPS_EDGE], [x1, a.zRange[1] + EPS_EDGE], [x0, a.zRange[1] + EPS_EDGE]];
+      const xz = clipPoly(t.poly, band);
+      if (xz.length < 3 || Math.abs(polyArea(xz)) < 0.01) continue;
+      // Only the part of the top-view contact where the heights actually overlap.
+      const hx0 = Math.min(...xz.map((p) => p[0])), hx1 = Math.max(...xz.map((p) => p[0]));
+      if (c.kind === 'edge') {
+        const [p, q] = c.seg;
+        const clampX = (x) => Math.max(hx0, Math.min(hx1, x));
+        const at = (x) => { const t2 = Math.abs(q[0] - p[0]) < 1e-9 ? 0 : (x - p[0]) / (q[0] - p[0]); return [x, p[1] + (q[1] - p[1]) * t2]; };
+        if (Math.abs(q[0] - p[0]) > 1e-6) {
+          const s0 = at(clampX(Math.min(p[0], q[0]))), s1 = at(clampX(Math.max(p[0], q[0])));
+          if (Math.hypot(s1[0] - s0[0], s1[1] - s0[1]) < MIN_CONTACT && Math.abs(q[0] - p[0]) > MIN_CONTACT) continue;
+          c = { kind: 'edge', seg: [s0, s1] };
+        }
+      } else {
+        const clipped = clipPoly(c.poly, [[hx0, -1e4], [hx1, -1e4], [hx1, 1e4], [hx0, 1e4]]);
+        if (clipped.length < 3) continue;
+        c = { kind: 'overlap', poly: clipped };
+      }
+      const mid = c.kind === 'edge' ? [(c.seg[0][0] + c.seg[1][0]) / 2, (c.seg[0][1] + c.seg[1][1]) / 2] : polyCentroid(c.poly);
+      add(a, t, 'L', c, [mid[0], mid[1], a.z || 0]);
+    }
+  }
+
+  // Bolts: each belongs to the connection between its two members, if it sits on it.
+  const contactByKey = new Map();
+  for (const c of contacts) {
+    if (!contactByKey.has(c.key)) contactByKey.set(c.key, []);
+    contactByKey.get(c.key).push(c);
+  }
+  const rawBolts = [];
+  for (const b of d.bolts) {
+    const ma = d.members.find((m) => m.id === b.a), mb = d.members.find((m) => m.id === b.b);
+    if (d.mirrorB && (b.plane === 'B' || ma?.plane === 'B' || mb?.plane === 'B')) continue;
+    rawBolts.push(b);
+    if (d.mirrorB && b.plane === 'A') rawBolts.push({ ...b, id: b.id + MIRROR_SUFFIX, plane: 'B', a: b.a + MIRROR_SUFFIX, b: b.b + MIRROR_SUFFIX });
+  }
+  const bolts = rawBolts.map((b) => {
+    const list = (contactByKey.get(pairKey(b.a, b.b)) || []).filter((c) => c.plane === b.plane);
+    let joint = null;
+    for (const c of list) {
+      const p = [b.u, b.v];
+      const ok = c.kind === 'edge' ? distToSegment2(p, c.seg[0], c.seg[1]).d <= BOLT_TOL : pointInPoly(p, c.poly, BOLT_TOL);
+      if (ok) { joint = c; break; }
+    }
+    const pos = b.plane === 'L' ? [b.u, b.v, joint ? joint.pos[2] : 0] : [b.u, b.plane === 'A' ? 0 : S, b.v];
+    return { ...b, jointId: joint ? joint.id : null, pos };
+  });
+  for (const c of contacts) c.bolts = bolts.filter((b) => b.jointId === c.id).length;
+
+  return { members, memberById, contacts, joints: contacts, bolts, limits: lim };
 }
 
+// Point along a member's centerline, t = 0 at the back end, 1 at the front end (3D).
+export function memberPoint(m, t) {
+  return [m.ends[0][0] + (m.ends[1][0] - m.ends[0][0]) * t, m.ends[0][1] + (m.ends[1][1] - m.ends[0][1]) * t, m.ends[0][2] + (m.ends[1][2] - m.ends[0][2]) * t];
+}
+
+// ---------- site ----------
 // Bridge (x, y) -> site plan (x, y).
 export function bridgeToSite(site, x, y) {
   const r = ((site.bridge.rotation || 0) * Math.PI) / 180;
@@ -165,7 +275,7 @@ export function dist2d(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
-// Distance from point p to segment ab (2D), and the parameter t along it.
+// Distance from point p to segment ab ({x, y} points), and the parameter t along it.
 export function pointSegment(p, a, b) {
   const dx = b.x - a.x, dy = b.y - a.y;
   const l2 = dx * dx + dy * dy;
@@ -205,7 +315,7 @@ export function calibFromPoints(flip, p1, p2) {
 
 // Starting calibration for a freshly loaded image: `widthIn` inches across, origin at the
 // bottom-left corner (side views) or top-left corner (top view).
-export function defaultCalib(img, flip, widthIn = 240) {
+export function defaultCalib(img, flip, widthIn = 276) {
   const s = widthIn / (img.w || 1);
   return flip ? { a: [s, 0], b: [0, s * img.h] } : { a: [s, 0], b: [0, 0] };
 }

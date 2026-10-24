@@ -1,47 +1,66 @@
 // Browser test runner: open tests/index.html (through a local server) and read the results.
-import { boxFit, buildModel, calibFromPoints, imageToView, viewToImage } from '../js/model/geometry.js';
+import { buildModel, calibFromPoints, contact2d, boxCorners, imageToView, viewToImage } from '../js/model/geometry.js';
 import { computeStability } from '../js/sim/stability.js';
 import { SiteGrid } from '../js/sim/grid.js';
 import { simulate } from '../js/sim/simulate.js';
 import { createExampleProject } from '../js/model/example.js';
-import { normalizeProject } from '../js/model/schema.js';
-import { autoBolts, detachSegment, moveSegment, splitSegment } from '../js/model/edit.js';
+import { emptyProject, normalizeProject } from '../js/model/schema.js';
+import { site2027, RULES_2027 } from '../js/model/rules2027.js';
+import { autoBolts, newBox } from '../js/model/edit.js';
+import { snapBox, snapSize } from '../js/ui/snap.js';
 
 const results = [];
-function test(name, fn) {
-  try { fn(); results.push({ name, ok: true }); } catch (e) { results.push({ name, ok: false, msg: e.message }); console.error(name, e); }
+async function test(name, fn) {
+  try { await fn(); results.push({ name, ok: true }); } catch (e) { results.push({ name, ok: false, msg: e.message }); console.error(name, e); }
 }
 function assert(cond, msg) { if (!cond) throw new Error(msg || 'assertion failed'); }
 function near(a, b, tol = 1e-6) { return Math.abs(a - b) <= tol; }
 
-const nodesOf = (list) => new Map(list.map((n) => [n.id, n]));
+const box = (u, v, len, depth, angle = 0) => ({ u, v, len, depth, angle });
 
-test('straight 40 in member fits the 4x6x42 box', () => {
-  const nodes = nodesOf([{ id: 'a', x: 0, y: 0, z: 0 }, { id: 'b', x: 40, y: 0, z: 0 }]);
-  const r = boxFit({ nodeIds: ['a', 'b'], segments: [['a', 'b']], tube: { w: 1, d: 1 } }, nodes, [4, 6, 42]);
-  assert(r.fits, JSON.stringify(r));
-  assert(near(r.dims[2], 41, 0.01), 'long side ' + r.dims[2]);
+await test('boxes end to end touch along an edge', () => {
+  const c = contact2d(boxCorners(box(0, 0, 10, 2)), boxCorners(box(10, 0, 10, 2)));
+  assert(c && c.kind === 'edge', JSON.stringify(c));
+  const L = Math.hypot(c.seg[1][0] - c.seg[0][0], c.seg[1][1] - c.seg[0][1]);
+  assert(near(L, 2, 1e-6), 'edge length ' + L);
 });
 
-test('straight 42 in member does not fit once tube size is added', () => {
-  const nodes = nodesOf([{ id: 'a', x: 0, y: 0, z: 0 }, { id: 'b', x: 42, y: 0, z: 0 }]);
-  const r = boxFit({ nodeIds: ['a', 'b'], segments: [['a', 'b']], tube: { w: 1, d: 1 } }, nodes, [4, 6, 42]);
-  assert(!r.fits);
+await test('boxes with a gap do not touch; overlapping boxes do', () => {
+  assert(!contact2d(boxCorners(box(0, 0, 10, 2)), boxCorners(box(11, 0, 10, 2))));
+  const c = contact2d(boxCorners(box(0, 0, 10, 2)), boxCorners(box(4, 1.5, 10, 2, 30)));
+  assert(c && c.kind === 'overlap', JSON.stringify(c && c.kind));
 });
 
-test('diagonal member is measured along its own axis', () => {
-  const nodes = nodesOf([{ id: 'a', x: 0, y: 0, z: 0 }, { id: 'b', x: 30, y: 0, z: 20 }]);
-  const r = boxFit({ nodeIds: ['a', 'b'], segments: [['a', 'b']], tube: { w: 1, d: 1 } }, nodes, [4, 6, 42]);
-  assert(r.fits && near(r.dims[2], Math.hypot(30, 20) + 1, 0.05), JSON.stringify(r));
+await test('a vertical box standing on a chord touches along the chord top', () => {
+  const chord = box(20, 0.75, 40, 1.5);
+  const post = box(10, 1.5 + 2.5, 5, 1.5, 90);
+  const c = contact2d(boxCorners(chord), boxCorners(post));
+  assert(c && c.kind === 'edge' && near(Math.abs(c.seg[1][0] - c.seg[0][0]), 1.5, 1e-6), JSON.stringify(c));
 });
 
-test('L-shaped member 40 x 8 is too wide for a 6 in side', () => {
-  const nodes = nodesOf([{ id: 'a', x: 0, y: 0, z: 0 }, { id: 'b', x: 40, y: 0, z: 0 }, { id: 'c', x: 40, y: 0, z: 8 }]);
-  const r = boxFit({ nodeIds: ['a', 'b', 'c'], segments: [['a', 'b'], ['b', 'c']], tube: { w: 1, d: 1 } }, nodes, [4, 6, 42]);
-  assert(!r.fits, JSON.stringify(r));
+await test('dragging a box near another snaps its edge on and lines up the ends', () => {
+  const target = boxCorners(box(0, 0, 20, 2));
+  const moving = box(0.4, 2.3, 20, 2, 2); // a bit high, a bit off, slightly rotated
+  const { box: b } = snapBox(moving, [target], 0.6);
+  assert(near(b.angle % 180, 0, 1e-6), 'angle ' + b.angle);
+  assert(near(b.v, 2, 1e-6), 'v ' + b.v);
+  assert(near(b.u, 0, 1e-6), 'u ' + b.u);
 });
 
-test('image calibration maps the two clicked points to the typed coordinates', () => {
+await test('resizing snaps the moving end to a neighbouring edge', () => {
+  const target = boxCorners(box(30, 0, 10, 2)); // left edge at x = 25
+  const b = box(10, 0, 20, 2); // right end at 20, back end fixed at 0
+  const size = snapSize(b, 'len', 1, 24.6, [target], 0.6);
+  assert(near(size, 25, 1e-6), 'size ' + size);
+});
+
+await test('new boxes start at the full size box and never exceed it', () => {
+  const p = emptyProject();
+  const m = newBox(p, 'A', 0, 0);
+  assert(m.len === 42 && m.depth === 6 && m.thick === 4, JSON.stringify(m));
+});
+
+await test('image calibration maps the two clicked points to the typed coordinates', () => {
   for (const flip of [true, false]) {
     const p1 = { px: 100, py: 400, u: 0, v: 0 }, p2 = { px: 900, py: 380, u: 210, v: 0 };
     const c = calibFromPoints(flip, p1, p2);
@@ -51,158 +70,190 @@ test('image calibration maps the two clicked points to the typed coordinates', (
       const back = viewToImage(c, flip, p.u, p.v);
       assert(near(back.px, p.px, 1e-6) && near(back.py, p.py, 1e-6), 'inverse');
     }
-    // Side views point z up: a pixel above the line must have positive z.
     if (flip) assert(imageToView(c, flip, 500, 200).v > 0, 'z should point up');
   }
 });
 
-test('mirroring creates a truss B copy of every truss A member and bolt', () => {
+await test('the 2027 layout matches the site plan dimensions', () => {
+  const s = site2027();
+  assert(s.width === 720 && s.depth === 180, 'site 60 ft × 15 ft');
+  const z = (name) => s.zones.find((x) => x.name === name);
+  assert(z('River').w === 84 && z('River').x === 264, 'river 7 ft');
+  assert(z('Transportation zone').w === 168, 'transportation zone 14 ft');
+  assert(z('East staging yard').w === 144 && z('West staging yard').w === 60, 'staging yards');
+  // Outer edges of the footings are 23 ft apart (Bridge Elevation Diagram).
+  assert(z('East footing').x + z('East footing').w - z('West footing').x === 276, 'footings 23 ft out to out');
+  assert(RULES_2027.maxBuilders === 6 && RULES_2027.maxAssemblyMembers === 3);
+});
+
+await test('the shared library copy of the 2027 layout matches the built-in one', async () => {
+  const index = await (await fetch('../library/sites/index.json')).json();
+  const entry = index.sites.find((s) => s.year === '2027');
+  assert(entry, 'no 2027 entry in the library');
+  const file = await (await fetch('../library/sites/' + entry.file)).json();
+  const built = site2027();
+  assert(JSON.stringify(file.zones) === JSON.stringify(built.zones), 'zones differ');
+  assert(JSON.stringify(file.rules) === JSON.stringify(built.rules), 'rules differ');
+});
+
+await test('mirroring copies truss A boxes and bolts to truss B', () => {
   const p = normalizeProject(createExampleProject());
   const m = buildModel(p);
   const a = m.members.filter((x) => x.plane === 'A').length, b = m.members.filter((x) => x.plane === 'B').length;
-  assert(a === 21 && b === 21, `${a} A, ${b} B`);
-  assert(m.nodes.get('b3~B').y === p.design.trussSpacing);
-  assert(m.bolts.filter((x) => x.memberId.endsWith('~B')).length === m.bolts.filter((x) => m.memberById.get(x.memberId).plane === 'A').length);
+  assert(a === b && a > 10, `${a} A, ${b} B`);
+  assert(m.bolts.filter((x) => x.plane === 'B').length === m.bolts.filter((x) => x.plane === 'A').length);
 });
 
-test('adding a joint partway along a line splits it and keeps bolts in place', () => {
-  const p = normalizeProject(createExampleProject());
-  p.design.nodes.push({ id: 'mid', plane: 'A', x: 17.5, y: 0, z: 0, bearing: false });
-  splitSegment(p, 'm-BC1', 0, 'mid', 0.5);
-  const m = p.design.members.find((x) => x.id === 'm-BC1');
-  assert(JSON.stringify(m.segments) === JSON.stringify([['b0', 'mid'], ['mid', 'b1']]), JSON.stringify(m.segments));
-  const model = buildModel(p);
-  const xs = model.bolts.filter((b) => b.memberId === 'm-BC1').map((b) => Math.round(b.pos[0] * 100) / 100).sort((a, b) => a - b);
-  assert(JSON.stringify(xs) === JSON.stringify([1.4, 3.15, 31.85, 33.6]), 'bolt x ' + xs);
-  assert(near(model.memberById.get('m-BC1').length, 35, 1e-6));
+await test('example: every place members touch has a bolt, and laterals meet both trusses', () => {
+  const m = buildModel(normalizeProject(createExampleProject()));
+  assert(m.contacts.every((c) => c.bolts > 0), m.contacts.filter((c) => !c.bolts).map((c) => c.id).join(', '));
+  for (const l of m.members.filter((x) => x.plane === 'L')) {
+    const sides = m.contacts.filter((c) => c.a === l.id || c.b === l.id).map((c) => m.memberById.get(c.a === l.id ? c.b : c.a).plane);
+    assert(sides.includes('A') && sides.includes('B'), l.name + ' touches ' + sides.join(','));
+  }
+  assert(m.bolts.every((b) => b.jointId), 'every bolt is on a connection');
 });
 
-test('grouping moves a line and its bolts into another member', () => {
-  const p = normalizeProject(createExampleProject());
-  moveSegment(p, 'm-BC2', 0, 'm-BC1');
-  assert(!p.design.members.some((m) => m.id === 'm-BC2'), 'emptied member is removed');
-  const m = buildModel(p).memberById.get('m-BC1');
-  assert(m.segments.length === 2 && near(m.length, 70, 1e-6));
-  assert(p.design.bolts.filter((b) => b.memberId === 'm-BC1').length === 8, 'bolts moved');
-  assert(!m.box.fits, 'a 70 in member is too long');
-  const id = detachSegment(p, 'm-BC1', 1);
-  assert(id !== 'm-BC1' && p.design.members.find((x) => x.id === id).segments.length === 1);
-});
-
-test('auto-fill puts bolts at member ends that meet other members', () => {
+await test('auto-fill adds bolts only where boxes touch without one', () => {
   const p = normalizeProject(createExampleProject());
   p.design.bolts = [];
-  const added = autoBolts(p, buildModel(p), 'A', 2);
-  // 21 truss A members, both ends meet something: 21 * 2 ends * 2 bolts
-  assert(added === 84, 'added ' + added);
-  assert(autoBolts(p, buildModel(p), 'A', 2) === 0, 'running again adds nothing');
+  const n = autoBolts(p, buildModel(p), 'A', 1);
+  const model = buildModel(p);
+  const aContacts = model.contacts.filter((c) => c.plane === 'A').length;
+  assert(n === aContacts, `${n} vs ${aContacts}`);
+  assert(autoBolts(p, model, 'A', 1) === 0, 'second run adds nothing');
 });
 
-const pos = nodesOf([
-  { id: 'p', x: 0, y: 0, z: 0 }, { id: 'q', x: 30, y: 0, z: 0 }, { id: 'r', x: 15, y: 0, z: 20 }, { id: 's', x: 60, y: 0, z: 0 },
-]);
+const pos = new Map(Object.entries({ p: { x: 0, y: 0, z: 0 }, q: { x: 30, y: 0, z: 0 }, r: { x: 15, y: 0, z: 20 }, s: { x: 60, y: 0, z: 0 } }));
 
-test('member on one bearing is not stable; on two it is', () => {
+await test('stability: one pin swings, two pins hold, two bolts cantilever', () => {
   const u = [{ key: 'm', nodeIds: ['p', 'q'], attached: {} }];
   assert(!computeStability({ units: u, supportNodes: new Set(['p']), nodePos: pos, rigidBoltCount: 2 }).stable.has('m'));
   assert(computeStability({ units: u, supportNodes: new Set(['p', 'q']), nodePos: pos, rigidBoltCount: 2 }).stable.has('m'));
+  const units = [{ key: 'a', nodeIds: ['p', 'q'], attached: { q: 2 } }, { key: 'b', nodeIds: ['q', 's'], attached: { q: 2 } }];
+  assert(computeStability({ units, supportNodes: new Set(['p', 'q']), nodePos: pos, rigidBoltCount: 2 }).stable.has('b'));
 });
 
-test('two-bolt splice lets a member cantilever off a stable one', () => {
-  const units = [
-    { key: 'a', nodeIds: ['p', 'q'], attached: { q: 2 } },
-    { key: 'b', nodeIds: ['q', 's'], attached: { q: 2 } },
+await test('stability: a rigidly bolted chain is one body, held by footings at both ends', () => {
+  const chain = [
+    { key: 'a', nodeIds: ['p', 'j1'], attached: { j1: 2 } },
+    { key: 'b', nodeIds: ['j1', 'j2'], attached: { j1: 2, j2: 2 } },
+    { key: 'c', nodeIds: ['j2', 's'], attached: { j2: 2 } },
   ];
-  const r = computeStability({ units, supportNodes: new Set(['p', 'q']), nodePos: pos, rigidBoltCount: 2 });
-  assert(r.stable.has('a') && r.stable.has('b'));
-  const units1 = units.map((u) => ({ ...u, attached: { q: 1 } }));
-  const r1 = computeStability({ units: units1, supportNodes: new Set(['p', 'q']), nodePos: pos, rigidBoltCount: 2 });
-  assert(r1.stable.has('a') && !r1.stable.has('b'), 'single bolt is a pin');
+  const P = new Map([...pos, ['j1', { x: 20, y: 0, z: 0 }], ['j2', { x: 40, y: 0, z: 0 }]]);
+  const both = computeStability({ units: chain, supportNodes: new Set(['p', 's']), nodePos: P, rigidBoltCount: 2 });
+  assert(['a', 'b', 'c'].every((k) => both.stable.has(k)), [...both.stable].join(','));
+  const one = computeStability({ units: chain, supportNodes: new Set(['p']), nodePos: P, rigidBoltCount: 2 });
+  assert(one.stable.size === 0, 'one pinned end swings: ' + [...one.stable].join(','));
 });
 
-test('pinned triangle is rigid once both legs are bolted at the apex', () => {
+await test('stability: a pinned triangle is rigid', () => {
   const units = [
     { key: 'base', nodeIds: ['p', 'q'], attached: { p: 1, q: 1 } },
     { key: 'left', nodeIds: ['p', 'r'], attached: { p: 1, r: 1 } },
     { key: 'right', nodeIds: ['q', 'r'], attached: { q: 1, r: 1 } },
   ];
   const r = computeStability({ units, supportNodes: new Set(['p', 'q']), nodePos: pos, rigidBoltCount: 2 });
-  assert(r.stable.has('left') && r.stable.has('right'), [...r.stable].join(','));
-  const r2 = computeStability({ units: units.slice(0, 2), supportNodes: new Set(['p', 'q']), nodePos: pos, rigidBoltCount: 2 });
-  assert(!r2.stable.has('left'), 'one leg alone swings');
+  assert(r.stable.has('left') && r.stable.has('right'));
 });
 
-test('paths go around a no-go zone', () => {
-  const site = { width: 300, depth: 120, cell: 6, zones: [{ id: 'r', type: 'nogo', x: 120, y: 0, w: 60, h: 100 }] };
-  const g = new SiteGrid(site);
+await test('builders cannot cross the river on the 2027 site', () => {
+  const g = new SiteGrid(site2027());
   const m = g.mask(null);
-  const p = g.path(m, { x: 30, y: 30 }, { x: 270, y: 30 });
-  assert(p && p.length > 260, 'length ' + (p && p.length));
-  assert(p.points.every((pt) => !(pt.x > 121 && pt.x < 179 && pt.y < 99)), 'path enters the river');
+  assert(g.path(m, { x: 30, y: 90 }, { x: 650, y: 40 }) === null, 'west yard reached the east yard');
+  assert(g.path(m, { x: 600, y: 130 }, { x: 380, y: 90 }), 'east yard to east construction zone');
+  assert(g.handoffs(m, m, 90).length === 0, 'same area needs no hand-off');
+  const east = g.region(m, { x: 600, y: 130 }), west = g.region(m, { x: 30, y: 90 });
+  assert(east.key !== west.key && g.handoffs(east, west, 90).length > 0, 'the river splits the ground into two regions');
 });
 
-test('restricted builder cannot leave their zone', () => {
-  const site = { width: 300, depth: 120, cell: 6, zones: [{ id: 'a', type: 'staging', x: 0, y: 0, w: 100, h: 120 }] };
-  const g = new SiteGrid(site);
-  assert(g.path(g.mask(['a']), { x: 30, y: 30 }, { x: 200, y: 30 }) === null);
+await test('pieces can be handed across the river within reach', () => {
+  const s = site2027();
+  const g = new SiteGrid(s);
+  const zid = (name) => s.zones.find((z) => z.name === name).id;
+  const east = g.mask([zid('East construction zone'), zid('Transportation zone'), zid('East staging yard')]);
+  const west = g.mask([zid('West construction zone'), zid('Riverbank'), zid('West staging yard')]);
+  const spots = g.handoffs(east, west, 90);
+  assert(spots.length > 0 && spots.every((h) => h.d <= 90), 'hand-off spots ' + spots.length);
+  assert(g.handoffs(east, west, 80).length === 0, 'a 7 ft river is too wide to pass across with 80 in');
 });
 
-test('example project builds completely with no errors', () => {
+await test('example project builds completely with no errors', () => {
   const p = normalizeProject(createExampleProject());
   const r = simulate(p);
   assert(!r.errors.length, r.errors.map((e) => e.msg).join(' | '));
-  assert(r.endTime > 60 && r.endTime < 3600, 'end time ' + r.endTime);
+  assert(r.endTime > 60 && r.endTime < 30 * 60, 'end time ' + r.endTime);
   assert(r.units.every((u) => u.installedAt != null && u.stableAt != null), 'all units installed and stable');
+  assert(r.handoffs > 0, 'some pieces are handed across the river');
+  assert(r.cost > 0, 'construction cost');
   window.exampleResult = r;
+  window.exampleProject = p;
 });
 
-test('builders never carry two pieces at once', () => {
+await test('construction cost follows the 2027 formula', () => {
   const r = window.exampleResult;
-  const byB = new Map();
-  for (const s of r.segments) if (s.kind === 'carry' || s.kind === 'hold') { if (!byB.has(s.builderId)) byB.set(s.builderId, []); byB.get(s.builderId).push(s); }
-  for (const list of byB.values()) {
-    list.sort((a, b) => a.t0 - b.t0);
-    for (let i = 1; i < list.length; i++) assert(list[i].t0 >= list[i - 1].t1 - 1e-6, 'overlap for ' + list[i].builderId);
-  }
+  const expected = (r.endTime / 60) * 4 * 172500 * 0.8;
+  assert(near(r.cost, expected, 1e-6), `${r.cost} vs ${expected}`);
 });
 
-test('a builder never does two things at once', () => {
-  const r = window.exampleResult;
+await test('nobody does two things at once, and everyone ends in a staging yard', () => {
+  const r = window.exampleResult, p = window.exampleProject;
   const byB = new Map();
   for (const s of r.segments) { if (!byB.has(s.builderId)) byB.set(s.builderId, []); byB.get(s.builderId).push(s); }
+  const yards = p.site.zones.filter((z) => z.type === 'staging');
   for (const [id, list] of byB) {
     list.sort((a, b) => a.t0 - b.t0);
     for (let i = 1; i < list.length; i++) assert(list[i].t0 >= list[i - 1].t1 - 1e-6, `${id}: ${list[i - 1].label} overlaps ${list[i].label}`);
+    const last = list[list.length - 1];
+    const end = last.path ? last.path[last.path.length - 1] : { x: last.x, y: last.y };
+    assert(yards.some((z) => end.x >= z.x - 1 && end.x <= z.x + z.w + 1 && end.y >= z.y - 1 && end.y <= z.y + z.h + 1), `${id} ends at ${Math.round(end.x)},${Math.round(end.y)}`);
   }
 });
 
-test('a mid-span piece with nothing under it is held forever and reported', () => {
-  const p = normalizeProject(createExampleProject());
-  p.plans[0].steps = [{ id: 'x', kind: 'install', unit: { type: 'member', id: 'm-BC3' }, carrier: 'auto', fastener: 'auto' }];
-  const r = simulate(p);
-  assert(r.holds.length === 1 && r.holds[0].open, 'expected an open hold');
-  assert(r.errors.some((e) => /never becomes stable/.test(e.msg)), r.errors.map((e) => e.msg).join(' | '));
+await test('builders stand in a construction zone or on the riverbank while holding or fastening', () => {
+  const r = window.exampleResult, p = window.exampleProject;
+  const work = p.site.zones.filter((z) => ['construction', 'riverbank', 'footing'].includes(z.type));
+  for (const s of r.segments) {
+    if (!['hold', 'align', 'fasten', 'support'].includes(s.kind)) continue;
+    assert(work.some((z) => s.x >= z.x - 1 && s.x <= z.x + z.w + 1 && s.y >= z.y - 1 && s.y <= z.y + z.h + 1), `${s.label} at ${Math.round(s.x)},${Math.round(s.y)}`);
+  }
 });
 
-test('pulling a support out from under a lone piece is reported as a fall', () => {
+await test('a piece that starts off a footing is reported (10.3.11)', () => {
   const p = normalizeProject(createExampleProject());
   p.plans[0].assemblies = [];
-  p.plans[0].steps = [
-    { id: 'a', kind: 'support', action: 'place', toolId: 't-jack', nodeId: 'b1', builder: 'auto' },
-    { id: 'b', kind: 'install', unit: { type: 'member', id: 'm-BC1' }, carrier: 'auto', fastener: 'auto' },
-    { id: 'c', kind: 'support', action: 'remove', toolId: 't-jack', nodeId: 'b1', builder: 'auto' },
-  ];
+  p.plans[0].steps = [{ id: 'x', kind: 'install', unit: { type: 'member', id: 'm-TC4' }, carrier: 'auto', fastener: 'auto' }];
   const r = simulate(p);
-  assert(r.errors.some((e) => /would fall/.test(e.msg)), r.errors.map((e) => e.msg).join(' | '));
+  assert(r.errors.some((e) => /10\.3\.11/.test(e.msg)), r.errors.map((e) => e.msg).join(' | '));
+  assert(r.holds.length === 1 && r.holds[0].open, 'held forever');
 });
 
-test('everyone holding unstable pieces stops the plan with a clear message', () => {
+await test('assemblies over the member limit are reported (10.3.7)', () => {
   const p = normalizeProject(createExampleProject());
-  p.plans[0].assemblies = [];
-  const ids = ['m-BC3', 'm-BC3~B', 'm-BC4', 'm-BC4~B', 'm-TC2'];
-  p.plans[0].steps = ids.map((id, i) => ({ id: 's' + i, kind: 'install', unit: { type: 'member', id }, carrier: 'auto', fastener: 'auto' }));
+  p.plans[0].assemblies[0].memberIds.push('m-V1');
   const r = simulate(p);
-  assert(r.aborted && r.errors.some((e) => /No builder can/.test(e.msg)), r.errors.map((e) => e.msg).join(' | '));
+  assert(r.errors.some((e) => /10\.3\.7/.test(e.msg)), r.errors.map((e) => e.msg).join(' | '));
+});
+
+await test('too many builders is reported (10.2.2)', () => {
+  const p = normalizeProject(createExampleProject());
+  for (let i = 0; i < 3; i++) p.builders.push({ ...p.builders[2], id: 'extra' + i, name: 'Extra ' + i });
+  const r = simulate(p);
+  assert(r.errors.some((e) => /10\.2\.2/.test(e.msg)));
+});
+
+await test('a support left under the bridge at the finish is reported (10.9.1)', () => {
+  const p = normalizeProject(createExampleProject());
+  p.plans[0].steps = p.plans[0].steps.filter((s) => !(s.kind === 'support' && s.action === 'remove'));
+  const r = simulate(p);
+  assert(r.errors.some((e) => /10\.9\.1/.test(e.msg)), r.errors.map((e) => e.msg).join(' | '));
+});
+
+await test('old (version 1) project files still open', () => {
+  const v1 = { version: 1, design: { nodes: [{ id: 'a', plane: 'A', x: 0, y: 0, z: 0, bearing: true }, { id: 'b', plane: 'A', x: 30, y: 0, z: 0 }], members: [{ id: 'm', name: 'A-1', plane: 'A', segments: [['a', 'b']] }], bolts: [{ id: 'x', memberId: 'm', seg: 0, s: 0.1 }] } };
+  const p = normalizeProject(v1);
+  assert(p.design.members.length === 1 && near(p.design.members[0].len, 30) && p.design.members[0].bearing);
+  assert(p.design.bolts.length === 0 && !p.design.nodes);
 });
 
 const ok = results.filter((r) => r.ok).length;

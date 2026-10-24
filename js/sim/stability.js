@@ -1,9 +1,10 @@
 // "Basic physics": decides which installed pieces can stand on their own and which still need a
 // builder (or a support tool) holding them.
 //
-// Each installed unit (a member, or an assembly built on the ground) is a rigid body. A body is
-// stable when it is held in place at two different points by things that are already fixed, or
-// at one point by a moment connection. Fixed things are:
+// Each installed unit (a member, or an assembly) is a rigid body, and units joined by rigid
+// connections are merged into one body. A body is stable when it is held in place at two
+// different points by things that are already fixed, or at one point by a moment connection.
+// Fixed things are:
 //   - bearings (nodes marked as resting on a footing) and nodes with a support tool under them
 //   - nodes of bodies that are already stable (but only through fastened bolts at that node)
 //   - "triangle" joints: when two bodies, each already pinned at one other point, are bolted
@@ -31,6 +32,43 @@ const JOINT = '#joint';
  * @returns {{stable: Set<string>, fixedNodes: Set<string>}}
  */
 export function computeStability({ units, supportNodes, nodePos, rigidBoltCount }) {
+  // Pieces joined by rigid connections move together, so treat each rigidly connected group as
+  // one body (a whole truss bolted with 2-bolt connections is one body pinned at its footings).
+  const parent = new Map(units.map((u) => [u.key, u.key]));
+  const find = (k) => { while (parent.get(k) !== k) { parent.set(k, parent.get(parent.get(k))); k = parent.get(k); } return k; };
+  const rigidAt = new Map(); // nodeId -> unit keys rigidly attached there
+  for (const u of units) {
+    for (const [n, c] of Object.entries(u.attached)) {
+      if (c < rigidBoltCount || supportNodes.has(n)) continue;
+      if (!rigidAt.has(n)) rigidAt.set(n, []);
+      rigidAt.get(n).push(u.key);
+    }
+  }
+  for (const keys of rigidAt.values()) for (let i = 1; i < keys.length; i++) parent.set(find(keys[i]), find(keys[0]));
+  const groups = new Map();
+  for (const u of units) {
+    const r = find(u.key);
+    if (!groups.has(r)) groups.set(r, []);
+    groups.get(r).push(u);
+  }
+  const bodies = [];
+  for (const [r, list] of groups) {
+    if (list.length === 1) { bodies.push(list[0]); continue; }
+    // Connections inside the group don't hold it to anything else.
+    const count = new Map();
+    for (const u of list) for (const n of u.nodeIds) count.set(n, (count.get(n) || 0) + 1);
+    const nodeIds = [...count.keys()].filter((n) => supportNodes.has(n) || count.get(n) === 1);
+    const attached = {};
+    for (const u of list) for (const [n, c] of Object.entries(u.attached)) if (nodeIds.includes(n)) attached[n] = Math.max(attached[n] || 0, c);
+    bodies.push({ key: 'group:' + r, nodeIds, attached, members: list.map((u) => u.key) });
+  }
+  const res = solveBodies({ units: bodies, supportNodes, nodePos, rigidBoltCount });
+  const stable = new Set();
+  for (const b of bodies) if (res.stable.has(b.key)) for (const k of b.members || [b.key]) stable.add(k);
+  return { stable, fixedNodes: res.fixedNodes };
+}
+
+function solveBodies({ units, supportNodes, nodePos, rigidBoltCount }) {
   const stable = new Set();
   const fixedBy = new Map();
   const addSource = (n, s) => {

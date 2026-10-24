@@ -28,7 +28,7 @@ export function Gantt({ result, t, setT }) {
   };
 
   return html`<div class="gantt" ref=${ref}>
-    <svg width=${w} height=${h} onPointerDown=${(e) => { e.currentTarget.setPointerCapture(e.pointerId); seek(e); }} onPointerMove=${(e) => e.buttons && seek(e)}>
+    <svg width=${w} height=${h} onPointerDown=${(e) => { try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* synthetic or finished pointer */ } seek(e); }} onPointerMove=${(e) => e.buttons && seek(e)}>
       ${ticks.map((s) => html`<g key=${'t' + s}><line x1=${sx(s)} y1=${TOP - 4} x2=${sx(s)} y2=${h} stroke="#e2e8f0" />
         <text x=${sx(s)} y=${12} font-size="10" text-anchor="middle" fill="#64748b">${fmt(s).replace(/\.\d$/, '')}</text></g>`)}
       ${result.builders.map((b, i) => html`<g key=${b.id}>

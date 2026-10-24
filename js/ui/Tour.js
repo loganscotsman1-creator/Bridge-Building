@@ -3,13 +3,13 @@
 // replays it.
 import { html, useEffect, useLayoutEffect, useState } from '../lib/preact.js';
 
-const DONE_KEY = 'bss.tourDone.v1';
+const DONE_KEY = 'bss.tourDone.v2'; // bump when the tour changes enough that everyone should see it again
 
 export const TOUR = [
   {
     tab: 'design',
     title: 'Welcome to the Build Sequencer',
-    body: 'This tool helps your team plan how to build the bridge on competition day. Mark up screenshots of your bridge, lay out the site, set up your crew, then try build orders and watch them play out. An example bridge is loaded so you can follow along.',
+    body: 'This tool helps your team plan how to build the bridge on competition day. Mark up screenshots of your bridge, set up your crew, then try build orders and watch them play out on this year\'s official site layout. An example bridge is loaded so you can follow along.',
   },
   {
     target: 'tabs',
@@ -19,27 +19,27 @@ export const TOUR = [
   {
     tab: 'design', target: 'canvas',
     title: '1 · Your bridge, from screenshots',
-    body: 'Drop in a side-view screenshot from your CAD program (or paste it with Ctrl+V). You trace over it to tell the program where the joints and members are.',
+    body: 'Drop in a side-view screenshot from your CAD program (or paste it with Ctrl+V). Then place a box outline over each member: every box is at most the rule\'s 3\'-6" × 6" × 4" size box, and everything inside one box is one welded, rigid member.',
   },
   {
     tab: 'design', target: 'checklist',
     title: 'Follow the checklist',
-    body: 'Set the scale, trace the lines, group lines into members (each must fit the size box), mark the bolts and mark the bearings. Each step goes green when it\'s done. Then do the top view for the laterals.',
+    body: 'Set the scale, place member boxes (drag along a member, or click to stamp a full-size box; they snap edge-to-edge), put bolts where boxes touch, and mark which members stand on a footing. Each step goes green when it\'s done. Then do the top view for the laterals.',
   },
   {
     tab: 'design', target: 'modes',
     title: 'Markup tools',
-    body: 'These buttons match the checklist steps. Each has a keyboard shortcut (hover to see it). Scroll to zoom, drag empty space to pan, and Ctrl+Z undoes anything.',
+    body: 'These buttons match the checklist. In Select, drag a box to move it, drag its handles to shorten, narrow or rotate it (never bigger than the size box). Each tool has a keyboard shortcut (hover to see it), and Ctrl+Z undoes anything.',
   },
   {
     tab: 'site', target: 'site-canvas',
     title: '2 · The site',
-    body: 'Lay out the staging yard, construction zone, ground-assembly areas and no-go zones (the river). Drag the bridge, builders, tools and every member to where they start.',
+    body: 'The 2027 official layout is already set up: staging yards, construction zones, footings, riverbank, river and transportation zone. Adjust it for local conditions, and drag the bridge, builders, tools and members to where they start.',
   },
   {
     tab: 'site', target: 'site-library',
-    title: 'Reuse layouts year to year',
-    body: 'Site layouts change every year. Save one to your browser, download it for a teammate, or load one from the team\'s shared library.',
+    title: 'Next year\'s rules',
+    body: 'The layout and the year\'s rule numbers (box size, builders, assembly size, time limit, cost formula) are saved together. Save one to your browser, download it for a teammate, or load one from the team\'s shared library.',
   },
   {
     tab: 'tools', target: 'tools',
@@ -49,12 +49,12 @@ export const TOUR = [
   {
     tab: 'crew', target: 'crew',
     title: '4 · Crew',
-    body: 'One card per builder: a role (or "any task"), which zones they\'re allowed in, and which tools and hardware they grab when the clock starts.',
+    body: 'One card per builder (up to 6): a role (or "any task") and which tools and nuts & bolts they grab when the clock starts. Builders can\'t cross the river, so the side they start on is the side they work from; pieces are handed across.',
   },
   {
     tab: 'crew', target: 'timing',
     title: 'Timing',
-    body: 'How fast people walk and carry, how long aligning a joint and fastening a bolt take, and how far someone can reach. Time your practice builds and put the real numbers here.',
+    body: 'How fast people walk and carry, how long aligning a connection and fastening a bolt take, how far someone can reach and how far apart two builders can hand off a piece. Time your practice builds and put the real numbers here.',
   },
   {
     tab: 'sequence', target: 'steps',
@@ -64,12 +64,12 @@ export const TOUR = [
   {
     tab: 'sequence', target: 'assemblies',
     title: 'Assemblies and supports',
-    body: 'Group members into ground assemblies that are built in an assembly area and carried in as one piece, and add steps that place or remove temporary supports.',
+    body: 'Group 2–3 members into assemblies that are bolted together in the staging yard and carried in as one piece, and add steps that place or remove temporary supports.',
   },
   {
     tab: 'sequence', target: 'total',
     title: 'Instant feedback',
-    body: 'The build time updates after every change, and problems (such as a piece nobody can reach, or everyone stuck holding) are listed under the 3D view. Duplicate a plan to compare variations.',
+    body: 'Build time and construction cost update after every change, and rule problems (such as a piece that doesn\'t start on a footing, or everyone stuck holding) are listed under the 3D view. Duplicate a plan to compare variations.',
   },
   {
     tab: 'simulate', target: 'play',

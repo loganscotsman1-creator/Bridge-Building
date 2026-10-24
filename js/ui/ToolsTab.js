@@ -14,8 +14,11 @@ export function ToolsTab({ project }) {
       support: { name: 'Jack stand', placeTime: 6, removeTime: 5 },
       other: { name: 'New tool' },
     };
-    const hw = p.site.hardware;
-    p.tools.push({ id: uid('t'), kind, count: 1, boltTime: 4, placeTime: 6, removeTime: 5, start: { x: hw.x + 20 + p.tools.length * 15, y: hw.y }, notes: '', ...presets[kind] });
+    // New tools start in the first tools area (drag them elsewhere in the Site tab).
+    const area = p.site.zones.find((z) => z.type === 'tools') || p.site.zones.find((z) => z.type === 'staging') || { x: 0, y: 0, w: 60, h: 60 };
+    const n = p.tools.length;
+    const start = { x: Math.round(area.x + 10 + ((n * 14) % Math.max(14, area.w - 20))), y: Math.round(area.y + 12 + Math.floor((n * 14) / Math.max(14, area.w - 20)) * 14) };
+    p.tools.push({ id: uid('t'), kind, count: 1, boltTime: 4, placeTime: 6, removeTime: 5, start, notes: '', ...presets[kind] });
   });
   const remove = (id) => updateProject((p) => {
     p.tools = p.tools.filter((t) => t.id !== id);
@@ -29,7 +32,7 @@ export function ToolsTab({ project }) {
       <button class="primary" onClick=${() => add('support')}>+ Temporary support</button>
       <button onClick=${() => add('other')}>+ Other tool</button>
     </div>
-    <${Hint}>Builders can carry any number of tools along with one member. Tools are picked up after the clock starts, from where they sit on the site (drag them in the Site tab). Who grabs which tool is set in the Crew tab.<//>
+    <${Hint}>Builders can carry any number of tools along with one member. Tools are picked up after the clock starts from their tools area (drag them in the Site tab), and builders can't cross the river to get one, so give each side of the river its own. Every tool must fit the ${(project.site.rules?.box || [42, 6, 4]).join(' × ')} in box (10.2.4) and be battery-powered or manual (10.2.3). Who grabs which tool is set in the Crew tab.<//>
     <div class="cards">
       ${tools.map((t) => html`<div class="card" key=${t.id}>
         <div class="card-head"><${TextField} label="Name" value=${t.name} onChange=${(v) => set(t.id, (x) => { x.name = v; })} />

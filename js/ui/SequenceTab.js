@@ -1,11 +1,11 @@
-// Sequence tab: the build order. Reorder steps, group members into ground assemblies, assign
-// builders, add temporary supports, and compare plan variants. The simulation re-runs on every change.
+// Sequence tab: the build order. Reorder steps, group members into assemblies, assign builders,
+// add temporary supports, and compare plan variants. The simulation re-runs on every change.
 import { html, useMemo, useState } from '../lib/preact.js';
 import { updateProject } from '../model/store.js';
 import { uid } from '../model/ids.js';
 import { activePlan, emptyPlan } from '../model/schema.js';
-import { autoOrderSteps, installStep, nodeLabel, planUnits, stepLabel, unitKey } from '../model/plan.js';
-import { fmt, simulate } from '../sim/simulate.js';
+import { autoOrderSteps, installStep, planUnits, stepLabel, unitKey } from '../model/plan.js';
+import { fmt, fmtCost, simulate } from '../sim/simulate.js';
 import { IsoView } from './IsoView.js';
 import { Hint, Section, SelectField } from './common.js';
 
@@ -34,16 +34,24 @@ export function SequenceTab({ project, model, sim }) {
   const builderOpts = (extra = []) => [['auto', 'Auto'], ...extra, ...project.builders.map((b) => [b.id, b.name])];
 
   // --- assemblies ---
+  const rules = project.site.rules || {};
+  const maxAsm = rules.maxAssemblyMembers ?? Infinity;
+  const asmZones = project.site.zones.filter((z) => (rules.assemblyIn === 'assembly' ? z.type === 'assembly' : z.type === 'staging'));
   const createAssembly = () => {
     const id = uid('as');
     setPlan((pl) => {
-      const zone = project.site.zones.find((z) => z.type === 'assembly');
-      pl.assemblies.push({ id, name: 'Assembly ' + (pl.assemblies.length + 1), memberIds: [], areaZoneId: zone ? zone.id : null });
+      pl.assemblies.push({ id, name: 'Assembly ' + (pl.assemblies.length + 1), memberIds: [], areaZoneId: null });
     });
     setEditAsm(id);
   };
 
-  const toggleMember = (asmId, memberId) => setPlan((pl) => {
+  const toggleMember = (asmId, memberId) => {
+    const cur = plan.assemblies.find((x) => x.id === asmId);
+    if (cur && !cur.memberIds.includes(memberId) && cur.memberIds.length >= maxAsm) {
+      alert(`An assembly can have at most ${maxAsm} members under this year's rules (10.3.7).`);
+      return;
+    }
+    setPlan((pl) => {
     const a = pl.assemblies.find((x) => x.id === asmId);
     if (!a) return;
     if (a.memberIds.includes(memberId)) {
@@ -65,7 +73,8 @@ export function SequenceTab({ project, model, sim }) {
       const inst = pl.steps.findIndex((s) => s.kind === 'install' && s.unit.type === 'assembly' && s.unit.id === asmId);
       pl.steps.splice(Math.max(0, inst), 0, { id: uid('s'), kind: 'build', assemblyId: asmId, builder: 'auto' });
     }
-  });
+    });
+  };
 
   const deleteAssembly = (asmId) => setPlan((pl) => {
     const a = pl.assemblies.find((x) => x.id === asmId);
@@ -111,15 +120,15 @@ export function SequenceTab({ project, model, sim }) {
     const placed = new Map();
     steps.slice(0, selIndex + 1).forEach((s) => {
       if (s.kind !== 'support') return;
-      const key = s.toolId + '@' + s.nodeId;
-      if (s.action === 'place') placed.set(key, { key, nodeId: s.nodeId }); else placed.delete(key);
+      const key = s.toolId + '@' + s.memberId;
+      if (s.action === 'place') placed.set(key, { key, memberId: s.memberId }); else placed.delete(key);
     });
     return [...placed.values()];
   })();
 
   const runCompare = () => setCompare(project.plans.map((pl) => {
     const r = simulate(project, pl);
-    return { id: pl.id, name: pl.name, end: r.endTime, errors: r.errors.length, holds: r.holds.reduce((a, h) => a + h.duration, 0), aborted: r.aborted };
+    return { id: pl.id, name: pl.name, end: r.endTime, cost: r.cost, errors: r.errors.length, holds: r.holds.reduce((a, h) => a + h.duration, 0), aborted: r.aborted };
   }));
 
   return html`<div class="tab-layout seq">
@@ -137,8 +146,8 @@ export function SequenceTab({ project, model, sim }) {
         <button disabled=${project.plans.length < 2} onClick=${() => confirm(`Delete plan "${plan.name}"?`) && updateProject((p) => { p.plans = p.plans.filter((x) => x.id !== plan.id); p.activePlanId = p.plans[0].id; })}>Delete</button>
         <button onClick=${runCompare}>Compare plans</button>
         <span class="sep"></span>
-        <button title="Order every piece left to right, bottom to top. Supports stay at the start and end." onClick=${() => {
-          if (steps.length && !confirm('Replace the order with an automatic left-to-right order?')) return;
+        <button title="Start from the footings and work west to east, trusses before laterals. Supports stay at the start and end." onClick=${() => {
+          if (steps.length && !confirm('Replace the order with an automatic west-to-east order?')) return;
           setPlan((pl) => {
             const places = pl.steps.filter((s) => s.kind === 'support' && s.action === 'place');
             const removes = pl.steps.filter((s) => s.kind === 'support' && s.action === 'remove');
@@ -146,11 +155,12 @@ export function SequenceTab({ project, model, sim }) {
           });
         }}>Auto order</button>
         <span class="spacer"></span>
-        <span data-tour="total" class=${'total ' + (sim.errors.length ? 'bad' : '')}>${sim.aborted ? 'Stops at step ' + ((sim.errors.at(-1)?.step ?? 0) + 1) : 'Build time ' + fmt(sim.endTime)}</span>
+        <span data-tour="total" class=${'total ' + (sim.errors.length ? 'bad' : '')} title="Construction cost uses this year's formula (number of builders × minutes × rate)">
+          ${sim.aborted ? 'Stops at step ' + ((sim.errors.at(-1)?.step ?? 0) + 1) : html`Build time ${fmt(sim.endTime)}${sim.cost != null && html` <span class="cost">· ${fmtCost(sim.cost)}</span>`}`}</span>
       </div>
       ${compare && html`<div class="compare">
-        <table class="grid"><thead><tr><th>Plan</th><th>Build time</th><th>Total holding</th><th>Problems</th><th></th></tr></thead>
-        <tbody>${compare.map((c) => html`<tr class=${c.id === plan.id ? 'sel' : ''}><td>${c.name}</td><td>${c.aborted ? 'incomplete' : fmt(c.end)}</td><td>${fmt(c.holds)}</td><td class=${c.errors ? 'bad' : 'ok'}>${c.errors || '—'}</td>
+        <table class="grid"><thead><tr><th>Plan</th><th>Build time</th><th>Construction cost</th><th>Total holding</th><th>Problems</th><th></th></tr></thead>
+        <tbody>${compare.map((c) => html`<tr class=${c.id === plan.id ? 'sel' : ''}><td>${c.name}</td><td>${c.aborted ? 'incomplete' : fmt(c.end)}</td><td>${c.aborted ? '–' : fmtCost(c.cost)}</td><td>${fmt(c.holds)}</td><td class=${c.errors ? 'bad' : 'ok'}>${c.errors || '—'}</td>
           <td><button class="small" onClick=${() => updateProject((p) => { p.activePlanId = c.id; })}>Open</button></td></tr>`)}</tbody></table>
         <button class="small" onClick=${() => setCompare(null)}>Close</button></div>`}
       <div class="seq-body">
@@ -207,8 +217,8 @@ export function SequenceTab({ project, model, sim }) {
           })}>Add</button></li>`)}</ul>
       <//>
       <div data-tour="assemblies">
-      <${Section} title=${`Ground assemblies (${plan.assemblies.length})`}>
-        <${Hint}>Members bolted together on the ground in an assembly area, then carried and installed as one piece.<//>
+      <${Section} title=${`Assemblies (${plan.assemblies.length})`}>
+        <${Hint}>${maxAsm < Infinity ? `2 to ${maxAsm} members` : 'Members'} bolted together ${rules.assemblyIn === 'assembly' ? 'in a ground-assembly area' : 'in the staging yard'} after the clock starts, then carried and installed as one piece.<//>
         <button class="primary" onClick=${createAssembly}>+ New assembly</button>
         ${plan.assemblies.map((a) => html`<div class=${'asm ' + (editAsm === a.id ? 'editing' : '')} key=${a.id}>
           <div class="row">
@@ -216,10 +226,11 @@ export function SequenceTab({ project, model, sim }) {
             <button class="small" onClick=${() => setEditAsm(editAsm === a.id ? null : a.id)}>${editAsm === a.id ? 'Done' : 'Edit'}</button>
             <button class="small danger" onClick=${() => { deleteAssembly(a.id); if (editAsm === a.id) setEditAsm(null); }}>✕</button>
           </div>
-          <${SelectField} label="Built in" value=${a.areaZoneId || ''}
-            options=${[['', '(first assembly area)'], ...project.site.zones.filter((z) => z.type === 'assembly').map((z) => [z.id, z.name])]}
-            onChange=${(v) => setPlan((pl) => { pl.assemblies.find((x) => x.id === a.id).areaZoneId = v || null; })} />
-          <div class="muted">${a.memberIds.map((id) => model.memberById.get(id)?.name).filter(Boolean).join(', ') || 'No members yet. Click Edit, then click members in the 3D view.'}</div>
+          ${asmZones.length > 1 && html`<${SelectField} label="Assembled in" value=${a.areaZoneId || ''}
+            options=${[['', '(where its members start)'], ...asmZones.map((z) => [z.id, z.name])]}
+            onChange=${(v) => setPlan((pl) => { pl.assemblies.find((x) => x.id === a.id).areaZoneId = v || null; })} />`}
+          <div class=${a.memberIds.length > maxAsm ? 'bad' : 'muted'}>${a.memberIds.map((id) => model.memberById.get(id)?.name).filter(Boolean).join(', ') || 'No members yet. Click Edit, then click members in the 3D view.'}
+            ${a.memberIds.length > 0 && ` (${a.memberIds.length}${maxAsm < Infinity ? ' of ' + maxAsm : ''})`}</div>
         </div>`)}
       <//>
       <${AddSupport} project=${project} model=${model} selIndex=${selIndex} setPlan=${setPlan} />
@@ -231,21 +242,21 @@ export function SequenceTab({ project, model, sim }) {
 function AddSupport({ project, model, selIndex, setPlan }) {
   const supports = project.tools.filter((t) => t.kind === 'support');
   const [toolId, setToolId] = useState('');
-  const [nodeId, setNodeId] = useState('');
+  const [memberId, setMemberId] = useState('');
   const [action, setAction] = useState('place');
-  const nodes = [...model.nodes.values()].sort((a, b) => a.plane.localeCompare(b.plane) || a.x - b.x || a.z - b.z);
+  const members = [...model.members].filter((m) => m.plane !== 'L').sort((a, b) => a.plane.localeCompare(b.plane) || a.centroid[0] - b.centroid[0]);
   const tid = toolId || supports[0]?.id || '';
-  const nid = nodeId || nodes[0]?.id || '';
+  const mid = memberId || members[0]?.id || '';
   return html`<${Section} title="Temporary supports">
     ${!supports.length ? html`<${Hint}>Add a temporary support tool (e.g. a jack stand) in the Tools tab first.<//>` : html`
       <${SelectField} label="Action" value=${action} options=${[['place', 'Place support'], ['remove', 'Remove support']]} onChange=${setAction} />
       <${SelectField} label="Tool" value=${tid} options=${supports.map((t) => [t.id, t.name])} onChange=${setToolId} />
-      <${SelectField} label="Under joint" value=${nid} options=${nodes.map((n) => [n.id, nodeLabel(model, n.id)])} onChange=${setNodeId} />
+      <${SelectField} label="Under member" value=${mid} options=${members.map((m) => [m.id, m.name])} onChange=${setMemberId} />
       <button class="primary" onClick=${() => setPlan((pl) => {
-        const step = { id: uid('s'), kind: 'support', action, toolId: tid, nodeId: nid, builder: 'auto' };
+        const step = { id: uid('s'), kind: 'support', action, toolId: tid, memberId: mid, builder: 'auto' };
         pl.steps.splice(selIndex >= 0 ? selIndex + 1 : pl.steps.length, 0, step);
       })}>Add step ${selIndex >= 0 ? 'after step ' + (selIndex + 1) : 'at the end'}</button>
-      <${Hint}>A support under a joint holds it in place like a bearing, so pieces resting on it don't need to be held.<//>`}
+      <${Hint}>A support under a member's lowest point holds it like a footing, so it doesn't need to be held. Supports must be picked back up before the finish (10.9.1), and can't stand in the river.<//>`}
   <//>`;
 }
 

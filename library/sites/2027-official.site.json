@@ -1,0 +1,43 @@
+{
+  "kind": "bridge-site",
+  "name": "2027 official layout",
+  "year": "2027",
+  "notes": "From the Site Plan Diagram (DWG 1) of the 2027 rules. The transportation zone may be shortened by the host to fit local conditions (note 2). Check aisc.org/ssbc for clarifications.",
+  "width": 720,
+  "depth": 180,
+  "cell": 6,
+  "zones": [
+    { "id": "z-wsy", "name": "West staging yard", "type": "staging", "x": 0, "y": 0, "w": 60, "h": 180 },
+    { "id": "z-wsy-tools", "name": "Tools (west)", "type": "tools", "x": 0, "y": 0, "w": 24, "h": 96 },
+    { "id": "z-wsy-nb", "name": "Nuts & bolts (west)", "type": "hardware", "x": 0, "y": 96, "w": 24, "h": 84 },
+    { "id": "z-wsy-b", "name": "Builders (west)", "type": "builders", "x": 24, "y": 0, "w": 36, "h": 180 },
+    { "id": "z-wcz", "name": "West construction zone", "type": "construction", "x": 60, "y": 0, "w": 180, "h": 180 },
+    { "id": "z-wft", "name": "West footing", "type": "footing", "x": 84, "y": 60, "w": 12, "h": 60 },
+    { "id": "z-bank", "name": "Riverbank", "type": "riverbank", "x": 240, "y": 0, "w": 24, "h": 180 },
+    { "id": "z-river", "name": "River", "type": "nogo", "x": 264, "y": 0, "w": 84, "h": 180 },
+    { "id": "z-ecz", "name": "East construction zone", "type": "construction", "x": 348, "y": 0, "w": 60, "h": 180 },
+    { "id": "z-eft", "name": "East footing", "type": "footing", "x": 348, "y": 60, "w": 12, "h": 60 },
+    { "id": "z-tz", "name": "Transportation zone", "type": "transport", "x": 408, "y": 0, "w": 168, "h": 180 },
+    { "id": "z-esy", "name": "East staging yard", "type": "staging", "x": 576, "y": 0, "w": 144, "h": 180 },
+    { "id": "z-esy-m", "name": "Members", "type": "members", "x": 576, "y": 0, "w": 144, "h": 96 },
+    { "id": "z-esy-b", "name": "Builders (east)", "type": "builders", "x": 576, "y": 96, "w": 48, "h": 84 },
+    { "id": "z-esy-nb", "name": "Nuts & bolts (east)", "type": "hardware", "x": 624, "y": 96, "w": 24, "h": 84 },
+    { "id": "z-esy-tools", "name": "Tools (east)", "type": "tools", "x": 648, "y": 96, "w": 72, "h": 84 }
+  ],
+  "bridge": { "x": 84, "y": 72, "rotation": 0 },
+  "rules": {
+    "year": "2027",
+    "source": "AISC SSBC 2027 Rules, published September 8, 2026",
+    "box": [42, 6, 4],
+    "maxBuilders": 6,
+    "maxAssemblyMembers": 3,
+    "assemblyIn": "staging",
+    "timeLimitMin": 30,
+    "haltMin": 45,
+    "costPerBuilderMin": 172500,
+    "crewFactor": 0.8,
+    "crewFactorMinBuilders": 4,
+    "penaltyPerMin": 325000,
+    "returnToStaging": true
+  }
+}

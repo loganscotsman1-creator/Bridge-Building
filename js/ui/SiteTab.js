@@ -1,25 +1,27 @@
-// Site tab: lay out the staging yard, construction zone, assembly areas and no-go zones, place
-// the bridge, and say where builders, tools, nuts & bolts and members start.
+// Site tab: lay out the staging yards, construction zones, footings, river and other zones,
+// place the bridge, say where builders, tools and members start, and set this year's rules.
 import { html, useEffect, useState } from '../lib/preact.js';
 import { updateProject } from '../model/store.js';
 import { uid } from '../model/ids.js';
 import { ZONE_TYPES, normalizeSite } from '../model/schema.js';
-import { stagingSpots } from '../model/plan.js';
+import { site2027 } from '../model/rules2027.js';
+import { membersArea, stagingSpots } from '../model/plan.js';
 import { deleteMySite, downloadJSON, fetchLibrarySite, fetchSiteLibrary, mySites, pickFile, readJSONFile, safeFilename, saveMySite, siteForSharing } from '../model/storage.js';
 import { PlanView } from './PlanView.js';
-import { Hint, NumField, Section, SelectField, TextField } from './common.js';
+import { Check, Hint, NumField, Section, SelectField, TextField } from './common.js';
 
 export function SiteTab({ project, model }) {
   const [sel, setSel] = useState(null);
+  const [newType, setNewType] = useState('staging');
   const site = project.site;
   const spots = stagingSpots(project, model);
-  const yard = site.zones.find((z) => z.type === 'staging');
-  const overflow = yard ? [...spots.values()].filter((s) => s.auto && s.y > yard.y + yard.h).length : 0;
+  const area = membersArea(site);
+  const overflow = [...spots.values()].filter((s) => s.auto && s.y > area.y + area.h).length;
 
   const addZone = (type) => {
     const id = uid('z');
     updateProject((p) => {
-      p.site.zones.push({ id, name: ZONE_TYPES[type].label, type, x: Math.round(p.site.width / 2 - 60), y: Math.round(p.site.depth / 2 - 40), w: 120, h: 80 });
+      p.site.zones.push({ id, name: ZONE_TYPES[type].label, type, x: Math.round(p.site.width / 2 - 30), y: Math.round(p.site.depth / 2 - 30), w: 60, h: 60 });
     });
     setSel({ type: 'zone', id });
   };
@@ -27,14 +29,21 @@ export function SiteTab({ project, model }) {
   return html`<div class="tab-layout">
     <div class="main" data-tour="site-canvas">
       <div class="toolbar">
-        <span class="muted">Add zone:</span>
-        ${Object.entries(ZONE_TYPES).map(([t, z]) => html`<button onClick=${() => addZone(t)}><span class="dot" style=${{ background: z.color }}></span>${z.label}</button>`)}
+        <label class="check">Add zone
+          <select value=${newType} onChange=${(e) => setNewType(e.target.value)}>
+            ${Object.entries(ZONE_TYPES).map(([t, z]) => html`<option value=${t}>${z.label}</option>`)}
+          </select></label>
+        <button onClick=${() => addZone(newType)}><span class="dot" style=${{ background: ZONE_TYPES[newType].color }}></span>Add</button>
         <span class="sep"></span>
-        <button onClick=${() => updateProject((p) => { p.site.staging = {}; })} title="Forget dragged positions and lay members out in rows in the staging yard">Re-stack members</button>
+        <button onClick=${() => updateProject((p) => { p.site.staging = {}; })} title="Forget dragged positions and lay members out in rows in the members area">Re-stack members</button>
+        <button title="Put back the official 2027 layout and rules (members, builders and tools keep their start points)" onClick=${() => {
+          if (!confirm('Replace this layout and its rules with the official 2027 layout?')) return;
+          updateProject((p) => { const keep = p.site.staging; p.site = { ...site2027(), staging: keep }; });
+        }}>Reset to 2027 layout</button>
       </div>
       <${PlanView} project=${project} model=${model} spots=${spots} sel=${sel} setSel=${setSel} editable=${true} />
-      <div class="hint-bar">Drag zones, corners, the bridge, builders, tools, nuts & bolts and members to place them. Scroll to zoom, drag empty space to pan.
-        ${overflow > 0 && html` <b class="bad">${overflow} member${overflow === 1 ? " doesn't" : "s don't"} fit in the staging yard; make it bigger or drag ${overflow === 1 ? 'it' : 'them'}.</b>`}</div>
+      <div class="hint-bar">Drag zones, corners, the bridge, builders, tools and members to place them. Scroll to zoom, drag empty space to pan.
+        ${overflow > 0 && html` <b class="bad">${overflow} member${overflow === 1 ? " doesn't" : "s don't"} fit in the members area; make it bigger or drag ${overflow === 1 ? 'it' : 'them'}.</b>`}</div>
     </div>
     <aside class="side">
       ${sel && html`<${SelectedPanel} project=${project} sel=${sel} setSel=${setSel} />`}
@@ -48,11 +57,12 @@ export function SiteTab({ project, model }) {
         <label class="field col"><span class="lbl">Notes</span><textarea rows="2" value=${site.notes} onInput=${(e) => updateProject((p) => { p.site.notes = e.target.value; }, { key: 'snotes' })}></textarea></label>
       <//>
       <${Section} title=${`Zones (${site.zones.length})`}>
-        ${!site.zones.length && html`<${Hint}>No zones yet. Add the staging yard, construction zone, assembly areas and the river (no-go).<//>`}
+        ${!site.zones.length && html`<${Hint}>No zones yet. Add staging yards, construction zones, footings and the river (no-go), or use "Reset to 2027 layout".<//>`}
         <ul class="list">${site.zones.map((z) => html`<li class=${sel && sel.id === z.id ? 'sel' : ''} onClick=${() => setSel({ type: 'zone', id: z.id })}>
           <span class="dot" style=${{ background: ZONE_TYPES[z.type]?.color }}></span>${z.name}<span class="muted"> ${Math.round(z.w)}×${Math.round(z.h)} in</span></li>`)}</ul>
-        <${Hint}>Builders who aren't restricted can walk anywhere in the site except no-go zones. Restrict builders to zones in the Crew tab.<//>
+        <${Hint}>Builders can walk anywhere inside the site boundary except the river and other no-go zones, so a river across the whole site keeps each builder on their own side. Members start in the members area, tools in tools areas, builders in builders areas. Restrict builders further in the Crew tab.<//>
       <//>
+      <${RulesPanel} project=${project} />
       <div data-tour="site-library"><${SiteLibrary} project=${project} /></div>
     </aside>
   </div>`;
@@ -89,7 +99,6 @@ function SelectedPanel({ project, sel, setSel }) {
     const t = project.tools.find((x) => x.id === sel.id);
     return t && pointEditor(t.name + ' starts at', t.start, (pt) => updateProject((p) => { p.tools.find((x) => x.id === sel.id).start = pt; }, { key: 'ts' + sel.id }));
   }
-  if (sel.type === 'hardware') return pointEditor('Nuts & bolts start at', site.hardware, (pt) => updateProject((p) => { p.site.hardware = pt; }, { key: 'hw' }));
   if (sel.type === 'bridge') return pointEditor('Bridge origin (x = 0, truss A)', site.bridge, (pt) => updateProject((p) => { p.site.bridge = { ...p.site.bridge, x: pt.x, y: pt.y }; }, { key: 'br' }));
   if (sel.type === 'piece') {
     const spot = project.site.staging[sel.id];
@@ -99,6 +108,31 @@ function SelectedPanel({ project, sel, setSel }) {
     <//>`;
   }
   return null;
+}
+
+// The numbers from this year's rules that the simulator checks. They're saved with the layout.
+function RulesPanel({ project }) {
+  const r = project.site.rules || {};
+  const set = (k, v) => updateProject((p) => { p.site.rules = { ...p.site.rules, [k]: v }; }, { key: 'rule' + k });
+  const box = r.box || [42, 6, 4];
+  return html`<${Section} title=${`Competition rules${r.year ? ' (' + r.year + ')' : ''}`} open=${false}>
+    <${Hint}>${r.source || 'Set these from this year\'s rules.'} Rule numbers in brackets are from the 2027 rules.<//>
+    <${TextField} label="Rules year" value=${r.year} onChange=${(v) => set('year', v)} />
+    <div class="row3">
+      <span class="lbl" title="8.2.2.2 — every member must fit">Member box</span>
+      ${[0, 1, 2].map((i) => html`<${NumField} label="" unit="in" value=${box[i]} min=${0.1} onChange=${(v) => set('box', box.map((b, j) => (j === i ? v : b)))} />`)}
+    </div>
+    <${NumField} label="Most builders (10.2.2)" value=${r.maxBuilders} min=${1} step="1" onChange=${(v) => set('maxBuilders', Math.round(v))} />
+    <${NumField} label="Most members per assembly (10.3.7)" value=${r.maxAssemblyMembers} min=${2} step="1" onChange=${(v) => set('maxAssemblyMembers', Math.round(v))} />
+    <${SelectField} label="Assemblies are made in" value=${r.assemblyIn || 'staging'} options=${[['staging', 'Staging yards'], ['assembly', 'Ground-assembly areas']]} onChange=${(v) => set('assemblyIn', v)} />
+    <${NumField} label="Time limit (10.8.1)" unit="min" value=${r.timeLimitMin} min=${0} onChange=${(v) => set('timeLimitMin', v)} />
+    <${NumField} label="Construction halted at (10.8.2)" unit="min" value=${r.haltMin} min=${0} onChange=${(v) => set('haltMin', v)} />
+    <${NumField} label="Cost per builder-minute (6.2.5)" unit="$" value=${r.costPerBuilderMin} min=${0} onChange=${(v) => set('costPerBuilderMin', v)} />
+    <${NumField} label="Crew discount factor" value=${r.crewFactor} min=${0} step="0.05" onChange=${(v) => set('crewFactor', v)} />
+    <${NumField} label="…with at least" unit="builders" value=${r.crewFactorMinBuilders} min=${1} step="1" onChange=${(v) => set('crewFactorMinBuilders', Math.round(v))} />
+    <${Check} label="Builders must finish in a staging yard (10.9.1)" checked=${r.returnToStaging !== false} onChange=${(v) => set('returnToStaging', v)} />
+    <${Hint}>Builders never cross a river or no-go zone; if the layout puts the river across the whole site (as in 2027), pieces are handed across. Builders touch the bridge only from construction zones, footings and the riverbank (10.3.12).<//>
+  <//>`;
 }
 
 function SiteLibrary({ project }) {

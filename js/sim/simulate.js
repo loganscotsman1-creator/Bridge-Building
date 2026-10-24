@@ -1,19 +1,23 @@
 // Build simulator. Walks through the plan's steps in order and schedules every builder:
-// walking, carrying, holding, aligning, fastening, ground assembly and placing/removing supports.
+// walking, carrying, handing pieces across, holding, aligning, fastening, assembling in the
+// staging yard and placing/removing supports.
 //
 // Scheduling is greedy: each step takes the builder(s) who can get to the work soonest (or the
 // ones the plan assigns). Steps overlap whenever builders are free, but pieces are placed on the
 // bridge in plan order. A builder who places a piece keeps holding it until the stability model
 // (stability.js) says it stands on its own.
 //
-// Competition rules modelled:
-//   - a builder carries only one member or assembly at a time (tools, nuts and bolts are extra)
-//   - tools and hardware are picked up after the clock starts (gear-up at time 0)
-//   - assemblies are built only in ground-assembly zones
-//   - builders stay out of no-go zones and inside their allowed zones
-import { buildModel, bridgeToSite, dist2d } from '../model/geometry.js';
-import { activePlan } from '../model/schema.js';
-import { planUnits, stagingSpots, stepLabel, nodeLabel } from '../model/plan.js';
+// Rules modelled (2027 numbering; the values live in site.rules so they can change by year):
+//   - a builder outside the staging yard carries only one member or assembly at a time (10.3.8)
+//   - builders never enter the river, so they can't cross it (10.3.6); pieces are handed across
+//   - builders touch the bridge only from a construction zone, footing or riverbank (10.3.12)
+//   - tools and hardware are picked up after the clock starts (10.6.3)
+//   - assemblies have at most N members and are made only in a staging yard (10.3.7)
+//   - each constructed portion starts on a footing (10.3.11)
+//   - builders finish in a staging yard and supports are picked back up (10.9.1)
+import { buildModel, bridgeToSite, dist2d, memberPoint } from '../model/geometry.js';
+import { activePlan, ZONE_TYPES } from '../model/schema.js';
+import { planUnits, stagingSpots, stepLabel, jointLabel } from '../model/plan.js';
 import { SiteGrid } from './grid.js';
 import { computeStability } from './stability.js';
 
@@ -26,13 +30,13 @@ const SUPPORT_ROLES = new Set(['any', 'carrier', 'fastener', 'assembler']);
 export const SEGMENT_KINDS = {
   walk: { label: 'Walking', color: '#cbd5e1' },
   carry: { label: 'Carrying', color: '#60a5fa' },
-  pickup: { label: 'Pick up / set down', color: '#93c5fd' },
+  pickup: { label: 'Pick up / set down / hand off', color: '#93c5fd' },
   gear: { label: 'Grabbing tools / hardware', color: '#94a3b8' },
   wait: { label: 'Waiting', color: '#f1f5f9' },
   hold: { label: 'Holding a piece', color: '#f97316' },
   align: { label: 'Aligning', color: '#fde047' },
   fasten: { label: 'Fastening', color: '#ca8a04' },
-  assemble: { label: 'Ground assembly', color: '#a855f7' },
+  assemble: { label: 'Assembling (staging yard)', color: '#a855f7' },
   support: { label: 'Placing / removing support', color: '#14b8a6' },
 };
 
@@ -47,12 +51,15 @@ export function simulate(project, plan = activePlan(project)) {
   return sim.result();
 }
 
+const inZone = (z, p) => p.x >= z.x - 1e-6 && p.x <= z.x + z.w + 1e-6 && p.y >= z.y - 1e-6 && p.y <= z.y + z.h + 1e-6;
+
 class Sim {
   constructor(project, plan) {
     this.project = project;
     this.plan = plan;
     this.T = project.timing;
     this.site = project.site;
+    this.rules = project.site.rules || {};
     this.model = buildModel(project);
     this.grid = new SiteGrid(project.site);
     this.segments = [];
@@ -68,38 +75,45 @@ class Sim {
     this.aborted = false;
     this.warned = new Set();
 
+    const zones = this.site.zones;
+    const idsOf = (pred) => zones.filter((z) => pred(ZONE_TYPES[z.type] || {}, z)).map((z) => z.id);
+    this.workZones = idsOf((t) => t.work);
+    this.stageZones = idsOf((t) => t.stage);
+
+    // Positions of everything the stability model and the builders refer to.
     this.nodePos = new Map();
-    for (const [id, n] of this.model.nodes) this.nodePos.set(id, { x: n.x, y: n.y, z: n.z });
-    this.bearings = new Set([...this.model.nodes.values()].filter((n) => n.bearing).map((n) => n.id));
-    this.supported = new Map(); // nodeId -> count of support tools under it
-    this.present = new Map(); // nodeId -> Set(unitKey) installed there
+    for (const j of this.model.joints) this.nodePos.set(j.id, { x: j.pos[0], y: j.pos[1], z: j.pos[2] });
+    for (const m of this.model.members) {
+      const p = { x: m.bearingPoint[0], y: m.bearingPoint[1], z: m.bearingPoint[2] };
+      this.nodePos.set('brg:' + m.id, p);
+      this.nodePos.set('sup:' + m.id, p);
+    }
+    this.bearings = new Set(this.model.members.filter((m) => m.bearing).map((m) => 'brg:' + m.id));
+    this.supported = new Map(); // 'sup:memberId' -> count of support tools under it
 
     // Units
     const { units } = planUnits(this.model, plan);
     const spots = stagingSpots(project, this.model);
     this.units = new Map();
     for (const u of units) {
-      const unit = {
-        ...u,
-        nodeIds: [...new Set(u.memberIds.flatMap((id) => this.model.memberById.get(id).nodeIds))],
-        boltsAt: {},
-        fastened: {},
-        attached: {},
-        installed: false,
-        built: u.type === 'member',
-        stable: false,
-        holder: null,
-        pos: null,
-        readyAt: 0,
-      };
-      if (u.type === 'member') unit.pos = spots.get(u.id);
-      this.units.set(u.key, unit);
+      this.units.set(u.key, {
+        ...u, joints: [], fastened: {}, attached: {},
+        installed: false, built: u.type === 'member', stable: false, holder: null, pos: null, readyAt: 0,
+        pos3: null,
+      });
+      if (u.type === 'member') this.units.get(u.key).pos = spots.get(u.id);
     }
     this.unitOfMember = new Map();
     for (const u of this.units.values()) for (const m of u.memberIds) this.unitOfMember.set(m, u);
-    for (const b of this.model.bolts) {
-      const u = this.unitOfMember.get(b.memberId);
-      if (u) u.boltsAt[b.nodeId] = (u.boltsAt[b.nodeId] || 0) + 1;
+    for (const j of this.model.joints) {
+      const ua = this.unitOfMember.get(j.a), ub = this.unitOfMember.get(j.b);
+      if (!ua || !ub) continue;
+      if (ua === ub) { ua.internal = ua.internal || []; ua.internal.push(j); continue; }
+      ua.joints.push(j);
+      ub.joints.push(j);
+    }
+    for (const u of this.units.values()) {
+      u.nodeIds = [...u.joints.map((j) => j.id), ...u.memberIds.flatMap((m) => ['brg:' + m, 'sup:' + m])];
     }
     for (const m of this.model.members) {
       const s = spots.get(m.id);
@@ -108,7 +122,9 @@ class Sim {
     }
 
     // Builders
-    const zoneIds = new Set(this.site.zones.map((z) => z.id));
+    const zoneIds = new Set(zones.map((z) => z.id));
+    if (project.builders.length > (this.rules.maxBuilders ?? Infinity)) this.error(`The rules allow at most ${this.rules.maxBuilders} builders; this crew has ${project.builders.length} (10.2.2).`);
+    const builderAreas = zones.filter((z) => z.type === 'builders');
     this.builders = project.builders.map((b) => {
       let allowed = b.allowedZones && b.allowedZones.length ? b.allowedZones.filter((id) => zoneIds.has(id)) : null;
       if (b.allowedZones && b.allowedZones.length && !allowed.length) {
@@ -121,17 +137,58 @@ class Sim {
         const near = this.grid.nearestStand(mask, pos);
         if (near) { this.warn(`${b.name} starts somewhere they aren't allowed to stand; moved to the nearest allowed spot.`); pos = { x: near.x, y: near.y }; }
       }
-      return { id: b.id, name: b.name, role: b.role || 'any', color: b.color, start: pos, pos, freeAt: 0, holding: null, holdSince: 0, mask, gear: [], hardware: false, boltTime: this.T.boltTimeHand, tasks: 0 };
+      if (builderAreas.length && !builderAreas.some((z) => inZone(z, pos))) this.warn(`${b.name} doesn't start in a builders area of a staging yard (10.6.3).`);
+      return {
+        id: b.id, name: b.name, role: b.role || 'any', color: b.color, start: pos, pos, freeAt: 0, holding: null, holdSince: 0,
+        mask, work: this.grid.maskAnd(mask, this.workZones), stage: this.grid.maskAnd(mask, this.stageZones),
+        gear: [], hardware: false, boltTime: this.T.boltTimeHand, tasks: 0,
+      };
     });
     this.builderById = new Map(this.builders.map((b) => [b.id, b]));
 
     // Tool instances
     this.toolInst = [];
+    const toolAreas = zones.filter((z) => z.type === 'tools');
     for (const tool of project.tools) {
+      if (toolAreas.length && !toolAreas.some((z) => inZone(z, tool.start))) this.warn(`${tool.name} doesn't start in a tools area of a staging yard (10.6.1).`);
       for (let i = 0; i < Math.max(0, tool.count | 0); i++) {
         this.toolInst.push({ key: tool.id + '#' + i, tool, pos: { ...tool.start }, carriedBy: null, placedAt: null });
       }
     }
+    this.checkLayout(spots);
+  }
+
+  // Static checks of the design against the site and rules.
+  checkLayout(spots) {
+    const zones = this.site.zones;
+    const memberAreas = zones.filter((z) => z.type === 'members');
+    if (memberAreas.length) {
+      const out = this.model.members.filter((m) => !memberAreas.some((z) => inZone(z, spots.get(m.id))));
+      if (out.length) this.warn(`${out.length} member${out.length === 1 ? '' : 's'} start outside the members area (10.6.1.4): ${out.slice(0, 4).map((m) => m.name).join(', ')}${out.length > 4 ? ', …' : ''}.`);
+    }
+    const footings = zones.filter((z) => z.type === 'footing');
+    if (footings.length) {
+      for (const m of this.model.members.filter((x) => x.bearing)) {
+        const p = bridgeToSite(this.site, m.bearingPoint[0], m.bearingPoint[1]);
+        if (!footings.some((z) => inZone(z, p))) this.warn(`${m.name} is marked as resting on a footing, but it isn't over one on the site (9.3.1).`);
+      }
+    }
+    // 10.3.14: no part of the bridge in the transportation zone or a staging yard.
+    const banned = zones.filter((z) => z.type === 'transport' || ZONE_TYPES[z.type]?.stage);
+    const hits = new Set();
+    for (const m of this.model.members) {
+      for (const [x, y] of m.footprint) {
+        const p = bridgeToSite(this.site, x, y);
+        for (const z of banned) if (inZone(z, p)) hits.add(z.name);
+      }
+    }
+    if (hits.size) this.error(`Part of the bridge extends into ${[...hits].join(', ')} (10.3.14).`);
+    const loose = this.model.contacts.filter((c) => c.bolts === 0);
+    if (loose.length) this.warn(`Members touch without a bolt at ${loose.length} place${loose.length === 1 ? '' : 's'} (9.5.1: every place members touch needs a connection): ${loose.slice(0, 4).map((c) => jointLabel(this.model, c)).join('; ')}${loose.length > 4 ? '; …' : ''}.`);
+    const orphans = this.model.bolts.filter((b) => !b.jointId);
+    if (orphans.length) this.warn(`${orphans.length} bolt${orphans.length === 1 ? ' is' : 's are'} no longer on a place where two members touch (a member moved). They're shown in red in tab 1.`);
+    const big = this.model.members.filter((m) => !m.box.fits);
+    if (big.length) this.error(`${big.length} member${big.length === 1 ? ' is' : 's are'} bigger than the ${this.model.limits.len} × ${this.model.limits.depth} × ${this.model.limits.thick} in box (8.2.2.2).`);
   }
 
   // ---------- bookkeeping ----------
@@ -164,7 +221,7 @@ class Sim {
   go(b, to, kind, extra = {}) {
     const r = this.travel(b, b.pos, to, kind === 'carry');
     if (!r) {
-      this.error(`${b.name} can't find a path to (${Math.round(to.x)}, ${Math.round(to.y)}) without leaving their allowed zones.`);
+      this.error(`${b.name} can't find a path to (${Math.round(to.x)}, ${Math.round(to.y)}) without leaving their allowed zones or crossing the river.`);
       return false;
     }
     if (r.length > 0.01) {
@@ -193,14 +250,20 @@ class Sim {
     return bridgeToSite(this.site, n.x, n.y);
   }
 
-  // Where builder b should stand to reach one of the target points.
-  standFor(b, targets) {
+  // Where builder b should stand to reach one of the target points. `area`: 'walk' (anywhere they
+  // may go) or 'work' (where they may touch the bridge).
+  standFor(b, targets, area = 'walk') {
+    const mask = area === 'work' ? b.work : b.mask;
     let best = null;
     for (const p of targets) {
-      const s = this.grid.nearestStand(b.mask, p);
+      const s = this.grid.nearestStand(mask, p);
       if (!s) continue;
+      // Must also be reachable from where the builder is (same side of the river).
       const score = s.dist + 0.01 * dist2d(b.pos, s);
-      if (!best || score < best.score) best = { stand: { x: s.x, y: s.y }, reach: s.dist, target: p, score };
+      if (!best || score < best.score) {
+        if (!this.grid.path(b.mask, b.pos, s)) continue;
+        best = { stand: { x: s.x, y: s.y }, reach: s.dist, target: p, score };
+      }
     }
     return best;
   }
@@ -209,39 +272,40 @@ class Sim {
     const pts = [];
     for (const id of u.memberIds) {
       const m = this.model.memberById.get(id);
-      for (const [a, b] of m.segments) {
-        const pa = this.nodePos.get(a), pb = this.nodePos.get(b);
-        const l = Math.hypot(pb.x - pa.x, pb.y - pa.y, pb.z - pa.z);
-        const k = Math.max(1, Math.ceil(l / 6));
-        for (let i = 0; i <= k; i++) {
-          const t = i / k;
-          pts.push(bridgeToSite(this.site, pa.x + (pb.x - pa.x) * t, pa.y + (pb.y - pa.y) * t));
-        }
+      const k = Math.max(1, Math.ceil(m.len / 6));
+      for (let i = 0; i <= k; i++) {
+        const p = memberPoint(m, i / k);
+        pts.push(bridgeToSite(this.site, p[0], p[1]));
       }
     }
     return pts;
   }
 
-  // Choose the builder who can reach `dest(b)` soonest. Returns {b, plan} or null.
-  pick(roles, explicit, dest, readyTime, exclude = null, what = 'this task') {
-    let pool;
+  available(b, exclude) {
+    return !b.holding && b.id !== exclude && Number.isFinite(b.freeAt);
+  }
+
+  pool(roles, explicit, what, exclude = null) {
     if (explicit && explicit !== 'auto' && explicit !== 'carrier') {
       const b = this.builderById.get(explicit);
       if (!b) this.warn(`A step is assigned to a builder who no longer exists; picking automatically.`);
       else if (b.holding) this.warn(`${b.name} is assigned to ${what} but is still holding ${this.units.get(b.holding).name}; picking someone else.`);
       else if (b.id === exclude) this.warn(`${b.name} can't do ${what} while holding the piece; picking someone else.`);
-      else pool = [b];
+      else return [b];
     }
-    if (!pool) pool = this.builders.filter((b) => roles.has(b.role));
+    return this.builders.filter((b) => roles.has(b.role));
+  }
+
+  // Choose the builder who can reach `dest(b)` soonest. Returns {b, d} or null.
+  pick(roles, explicit, dest, readyTime, exclude = null, what = 'this task') {
     let best = null;
-    for (const b of pool) {
-      if (b.holding || b.id === exclude || !Number.isFinite(b.freeAt)) continue;
+    for (const b of this.pool(roles, explicit, what, exclude)) {
+      if (!this.available(b, exclude)) continue;
       const d = dest(b);
       if (!d) continue;
       const r = this.travel(b, b.pos, d.to, false);
       if (!r) continue;
-      const extra = d.extra || 0;
-      const at = Math.max(b.freeAt + r.time + extra, readyTime);
+      const at = Math.max(b.freeAt + r.time + (d.extra || 0), readyTime);
       const score = at + b.tasks * 1e-3;
       if (!best || score < best.score) best = { b, score, d };
     }
@@ -252,7 +316,7 @@ class Sim {
     const holding = this.builders.filter((b) => b.holding).map((b) => `${b.name} (holding ${this.units.get(b.holding).name})`);
     let msg = `No builder can do "${what}".`;
     if (holding.length) msg += ' Busy holding unstable pieces: ' + holding.join(', ') + '. Add a support, change the order, or add builders.';
-    else msg += ' Check builder roles and allowed zones.';
+    else msg += ' Check builder roles, which side of the river they start on, and their allowed zones.';
     this.error(msg);
     this.aborted = true;
   }
@@ -290,7 +354,6 @@ class Sim {
     u.holder = null;
     b.holding = null;
     if (!Number.isFinite(b.freeAt)) {
-      // Pure holding: the builder was blocked until now.
       if (t - b.holdSince > 1e-6) this.segments.push({ builderId: b.id, kind: 'hold', t0: b.holdSince, t1: t, x: b.pos.x, y: b.pos.y, unitKey: u.key, label: 'Holding ' + u.name, step: rec ? rec.step : this.stepIndex });
       b.freeAt = t;
     }
@@ -317,16 +380,27 @@ class Sim {
 
   gearUp() {
     const taken = new Set();
+    const hwZones = this.site.zones.filter((z) => z.type === 'hardware');
     for (const b of this.builders) {
       const src = this.project.builders.find((x) => x.id === b.id);
       const items = [];
       for (const toolId of src.loadout || []) {
-        const inst = this.toolInst.find((ti) => ti.tool.id === toolId && !taken.has(ti.key));
-        if (!inst) { const tool = this.project.tools.find((t) => t.id === toolId); if (tool) this.warn(`Not enough ${tool.name}s: ${b.name} starts without one.`); continue; }
+        const insts = this.toolInst.filter((ti) => ti.tool.id === toolId && !taken.has(ti.key));
+        const inst = insts.find((ti) => this.grid.path(b.mask, b.pos, ti.pos) || this.grid.nearestStand(b.mask, ti.pos)?.dist < this.T.maxReach);
+        if (!inst) {
+          const tool = this.project.tools.find((t) => t.id === toolId);
+          if (tool) this.warn(insts.length ? `${b.name} can't reach a ${tool.name} from their side of the site.` : `Not enough ${tool.name}s: ${b.name} starts without one.`);
+          continue;
+        }
         taken.add(inst.key);
         items.push({ pos: inst.pos, inst });
       }
-      if (src.hardware) items.push({ pos: this.site.hardware, hardware: true });
+      if (src.hardware) {
+        const reachable = hwZones.map((z) => ({ x: z.x + z.w / 2, y: z.y + z.h / 2 })).filter((p) => this.standFor(b, [p]));
+        reachable.sort((p, q) => dist2d(b.pos, p) - dist2d(b.pos, q));
+        if (reachable.length) items.push({ pos: reachable[0], hardware: true });
+        else this.warn(`${b.name} has no nuts & bolts area they can reach.`);
+      }
       while (items.length) {
         items.sort((p, q) => dist2d(b.pos, p.pos) - dist2d(b.pos, q.pos));
         const it = items.shift();
@@ -341,20 +415,33 @@ class Sim {
     }
   }
 
+  // Where an assembly is put together: a staging yard (2027) or an assembly area.
+  assemblyZone(u) {
+    const zones = this.site.zones;
+    const chosen = zones.find((z) => z.id === u.assembly.areaZoneId);
+    if (this.rules.assemblyIn === 'assembly') return chosen && chosen.type === 'assembly' ? chosen : zones.find((z) => z.type === 'assembly');
+    if (chosen && chosen.type === 'staging') return chosen;
+    const first = this.tracks.get(u.memberIds[0])[0];
+    return zones.find((z) => z.type === 'staging' && inZone(z, first)) || zones.find((z) => z.type === 'staging');
+  }
+
   assemblySpot(zone, slot) {
+    // Lay assemblies out along the zone's middle, away from the edges.
     const cols = Math.max(1, Math.floor((zone.w - 10) / 50));
     const col = slot % cols, row = Math.floor(slot / cols);
-    return { x: Math.min(zone.x + zone.w - 5, zone.x + 30 + col * 50), y: Math.min(zone.y + zone.h - 5, zone.y + 15 + row * 30) };
+    return { x: Math.min(zone.x + zone.w - 5, zone.x + 30 + col * 50), y: Math.min(zone.y + zone.h - 5, zone.y + zone.h * 0.7 + row * 14) };
   }
 
   doBuild(step) {
     const u = this.units.get('a:' + step.assemblyId);
-    if (!u) { this.warn('A build step refers to an assembly that no longer exists; skipped.'); return; }
-    if (u.built) { this.warn(`${u.name} is built more than once in the plan; extra build step skipped.`); return; }
+    if (!u) { this.warn('An assemble step refers to an assembly that no longer exists; skipped.'); return; }
+    if (u.built) { this.warn(`${u.name} is assembled more than once in the plan; extra step skipped.`); return; }
     if (!u.memberIds.length) { this.warn(`${u.name} has no members.`); u.built = true; return; }
-    const zones = this.site.zones.filter((z) => z.type === 'assembly');
-    let zone = zones.find((z) => z.id === u.assembly.areaZoneId) || zones[0];
-    if (!zone) { this.error(`${u.name} needs a ground-assembly area, but the site has none.`); this.aborted = true; return; }
+    const max = this.rules.maxAssemblyMembers ?? Infinity;
+    if (u.memberIds.length > max) this.error(`${u.name} has ${u.memberIds.length} members; the rules allow at most ${max} (10.3.7).`);
+    if (u.memberIds.length < 2) this.warn(`${u.name} has only one member, so it isn't really an assembly.`);
+    const zone = this.assemblyZone(u);
+    if (!zone) { this.error(`${u.name} needs a ${this.rules.assemblyIn === 'assembly' ? 'ground-assembly area' : 'staging yard'} to be assembled in, but the site has none.`); this.aborted = true; return; }
     this.assemblySlots = (this.assemblySlots || 0) + 1;
     const spot = this.assemblySpot(zone, this.assemblySlots - 1);
 
@@ -366,7 +453,7 @@ class Sim {
       const drop = { x: spot.x, y: spot.y + (k - (u.memberIds.length - 1) / 2) * 4 };
       const choice = this.pick(FETCH_ROLES, 'auto', (b) => {
         const st = this.standFor(b, [from]);
-        return st && { to: st.stand };
+        return st && this.standFor(b, [drop]) && { to: st.stand };
       }, 0, null, `fetch ${m.name}`);
       if (!choice) { this.noBuilder(`fetch ${m.name} for ${u.name}`); return; }
       const b = choice.b;
@@ -375,7 +462,6 @@ class Sim {
       this.seg(b, 'pickup', b.freeAt, b.freeAt + this.T.pickupTime, { label: 'Pick up ' + m.name });
       this.track([id], b.freeAt, { kind: 'carried', builderId: b.id });
       const dst = this.standFor(b, [drop]);
-      if (!dst) { this.error(`${b.name} can't reach the assembly area ${zone.name}.`); this.aborted = true; return; }
       this.go(b, dst.stand, 'carry', { label: `Carry ${m.name} to ${zone.name}`, memberIds: [id] });
       this.seg(b, 'pickup', b.freeAt, b.freeAt + this.T.pickupTime, { label: 'Set down ' + m.name });
       this.track([id], b.freeAt, { kind: 'ground', x: drop.x, y: drop.y });
@@ -392,64 +478,63 @@ class Sim {
     const a = choice.b;
     a.tasks++;
     this.go(a, choice.d.to, 'walk', { label: 'To ' + zone.name });
-    const joined = [arrivals[0].id];
-    const memberNodes = (id) => this.model.memberById.get(id).nodeIds;
-    const boltsOn = (id, n) => this.model.bolts.filter((bb) => bb.memberId === id && bb.nodeId === n).length;
+    const joined = new Set([arrivals[0].id]);
     for (let i = 1; i < arrivals.length; i++) {
       const id = arrivals[i].id;
       this.waitUntil(a, arrivals[i].t);
-      const shared = memberNodes(id).filter((n) => joined.some((j) => memberNodes(j).includes(n)));
-      let bolts = 0;
-      for (const n of shared) {
-        bolts += boltsOn(id, n);
-        for (const j of joined) if (!u.fastened[n]) bolts += boltsOn(j, n);
-        u.fastened[n] = true;
-      }
-      if (!shared.length) this.warn(`${this.model.memberById.get(id).name} doesn't share a joint with the rest of ${u.name}.`);
-      const dur = this.T.assemblyJoinTime > 0 ? this.T.assemblyJoinTime : shared.length * this.T.alignTime + bolts * a.boltTime;
-      this.seg(a, 'assemble', a.freeAt, a.freeAt + dur, { label: `Join ${this.model.memberById.get(id).name} into ${u.name}`, unitKey: u.key });
-      joined.push(id);
+      const inner = (u.internal || []).filter((j) => (j.a === id && joined.has(j.b)) || (j.b === id && joined.has(j.a)));
+      const bolts = inner.reduce((s, j) => s + j.bolts, 0);
+      if (!inner.length) this.warn(`${this.model.memberById.get(id).name} doesn't touch the rest of ${u.name}.`);
+      const dur = this.T.assemblyJoinTime > 0 ? this.T.assemblyJoinTime : inner.length * this.T.alignTime + bolts * a.boltTime;
+      this.seg(a, 'assemble', a.freeAt, a.freeAt + dur, { label: `Bolt ${this.model.memberById.get(id).name} into ${u.name}`, unitKey: u.key });
+      joined.add(id);
     }
-    // Every internal joint is now bolted. Internal bolts hold the assembly together but don't
-    // attach it to anything else, so they don't count toward `attached`.
-    for (const n of u.nodeIds) {
-      const touching = u.memberIds.filter((id) => memberNodes(id).includes(n));
-      if (touching.length >= 2) u.fastened[n] = true;
-    }
+    for (const j of u.internal || []) u.fastened[j.id] = true;
     u.built = true;
     u.readyAt = a.freeAt;
     u.pos = spot;
     this.track(u.memberIds, a.freeAt, { kind: 'ground', x: spot.x, y: spot.y, assembled: true });
-    u.buildSpan = { start: arrivals[0].t, end: a.freeAt };
   }
 
-  jointsFor(u) {
-    const joints = [];
-    for (const n of u.nodeIds) {
-      const others = [...(this.present.get(n) || [])].filter((k) => k !== u.key).map((k) => this.units.get(k));
-      if (!others.length) continue;
-      const needs = [u, ...others].some((x) => (x.boltsAt[n] || 0) > 0 && !x.fastened[n]);
-      if (needs) joints.push({ n, others });
-    }
-    return joints;
-  }
-
-  // A unit's attachment strength at a joint is the number of its own bolts there (so "2 bolts at a
-  // member end" = moment connection). A unit with no bolts of its own at the joint is still pinned
-  // by the other members' bolts.
-  fastenJoint(u, joint) {
-    let bolts = 0;
-    const parties = [u, ...joint.others];
-    for (const x of parties) {
-      const c = x.boltsAt[joint.n] || 0;
-      if (c > 0 && !x.fastened[joint.n]) {
-        bolts += c;
-        x.fastened[joint.n] = true;
-        x.attached[joint.n] = (x.attached[joint.n] || 0) + c;
+  // Who carries a unit to the bridge, and how it gets to them: directly, or handed across from a
+  // builder on the other side (e.g. members start east of the river, most of the bridge is west).
+  planDelivery(u, step, targets) {
+    const carriers = this.pool(CARRY_ROLES, step.carrier, `carry ${u.name}`).filter((c) => this.available(c));
+    let best = null;
+    for (const c of carriers) {
+      const st = this.standFor(c, targets, 'work');
+      if (!st) continue;
+      const src = this.standFor(c, [u.pos]);
+      if (src && src.reach <= this.T.maxReach) {
+        const toSrc = this.travel(c, c.pos, src.stand, false);
+        const carry = this.travel(c, src.stand, st.stand, true);
+        if (toSrc && carry) {
+          const at = Math.max(c.freeAt + toSrc.time, u.readyAt) + this.T.pickupTime + carry.time;
+          if (!best || at < best.at) best = { at, c, st, src, relay: null };
+          continue;
+        }
+      }
+      // Hand-off from a runner who can reach the piece.
+      for (const r of this.builders) {
+        if (r === c || !this.available(r) || !FETCH_ROLES.has(r.role)) continue;
+        const rs = this.standFor(r, [u.pos]);
+        if (!rs || rs.reach > this.T.maxReach) continue;
+        const spots = this.grid.handoffs(this.grid.region(r.mask, r.pos), this.grid.region(c.mask, c.pos), this.T.passReach);
+        if (!spots.length) continue;
+        // Shortlist by straight-line distance, then time the best few properly.
+        const ranked = spots.map((h) => ({ h, est: dist2d(rs.stand, h.g) + dist2d(h.t, st.stand) + 0.5 * dist2d(c.pos, h.t) })).sort((p, q) => p.est - q.est).slice(0, 4);
+        for (const { h } of ranked) {
+          const rTo = this.travel(r, r.pos, rs.stand, false), rCarry = this.travel(r, rs.stand, h.g, true);
+          const cTo = this.travel(c, c.pos, h.t, false), cCarry = this.travel(c, h.t, st.stand, true);
+          if (!rTo || !rCarry || !cTo || !cCarry) continue;
+          const rAt = Math.max(r.freeAt + rTo.time, u.readyAt) + this.T.pickupTime + rCarry.time;
+          const hand = Math.max(rAt, c.freeAt + cTo.time) + this.T.pickupTime;
+          const at = hand + cCarry.time;
+          if (!best || at < best.at) best = { at, c, st, src: rs, relay: { r, h } };
+        }
       }
     }
-    if (bolts > 0) for (const x of parties) x.attached[joint.n] = Math.max(x.attached[joint.n] || 0, 1);
-    return bolts;
+    return best;
   }
 
   doInstall(step) {
@@ -459,36 +544,51 @@ class Sim {
     if (u.installed) { this.warn(`${u.name} is installed more than once in the plan; extra step skipped.`); return; }
     if (!u.memberIds.length) { this.warn(`${u.name} has no members; skipped.`); return; }
     if (!u.built) {
-      this.warn(`${u.name} is installed without a build step before it, so it is built right before installing. Add a build step earlier to overlap the work.`);
+      this.warn(`${u.name} is installed without an assemble step before it, so it is assembled right before installing. Add an assemble step earlier to overlap the work.`);
       this.doBuild({ assemblyId: u.id, builder: 'auto' });
       if (this.aborted || !u.built) return;
     }
     const targets = this.unitTargets(u);
-    const choice = this.pick(CARRY_ROLES, step.carrier, (b) => {
-      const st = this.standFor(b, [u.pos]);
-      return st && { to: st.stand };
-    }, u.readyAt, null, `carry ${u.name}`);
-    if (!choice) { this.noBuilder(`carry ${u.name}`); return; }
-    const c = choice.b;
+    const plan = this.planDelivery(u, step, targets);
+    if (!plan) { this.noBuilder(`carry ${u.name} to the bridge`); return; }
+    const { c, st, src, relay } = plan;
     c.tasks++;
-    this.go(c, choice.d.to, 'walk', { label: 'To ' + u.name });
-    this.waitUntil(c, u.readyAt, 'wait', { label: `Wait for ${u.name} to be ready` });
-    this.seg(c, 'pickup', c.freeAt, c.freeAt + this.T.pickupTime, { label: 'Pick up ' + u.name });
-    this.track(u.memberIds, c.freeAt, { kind: 'carried', builderId: c.id });
-    const st = this.standFor(c, targets);
-    if (!st) { this.error(`${c.name} can't reach anywhere near ${u.name}'s spot on the bridge.`); this.aborted = true; return; }
+    if (!relay) {
+      this.go(c, src.stand, 'walk', { label: 'To ' + u.name });
+      this.waitUntil(c, u.readyAt, 'wait', { label: `Wait for ${u.name} to be ready` });
+      this.seg(c, 'pickup', c.freeAt, c.freeAt + this.T.pickupTime, { label: 'Pick up ' + u.name });
+      this.track(u.memberIds, c.freeAt, { kind: 'carried', builderId: c.id });
+    } else {
+      const { r, h } = relay;
+      r.tasks++;
+      this.go(r, src.stand, 'walk', { label: 'To ' + u.name });
+      this.waitUntil(r, u.readyAt, 'wait', { label: `Wait for ${u.name} to be ready` });
+      this.seg(r, 'pickup', r.freeAt, r.freeAt + this.T.pickupTime, { label: 'Pick up ' + u.name });
+      this.track(u.memberIds, r.freeAt, { kind: 'carried', builderId: r.id });
+      this.go(r, h.g, 'carry', { label: `Carry ${u.name} to hand to ${c.name}`, memberIds: u.memberIds });
+      this.go(c, h.t, 'walk', { label: `Meet ${r.name} for ${u.name}` });
+      const t0 = Math.max(r.freeAt, c.freeAt);
+      this.waitUntil(r, t0, 'wait', { label: `Wait for ${c.name}` });
+      this.waitUntil(c, t0, 'wait', { label: `Wait for ${r.name}` });
+      this.seg(r, 'pickup', t0, t0 + this.T.pickupTime, { label: `Hand ${u.name} to ${c.name}` });
+      this.seg(c, 'pickup', t0, t0 + this.T.pickupTime, { label: `Take ${u.name} from ${r.name}` });
+      this.track(u.memberIds, c.freeAt, { kind: 'carried', builderId: c.id });
+      u.handedOff = true;
+    }
     if (st.reach > this.T.maxReach) this.warn(`${c.name} has to reach ${Math.round(st.reach)} in to place ${u.name} (max reach ${this.T.maxReach} in).`);
     if (!this.go(c, st.stand, 'carry', { label: 'Carry ' + u.name, memberIds: u.memberIds })) { this.aborted = true; return; }
     this.waitUntil(c, this.lastPlace, 'hold', { label: `Holding ${u.name} until the previous piece is placed`, unitKey: u.key });
     const placeAt = c.freeAt;
     this.lastPlace = placeAt;
 
+    // 10.3.11: a piece that touches nothing installed starts a new constructed portion, which
+    // must start on a footing.
+    const touching = u.joints.some((j) => this.unitOfMember.get(u.memberIds.includes(j.a) ? j.b : j.a)?.installed);
+    const onFooting = u.memberIds.some((m) => this.bearings.has('brg:' + m));
+    if (!touching && !onFooting) this.error(`${u.name} doesn't touch any installed piece or a footing, so it can't start a constructed portion (10.3.11).`);
+
     u.installed = true;
     u.installedAt = placeAt;
-    for (const n of u.nodeIds) {
-      if (!this.present.has(n)) this.present.set(n, new Set());
-      this.present.get(n).add(u.key);
-    }
     this.track(u.memberIds, placeAt, { kind: 'bridge' });
     this.status(u, placeAt, 'held');
     u.holder = c.id;
@@ -501,53 +601,51 @@ class Sim {
 
     const joints = this.jointsFor(u);
     if (!joints.length && !u.stable) {
-      this.warn(`${u.name} has no bolted joint with anything installed before it, so someone has to hold it until a later piece connects to it.`);
+      this.warn(`${u.name} has no bolted connection to anything installed before it, so someone has to hold it until a later piece connects to it.`);
     }
     if (joints.length) {
       let solo = step.fastener === 'carrier';
       let f = null;
       if (!solo) {
-        const first = this.nodeSite(joints[0].n);
+        const first = this.nodeSite(joints[0].id);
         const fc = this.pick(FASTEN_ROLES, step.fastener, (b) => {
-          const s = this.standFor(b, [first]);
+          const s = this.standFor(b, [first], 'work');
           return s && { to: s.stand };
         }, placeAt, c.id, `fasten ${u.name}`);
         if (fc) { f = fc.b; f.tasks++; } else solo = true;
-        if (solo) this.warn(`Nobody else can fasten ${u.name}, so ${c.name} fastens it while holding it (slower).`);
+        if (solo) this.warn(`Nobody else can reach to fasten ${u.name}, so ${c.name} fastens it while holding it (slower).`);
       }
       if (solo) {
         f = c;
         rec.solo = true;
-        c.freeAt = placeAt; // the carrier works while holding
+        c.freeAt = placeAt;
       }
       const mult = solo ? this.T.soloMultiplier : 1;
-      if (!f.hardware) this.warn(`${f.name} fastens bolts but isn't carrying nuts & bolts (turn on "Carries nuts & bolts" in Crew).`);
-      // Visit joints nearest-first.
+      if (!f.hardware) this.warn(`${f.name} fastens bolts but isn't carrying nuts & bolts (turn on "Nuts & bolts" in Crew).`);
       const todo = joints.slice();
       while (todo.length) {
-        todo.sort((a, b) => dist2d(f.pos, this.nodeSite(a.n)) - dist2d(f.pos, this.nodeSite(b.n)));
+        todo.sort((a, b) => dist2d(f.pos, this.nodeSite(a.id)) - dist2d(f.pos, this.nodeSite(b.id)));
         const j = todo.shift();
-        if (!this.jointsFor(u).some((x) => x.n === j.n)) continue;
-        const where = this.nodeSite(j.n);
+        const where = this.nodeSite(j.id);
+        const label = jointLabel(this.model, j);
         if (!solo) {
-          const s = this.standFor(f, [where]);
-          if (!s) { this.error(`${f.name} can't reach the joint at ${nodeLabel(this.model, j.n)}.`); continue; }
-          if (s.reach > this.T.maxReach) this.warn(`${f.name} has to reach ${Math.round(s.reach)} in to fasten at ${nodeLabel(this.model, j.n)}.`);
-          this.go(f, s.stand, 'walk', { label: 'To joint' });
+          const s = this.standFor(f, [where], 'work');
+          if (!s) { this.error(`${f.name} can't reach the connection ${label} from a construction zone or riverbank.`); continue; }
+          if (s.reach > this.T.maxReach) this.warn(`${f.name} has to reach ${Math.round(s.reach)} in to fasten ${label}.`);
+          this.go(f, s.stand, 'walk', { label: 'To ' + label });
         } else if (dist2d(c.pos, where) > this.T.maxReach * 1.5) {
-          this.warn(`${c.name} fastens ${u.name} alone but the joint at ${nodeLabel(this.model, j.n)} is ${Math.round(dist2d(c.pos, where))} in away.`);
+          this.warn(`${c.name} fastens ${u.name} alone but the connection ${label} is ${Math.round(dist2d(c.pos, where))} in away.`);
         }
         this.waitUntil(f, placeAt, 'wait', { label: `Wait for ${u.name}` });
         if (rec.alignStart == null) rec.alignStart = f.freeAt;
-        this.seg(f, 'align', f.freeAt, f.freeAt + this.T.alignTime * mult, { label: 'Align ' + u.name, unitKey: u.key, nodeId: j.n, holding: solo });
-        const bolts = this.fastenJoint(u, j);
-        this.seg(f, 'fasten', f.freeAt, f.freeAt + bolts * f.boltTime * mult, { label: `Fasten ${bolts} bolt${bolts === 1 ? '' : 's'} on ${u.name}`, unitKey: u.key, nodeId: j.n, holding: solo, bolts });
+        this.seg(f, 'align', f.freeAt, f.freeAt + this.T.alignTime * mult, { label: 'Align ' + label, unitKey: u.key, nodeId: j.id, holding: solo });
+        const bolts = this.fastenJoint(j);
+        this.seg(f, 'fasten', f.freeAt, f.freeAt + bolts * f.boltTime * mult, { label: `Fasten ${bolts} bolt${bolts === 1 ? '' : 's'}: ${label}`, unitKey: u.key, nodeId: j.id, holding: solo, bolts });
         this.updateStability(f.freeAt);
       }
       rec.workEnd = f.freeAt;
       this.lastWorkEnd = Math.max(this.lastWorkEnd, f.freeAt);
       if (solo && u.holder === c.id) {
-        // Still not stable after fastening: keep holding.
         c.holdSince = c.freeAt;
         c.freeAt = Infinity;
       }
@@ -556,16 +654,36 @@ class Sim {
     }
   }
 
+  // Connections between this unit and units already installed that still need bolting.
+  jointsFor(u) {
+    return u.joints.filter((j) => {
+      if (j.bolts <= 0 || u.fastened[j.id]) return false;
+      const other = this.unitOfMember.get(u.memberIds.includes(j.a) ? j.b : j.a);
+      return other && other.installed && other !== u;
+    });
+  }
+
+  fastenJoint(j) {
+    const ua = this.unitOfMember.get(j.a), ub = this.unitOfMember.get(j.b);
+    for (const x of [ua, ub]) {
+      x.fastened[j.id] = true;
+      x.attached[j.id] = j.bolts;
+    }
+    return j.bolts;
+  }
+
   doSupport(step) {
     const tool = this.project.tools.find((t) => t.id === step.toolId);
     if (!tool) { this.warn('A support step uses a tool that no longer exists; skipped.'); return; }
-    if (!this.nodePos.has(step.nodeId)) { this.warn('A support step refers to a node that no longer exists; skipped.'); return; }
-    const where = this.nodeSite(step.nodeId);
+    const m = this.model.memberById.get(step.memberId);
+    if (!m) { this.warn('A support step refers to a member that no longer exists; skipped.'); return; }
+    const node = 'sup:' + m.id;
+    const where = this.nodeSite(node);
     const label = stepLabel(step, this.model, this.plan, this.project);
     if (step.action === 'remove') {
-      const inst = this.toolInst.find((ti) => ti.tool.id === tool.id && ti.placedAt === step.nodeId);
-      if (!inst) { this.warn(`"${label}": there is no ${tool.name} at that node to remove; skipped.`); return; }
-      const ch = this.pick(SUPPORT_ROLES, step.builder, (b) => { const s = this.standFor(b, [where]); return s && { to: s.stand }; }, this.lastWorkEnd, null, label);
+      const inst = this.toolInst.find((ti) => ti.tool.id === tool.id && ti.placedAt === node);
+      if (!inst) { this.warn(`"${label}": there is no ${tool.name} there to remove; skipped.`); return; }
+      const ch = this.pick(SUPPORT_ROLES, step.builder, (b) => { const s = this.standFor(b, [where], 'work'); return s && { to: s.stand }; }, this.lastWorkEnd, null, label);
       if (!ch) { this.noBuilder(label); return; }
       const b = ch.b;
       b.tasks++;
@@ -575,28 +693,29 @@ class Sim {
       inst.placedAt = null;
       inst.carriedBy = b.id;
       b.gear.push(inst);
-      this.supported.set(step.nodeId, (this.supported.get(step.nodeId) || 1) - 1);
-      this.supportEvents.push({ t: b.freeAt, key: inst.key, nodeId: step.nodeId, action: 'remove', name: tool.name });
+      this.supported.set(node, (this.supported.get(node) || 1) - 1);
+      this.supportEvents.push({ t: b.freeAt, key: inst.key, nodeId: node, action: 'remove', name: tool.name });
       this.updateStability(b.freeAt);
       return;
     }
+    // 10.4.2: a tool touching the river is an accident.
+    if (this.site.zones.some((z) => z.type === 'nogo' && inZone(z, where))) this.warn(`"${label}": the support would stand in the river or a no-go zone, which is an accident penalty (10.4.2).`);
     const free = this.toolInst.filter((ti) => ti.tool.id === tool.id && !ti.placedAt);
     if (!free.length) { this.error(`"${label}": every ${tool.name} is already in use. Remove one first or add more in Tools.`); return; }
     const ch = this.pick(SUPPORT_ROLES, step.builder, (b) => {
-      const s = this.standFor(b, [where]);
+      const s = this.standFor(b, [where], 'work');
       if (!s) return null;
       const mine = free.find((ti) => ti.carriedBy === b.id);
       if (mine) return { to: s.stand, inst: mine };
-      // Fetch one that's lying around (or from someone who's carrying it).
       let best = null;
       for (const ti of free) {
         const from = ti.carriedBy ? this.builderById.get(ti.carriedBy).pos : ti.pos;
         const toTool = this.travel(b, b.pos, from, false);
         const toNode = this.travel(b, from, s.stand, false);
         if (!toTool || !toNode) continue;
-        if (!best || toTool.time + toNode.time < best.cost) best = { cost: toTool.time + toNode.time, ti, from };
+        if (!best || toTool.time + toNode.time < best.cost) best = { cost: toTool.time + toNode.time, ti, from, toNode: toNode.time };
       }
-      return best && { to: best.from, extra: best.cost - (this.travel(b, b.pos, best.from, false)?.time || 0), inst: best.ti, fetchFrom: best.from, stand: s.stand };
+      return best && { to: best.from, extra: best.toNode, inst: best.ti, fetchFrom: best.from, stand: s.stand };
     }, 0, null, label);
     if (!ch) { this.noBuilder(label); return; }
     const b = ch.b;
@@ -608,24 +727,34 @@ class Sim {
       const prev = inst.carriedBy && this.builderById.get(inst.carriedBy);
       if (prev) prev.gear = prev.gear.filter((g) => g !== inst);
       inst.carriedBy = b.id;
-      this.go(b, ch.d.stand, 'walk', { label: 'To ' + nodeLabel(this.model, step.nodeId) });
+      this.go(b, ch.d.stand, 'walk', { label: 'To ' + m.name });
     } else {
-      this.go(b, ch.d.to, 'walk', { label: 'To ' + nodeLabel(this.model, step.nodeId) });
+      this.go(b, ch.d.to, 'walk', { label: 'To ' + m.name });
     }
     this.seg(b, 'support', b.freeAt, b.freeAt + (tool.placeTime || 0), { label });
     b.gear = b.gear.filter((g) => g !== inst);
     inst.carriedBy = null;
-    inst.placedAt = step.nodeId;
-    this.supported.set(step.nodeId, (this.supported.get(step.nodeId) || 0) + 1);
-    this.supportEvents.push({ t: b.freeAt, key: inst.key, nodeId: step.nodeId, action: 'place', name: tool.name });
+    inst.placedAt = node;
+    this.supported.set(node, (this.supported.get(node) || 0) + 1);
+    this.supportEvents.push({ t: b.freeAt, key: inst.key, nodeId: node, action: 'place', name: tool.name });
     this.updateStability(b.freeAt);
   }
 
   finish() {
+    // 10.9.1: everyone ends in a staging yard.
+    if (!this.aborted && this.rules.returnToStaging !== false && this.stageZones.length) {
+      for (const b of this.builders) {
+        if (b.holding || !Number.isFinite(b.freeAt)) continue;
+        if (this.grid.canStand(b.stage, b.pos)) continue;
+        const s = this.grid.nearestStand(b.stage, b.pos);
+        if (!s || !this.grid.path(b.mask, b.pos, s)) { this.warn(`${b.name} can't get back to a staging yard at the finish.`); continue; }
+        this.stepIndex = null;
+        this.go(b, { x: s.x, y: s.y }, 'walk', { label: 'Return to staging yard' });
+      }
+    }
     const finite = this.segments.filter((s) => Number.isFinite(s.t1));
     let end = finite.length ? Math.max(...finite.map((s) => s.t1)) : 0;
     for (const u of this.units.values()) if (u.installed && u.stableAt == null && u.holder) end = Math.max(end, u.installedAt);
-    // Close any holds that never ended so they show up on the chart.
     for (const b of this.builders) {
       if (b.holding) {
         const u = this.units.get(b.holding);
@@ -638,27 +767,35 @@ class Sim {
     if (!this.aborted) {
       const missing = [...this.units.values()].filter((u) => !u.installed);
       if (missing.length) this.warn(`${missing.length} piece${missing.length === 1 ? ' is' : 's are'} not in the sequence yet: ${missing.slice(0, 6).map((u) => u.name).join(', ')}${missing.length > 6 ? ', …' : ''}.`);
-      const loose = [];
-      for (const u of this.units.values()) {
-        if (!u.installed) continue;
-        for (const [n, c] of Object.entries(u.boltsAt)) if (c > 0 && !u.fastened[n]) loose.push(`${u.name} at ${nodeLabel(this.model, n)}`);
-      }
-      if (loose.length) this.warn(`Bolts never fastened (nothing else connects there): ${loose.slice(0, 5).join('; ')}${loose.length > 5 ? '; …' : ''}.`);
       const left = this.toolInst.filter((ti) => ti.placedAt);
-      if (left.length) this.warn(`Supports still under the bridge at the end: ${left.map((ti) => ti.tool.name + ' at ' + nodeLabel(this.model, ti.placedAt)).join('; ')}.`);
+      if (left.length) this.error(`Supports still under the bridge at the finish; tools must be back in the staging yard or with a builder (10.9.1): ${left.map((ti) => ti.tool.name).join(', ')}.`);
+      const limit = (this.rules.timeLimitMin || 0) * 60, halt = (this.rules.haltMin || 0) * 60;
+      if (halt && end > halt) this.error(`Construction takes ${fmt(end)}, past the ${this.rules.haltMin}-minute limit when judges halt construction (10.8.2).`);
+      else if (limit && end > limit) this.warn(`Construction takes ${fmt(end)}, over ${this.rules.timeLimitMin} minutes, which is scored as 180 minutes (10.8.1).`);
     }
     this.endTime = end;
+  }
+
+  constructionCost(end) {
+    const r = this.rules;
+    if (!r.costPerBuilderMin) return null;
+    const n = this.builders.length;
+    const gamma = n >= (r.crewFactorMinBuilders ?? Infinity) ? r.crewFactor ?? 1 : 1;
+    const minutes = r.timeLimitMin && end > r.timeLimitMin * 60 ? 180 : end / 60;
+    return minutes * n * r.costPerBuilderMin * gamma;
   }
 
   result() {
     const busy = new Map();
     for (const s of this.segments) if (s.kind !== 'wait') busy.set(s.builderId, (busy.get(s.builderId) || 0) + Math.min(s.t1, this.endTime ?? s.t1) - s.t0);
+    const endTime = this.endTime ?? 0;
     return {
-      endTime: this.endTime ?? 0,
+      endTime,
+      cost: this.constructionCost(endTime),
       segments: this.segments.filter((s) => Number.isFinite(s.t1)),
       holds: this.holds.map((h) => ({
         ...h,
-        duration: (h.end ?? this.endTime) - h.start,
+        duration: (h.end ?? endTime) - h.start,
         waitForFastener: h.alignStart != null ? h.alignStart - h.start : null,
         working: h.alignStart != null && h.workEnd != null ? Math.min(h.workEnd, h.end ?? h.workEnd) - h.alignStart : null,
       })),
@@ -669,9 +806,11 @@ class Sim {
       unitStatus: this.unitStatus,
       supportEvents: this.supportEvents,
       stepTimes: this.stepTimes,
+      handoffs: [...this.units.values()].filter((u) => u.handedOff).length,
       builders: this.builders.map((b) => ({ id: b.id, name: b.name, color: b.color, start: b.start, busy: busy.get(b.id) || 0 })),
       units: [...this.units.values()].map((u) => ({ key: u.key, name: u.name, type: u.type, memberIds: u.memberIds, installedAt: u.installedAt ?? null, stableAt: u.stableAt ?? null })),
       unitOfMember: new Map([...this.unitOfMember].map(([m, u]) => [m, u.key])),
+      nodePos: this.nodePos,
       model: this.model,
     };
   }
@@ -681,4 +820,9 @@ export function fmt(t) {
   if (!Number.isFinite(t)) return '–';
   const m = Math.floor(t / 60), s = t - m * 60;
   return `${m}:${s < 10 ? '0' : ''}${s.toFixed(1)}`;
+}
+
+export function fmtCost(c) {
+  if (c == null) return '–';
+  return '$' + Math.round(c).toLocaleString('en-US');
 }

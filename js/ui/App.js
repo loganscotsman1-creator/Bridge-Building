@@ -5,7 +5,7 @@ import { emptyProject, normalizeProject, activePlan } from '../model/schema.js';
 import { createExampleProject } from '../model/example.js';
 import { buildModel } from '../model/geometry.js';
 import { downloadJSON, onAutosaveStatus, pickFile, readJSONFile, safeFilename } from '../model/storage.js';
-import { simulate, fmt } from '../sim/simulate.js';
+import { simulate, fmt, fmtCost } from '../sim/simulate.js';
 import { isTyping } from './common.js';
 import { DesignTab } from './DesignTab.js';
 import { SiteTab } from './SiteTab.js';
@@ -81,7 +81,7 @@ export function App() {
       </div>
       <div class="status">
         ${!saveOk && html`<span class="bad" title="Your browser's storage is full (usually big images). Use Save file to keep your work.">⚠ Autosave failed, use Save file</span>`}
-        ${sim && html`<span class=${sim.errors.length ? 'bad' : 'ok'}>${sim.aborted ? 'Plan incomplete' : 'Build time ' + fmt(sim.endTime)}</span>`}
+        ${sim && html`<span class=${sim.errors.length ? 'bad' : 'ok'}>${sim.aborted ? 'Plan incomplete' : 'Build time ' + fmt(sim.endTime) + (sim.cost != null ? ' · ' + fmtCost(sim.cost) : '')}</span>`}
       </div>
     </header>
     <nav class="tabs" data-tour="tabs">

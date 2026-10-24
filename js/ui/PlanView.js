@@ -4,7 +4,7 @@ import { html, useMemo, useRef } from '../lib/preact.js';
 import { updateProject } from '../model/store.js';
 import { uid } from '../model/ids.js';
 import { ZONE_TYPES } from '../model/schema.js';
-import { bridgeToSite, pointSegment } from '../model/geometry.js';
+import { bridgeToSite, pointInPoly, pointSegment } from '../model/geometry.js';
 import { useCamera, gridLines } from './camera.js';
 
 const STATUS_COLORS = { held: '#f97316', working: '#eab308', stable: '#475569', unstable: '#dc2626' };
@@ -24,15 +24,13 @@ export function PlanView({ project, model, spots, state = null, sel, setSel, edi
     const list = [];
     const builders = state ? state.builders.map((b) => ({ id: b.id, x: b.x, y: b.y })) : project.builders.map((b) => ({ id: b.id, x: b.start.x, y: b.start.y }));
     for (const b of builders) list.push({ type: 'builder', id: b.id, x: b.x, y: b.y, r: Math.max(10, 9 * k) });
-    if (!state) {
-      for (const t of project.tools) list.push({ type: 'tool', id: t.id, x: t.start.x, y: t.start.y, r: 10 });
-      list.push({ type: 'hardware', id: 'hw', x: site.hardware.x, y: site.hardware.y, r: 10 });
-    }
+    if (!state) for (const t of project.tools) list.push({ type: 'tool', id: t.id, x: t.start.x, y: t.start.y, r: 10 });
     return list;
   };
+  const sitePoly = (m) => m.footprint.map(([x, y]) => bridgeToSite(site, x, y));
 
   const onPointerDown = (e) => {
-    e.currentTarget.setPointerCapture(e.pointerId);
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* synthetic or finished pointer */ }
     const { sx, sy } = eventPos(e);
     const w = toWorld(sx, sy);
     const wp = { x: w.u, y: w.v };
@@ -56,7 +54,7 @@ export function PlanView({ project, model, spots, state = null, sel, setSel, edi
     }
     const h = hits().find((h) => Math.hypot(S(h).x - sx, S(h).y - sy) < h.r);
     if (h) {
-      const orig = h.type === 'builder' ? project.builders.find((b) => b.id === h.id).start : h.type === 'tool' ? project.tools.find((t) => t.id === h.id).start : site.hardware;
+      const orig = h.type === 'builder' ? project.builders.find((b) => b.id === h.id).start : project.tools.find((t) => t.id === h.id).start;
       start(h.type, h.id, { ...orig });
       return;
     }
@@ -64,17 +62,13 @@ export function PlanView({ project, model, spots, state = null, sel, setSel, edi
     for (const m of model.members) {
       const s = spots.get(m.id);
       if (!s) continue;
-      const half = Math.min(m.length, 42) / 2;
+      const half = m.len / 2;
       const r = pointSegment({ x: sx, y: sy }, S({ x: s.x - half, y: s.y }), S({ x: s.x + half, y: s.y }));
-      if (r.d < 5) { start('piece', m.id, { x: s.x, y: s.y }); return; }
+      if (r.d < Math.max(4, (m.depth * k) / 2)) { start('piece', m.id, { x: s.x, y: s.y }); return; }
     }
     // Bridge footprint
     for (const m of model.members) {
-      for (const [a, b] of m.segments) {
-        const na = model.nodes.get(a), nb = model.nodes.get(b);
-        const r = pointSegment({ x: sx, y: sy }, S(bridgeToSite(site, na.x, na.y)), S(bridgeToSite(site, nb.x, nb.y)));
-        if (r.d < 6) { start('bridge', 'bridge', { ...site.bridge }); return; }
-      }
+      if (pointInPoly([wp.x, wp.y], sitePoly(m).map((p) => [p.x, p.y]), 4 / k)) { start('bridge', 'bridge', { ...site.bridge }); return; }
     }
     // Zones (smallest first so nested zones can be grabbed)
     const zs = site.zones.filter((z) => wp.x >= z.x && wp.x <= z.x + z.w && wp.y >= z.y && wp.y <= z.y + z.h).sort((a, b) => a.w * a.h - b.w * b.h);
@@ -101,7 +95,6 @@ export function PlanView({ project, model, spots, state = null, sel, setSel, edi
       } else if (d.type === 'bridge') { s.bridge.x = d.orig.x + dx; s.bridge.y = d.orig.y + dy; }
       else if (d.type === 'builder') { const b = p.builders.find((x) => x.id === d.id); b.start = { x: d.orig.x + dx, y: d.orig.y + dy }; }
       else if (d.type === 'tool') { const t = p.tools.find((x) => x.id === d.id); t.start = { x: d.orig.x + dx, y: d.orig.y + dy }; }
-      else if (d.type === 'hardware') s.hardware = { x: d.orig.x + dx, y: d.orig.y + dy };
       else if (d.type === 'piece') s.staging[d.id] = { x: d.orig.x + dx, y: d.orig.y + dy };
     }, { key: d.key });
   };
@@ -115,14 +108,21 @@ export function PlanView({ project, model, spots, state = null, sel, setSel, edi
   for (const l of gridLines(cam, { minor: 12, major: 60 })) {
     els.push(html`<line ...${l} stroke=${l.major ? '#e2e8f0' : '#f1f5f9'} />`);
   }
-  for (const z of site.zones) {
+  // Big zones first so the smaller areas inside them (footings, members area…) draw on top.
+  const zonesSorted = [...site.zones].sort((a, b) => b.w * b.h - a.w * a.h);
+  for (const z of zonesSorted) {
     const a = S({ x: z.x, y: z.y }), b = S({ x: z.x + z.w, y: z.y + z.h });
-    const color = (ZONE_TYPES[z.type] || ZONE_TYPES.walkway).color;
+    const type = ZONE_TYPES[z.type] || ZONE_TYPES.walkway;
+    const color = type.color;
     const selZ = isSel('zone', z.id);
+    const w = b.x - a.x, h = b.y - a.y;
+    const fs = type.sub ? 10 : 12;
+    const fits = w > z.name.length * fs * 0.55 + 8 && h > fs + 6;
     els.push(html`<g key=${'z' + z.id}>
-      <rect x=${a.x} y=${a.y} width=${b.x - a.x} height=${b.y - a.y} fill=${color} fill-opacity=${z.type === 'nogo' ? 0.16 : 0.08}
-        stroke=${color} stroke-width=${selZ ? 3 : 1.5} stroke-dasharray=${z.type === 'nogo' ? '6 4' : null} />
-      <text x=${a.x + 5} y=${a.y + 14} font-size="12" fill=${color} font-weight="600">${z.name}</text>
+      <rect x=${a.x} y=${a.y} width=${w} height=${h} fill=${color} fill-opacity=${z.type === 'nogo' ? 0.18 : type.sub ? 0.12 : 0.06}
+        stroke=${color} stroke-width=${selZ ? 3 : type.sub ? 1 : 1.5} stroke-dasharray=${z.type === 'nogo' ? '6 4' : type.sub ? '3 2' : null} />
+      ${fits && html`<text x=${a.x + 4} y=${a.y + fs + 2} font-size=${fs} fill=${color} font-weight="600">${z.name}</text>`}
+      <title>${z.name} · ${type.label} · ${Math.round(z.w)}×${Math.round(z.h)} in</title>
       ${selZ && editable && [[a.x, a.y], [b.x, a.y], [a.x, b.y], [b.x, b.y]].map(([x, y], i) => html`<rect key=${i} x=${x - 5} y=${y - 5} width="10" height="10" fill="#fff" stroke=${color} stroke-width="2" />`)}
     </g>`);
   }
@@ -132,23 +132,20 @@ export function PlanView({ project, model, spots, state = null, sel, setSel, edi
     const ms = state && state.members.get(m.id);
     const onBridge = !state || (ms && ms.loc === 'bridge');
     const color = state ? (onBridge ? STATUS_COLORS[ms.status] || '#475569' : '#cbd5e1') : '#64748b';
-    for (const [a, b] of m.segments) {
-      const na = model.nodes.get(a), nb = model.nodes.get(b);
-      const A = S(bridgeToSite(site, na.x, na.y)), B = S(bridgeToSite(site, nb.x, nb.y));
-      els.push(html`<line x1=${A.x} y1=${A.y} x2=${B.x} y2=${B.y} stroke=${color} stroke-width=${Math.max(1.5, m.tube.w * k)}
-        stroke-dasharray=${onBridge ? null : '3 3'} opacity=${onBridge ? 0.95 : 0.6} stroke-linecap="round" />`);
-    }
+    const poly = sitePoly(m).map((p) => { const s = S(p); return s.x + ',' + s.y; }).join(' ');
+    els.push(html`<polygon points=${poly} fill=${color} fill-opacity=${onBridge ? 0.55 : 0.15} stroke=${color}
+      stroke-dasharray=${onBridge ? null : '3 3'} stroke-width="1"><title>${m.name}</title></polygon>`);
   }
-  for (const n of model.nodes.values()) {
-    if (!n.bearing) continue;
-    const s = S(bridgeToSite(site, n.x, n.y));
-    els.push(html`<rect x=${s.x - 4} y=${s.y - 4} width="8" height="8" fill="#f59e0b" stroke="#92400e" />`);
+  for (const m of model.members) {
+    if (!m.bearing) continue;
+    const s = S(bridgeToSite(site, m.bearingPoint[0], m.bearingPoint[1]));
+    els.push(html`<rect x=${s.x - 4} y=${s.y - 4} width="8" height="8" fill="#f59e0b" stroke="#92400e"><title>${m.name} stands on a footing</title></rect>`);
   }
   if (state) {
     for (const sp of state.supports) {
-      const n = model.nodes.get(sp.nodeId);
-      if (!n) continue;
-      const s = S(bridgeToSite(site, n.x, n.y));
+      const m = model.memberById.get(String(sp.nodeId).replace(/^sup:/, ''));
+      if (!m) continue;
+      const s = S(bridgeToSite(site, m.bearingPoint[0], m.bearingPoint[1]));
       els.push(html`<circle cx=${s.x} cy=${s.y} r="7" fill="#14b8a6" fill-opacity="0.6" stroke="#0f766e" stroke-width="2"><title>${sp.name}</title></circle>`);
     }
   }
@@ -163,12 +160,12 @@ export function PlanView({ project, model, spots, state = null, sel, setSel, edi
       dir = ms.loc === 'carried' ? ms.dir : 0;
     } else p = spots.get(m.id);
     if (!p) continue;
-    const half = Math.min(m.length, 48) / 2;
+    const half = m.len / 2;
     const c = Math.cos(dir), s = Math.sin(dir);
     const A = S({ x: p.x - half * c, y: p.y - half * s }), B = S({ x: p.x + half * c, y: p.y + half * s });
     const selP = isSel('piece', m.id);
-    els.push(html`<g><line x1=${A.x} y1=${A.y} x2=${B.x} y2=${B.y} stroke=${selP ? '#facc15' : m.color || '#334155'} stroke-width=${Math.max(2, m.tube.d * k)} stroke-linecap="round" />
-      ${k > 1.6 && !(state && p.loc === 'carried') && html`<text x=${(A.x + B.x) / 2} y=${A.y - 3} font-size="9" text-anchor="middle" fill="#475569">${m.name}</text>`}
+    els.push(html`<g><line x1=${A.x} y1=${A.y} x2=${B.x} y2=${B.y} stroke=${selP ? '#facc15' : m.color || '#334155'} stroke-width=${Math.max(2, m.depth * k)} />
+      ${k > 3 && !(state && p.loc === 'carried') && html`<text x=${(A.x + B.x) / 2} y=${A.y - 3} font-size="9" text-anchor="middle" fill="#475569">${m.name}</text>`}
       <title>${m.name}</title></g>`);
   }
 
@@ -177,14 +174,9 @@ export function PlanView({ project, model, spots, state = null, sel, setSel, edi
       const s = S(t.start);
       els.push(html`<g><rect x=${s.x - 8} y=${s.y - 8} width="16" height="16" rx="3" fill=${isSel('tool', t.id) ? '#facc15' : '#e2e8f0'} stroke="#334155" />
         <text x=${s.x} y=${s.y + 4} font-size="10" text-anchor="middle" font-weight="700">${(t.name || 'T')[0]}</text>
-        ${k > 1.4 && html`<text x=${s.x} y=${s.y + 19} font-size="9" text-anchor="middle" fill="#334155" class="halo">${t.name} ×${t.count}</text>`}
+        ${k > 2.2 && html`<text x=${s.x} y=${s.y + 19} font-size="9" text-anchor="middle" fill="#334155" class="halo">${t.name} ×${t.count}</text>`}
         <title>${t.name} ×${t.count}</title></g>`);
     }
-    const h = S(site.hardware);
-    els.push(html`<g><polygon points=${hex(h.x, h.y, 9)} fill=${isSel('hardware', 'hw') ? '#facc15' : '#fef3c7'} stroke="#92400e" />
-      <text x=${h.x} y=${h.y + 3} font-size="8" text-anchor="middle" font-weight="700">NB</text>
-      ${k > 1.4 && html`<text x=${h.x} y=${h.y + 19} font-size="9" text-anchor="middle" fill="#92400e" class="halo">Nuts & bolts</text>`}
-      <title>Nuts & bolts</title></g>`);
   }
 
   // Builders
@@ -209,13 +201,6 @@ export function PlanView({ project, model, spots, state = null, sel, setSel, edi
     </svg>
     <button class="fit-btn" onClick=${() => cam.fit(bounds)}>Fit</button>
   </div>`;
-}
-
-function hex(x, y, r) {
-  return Array.from({ length: 6 }, (_, i) => {
-    const a = (Math.PI / 3) * i;
-    return `${x + r * Math.cos(a)},${y + r * Math.sin(a)}`;
-  }).join(' ');
 }
 
 function scaleBar(cam) {

@@ -1,10 +1,10 @@
 {
   "sites": [
     {
-      "name": "Example site (not official)",
-      "year": "example",
-      "file": "example-site.json",
-      "description": "Invented layout for trying the app"
+      "name": "2027 official layout",
+      "year": "2027",
+      "file": "2027-official.site.json",
+      "description": "Site Plan Diagram and rules from the AISC SSBC 2027 Rules (published Sept 8, 2026)"
     }
   ]
 }

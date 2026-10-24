@@ -104,6 +104,8 @@ ol.checklist li.done .tick { background: #dcfce7; color: var(--ok); border-color
 ol.checklist .tick { flex: none; width: 22px; height: 22px; border-radius: 50%; border: 1px solid #cbd5e1; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: var(--muted); }
 ol.checklist .what { flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 ol.checklist .autofill input { width: 48px; }
+input.tiny { width: 58px; }
+.total .cost { color: #334155; font-weight: 600; }
 text.halo { paint-order: stroke; stroke: #fff; stroke-width: 3px; }
 
 /* side panels */
@@ -178,7 +180,7 @@ table.grid tr.bad td { color: var(--bad); }
 /* sequence */
 .seq-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); }
 .steps-list { margin: 0; padding: 8px; list-style: none; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; }
-.steps-list li { display: flex; align-items: center; gap: 7px; padding: 5px 8px; background: #fff; border: 1px solid var(--line); border-radius: 7px; font-size: 13px; cursor: pointer; }
+.steps-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 7px; padding: 5px 8px; background: #fff; border: 1px solid var(--line); border-radius: 7px; font-size: 13px; cursor: pointer; }
 .steps-list li.empty { cursor: default; color: var(--muted); padding: 20px; }
 .steps-list li:hover { border-color: #94a3b8; }
 .steps-list li.sel { border-color: var(--accent); background: #eff6ff; }
@@ -188,7 +190,8 @@ table.grid tr.bad td { color: var(--bad); }
 .steps-list .grip { cursor: grab; color: #94a3b8; letter-spacing: -2px; }
 .steps-list .idx { width: 24px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
 .steps-list .icon { width: 14px; text-align: center; color: var(--muted); }
-.steps-list .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.steps-list .label { flex: 1 1 150px; min-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.steps-list .assign { margin-left: auto; }
 .steps-list .time { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .steps-list .assign { display: flex; gap: 3px; align-items: center; }
 .steps-list .assign select { font-size: 12px; padding: 2px 4px; max-width: 128px; }

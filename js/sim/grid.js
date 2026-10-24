@@ -49,6 +49,91 @@ export class SiteGrid {
     return m;
   }
 
+  // Cells walkable in `mask` that are also inside one of `zoneIds` (e.g. "where this builder may
+  // stand and touch the bridge"). Empty zone list = the mask itself.
+  maskAnd(mask, zoneIds) {
+    if (!zoneIds || !zoneIds.length) return mask;
+    const key = mask.key + '&' + [...zoneIds].sort().join(',');
+    let m = this.masks.get(key);
+    if (m) return m;
+    const lists = zoneIds.map((id) => this.zoneCells.get(id)).filter(Boolean);
+    const walk = new Uint8Array(mask.walk.length);
+    for (let i = 0; i < walk.length; i++) walk[i] = mask.walk[i] && lists.some((a) => a[i]) ? 1 : 0;
+    m = { key, walk };
+    this.masks.set(key, m);
+    return m;
+  }
+
+  // Connected walkable regions of a mask (e.g. the ground on each side of the river).
+  components(mask) {
+    if (mask.comp) return mask.comp;
+    const n = this.nx * this.ny, nx = this.nx;
+    const comp = new Int32Array(n).fill(-1);
+    let label = 0;
+    const queue = new Int32Array(n);
+    for (let s = 0; s < n; s++) {
+      if (!mask.walk[s] || comp[s] >= 0) continue;
+      let head = 0, tail = 0;
+      queue[tail++] = s;
+      comp[s] = label;
+      while (head < tail) {
+        const c = queue[head++];
+        const x = c % nx, y = (c / nx) | 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx, yy = y + dy;
+          if ((!dx && !dy) || xx < 0 || yy < 0 || xx >= nx || yy >= this.ny) continue;
+          const nb = yy * nx + xx;
+          if (mask.walk[nb] && comp[nb] < 0) { comp[nb] = label; queue[tail++] = nb; }
+        }
+      }
+      label++;
+    }
+    mask.comp = comp;
+    return comp;
+  }
+
+  // The part of `mask` connected to point p (where a builder standing at p can actually go).
+  region(mask, p) {
+    const comp = this.components(mask);
+    let idx = this.cellIndex(p);
+    if (!mask.walk[idx]) {
+      const s = this.nearestStand(mask, p);
+      if (!s) return mask;
+      idx = this.cellIndex(s);
+    }
+    const label = comp[idx];
+    const key = mask.key + '#' + label;
+    let m = this.masks.get(key);
+    if (m) return m;
+    const walk = new Uint8Array(mask.walk.length);
+    for (let i = 0; i < walk.length; i++) walk[i] = comp[i] === label ? 1 : 0;
+    m = { key, walk };
+    this.masks.set(key, m);
+    return m;
+  }
+
+  // Places where a builder in `from` can hand a piece to a builder in `to` (standing within
+  // `reach` of each other), e.g. across the river. [{g: {x, y}, t: {x, y}, d}]
+  handoffs(from, to, reach) {
+    const key = from.key + '>' + to.key + '@' + reach;
+    if (this.handoffCache?.has(key)) return this.handoffCache.get(key);
+    if (!this.handoffCache) this.handoffCache = new Map();
+    const out = [];
+    const nx = this.nx, ny = this.ny;
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const idx = j * nx + i;
+      if (!from.walk[idx]) continue;
+      // Only cells on the edge of the giver's area.
+      const edge = i === 0 || j === 0 || i === nx - 1 || j === ny - 1 || !from.walk[idx - 1] || !from.walk[idx + 1] || !from.walk[idx - nx] || !from.walk[idx + nx];
+      if (!edge) continue;
+      const g = this.center(idx);
+      const t = this.nearestStand(to, g);
+      if (t && t.dist <= reach && t.dist > 0) out.push({ g, t: { x: t.x, y: t.y }, d: t.dist });
+    }
+    this.handoffCache.set(key, out);
+    return out;
+  }
+
   cellIndex(p) {
     const i = Math.min(this.nx - 1, Math.max(0, Math.floor(p.x / this.cell)));
     const j = Math.min(this.ny - 1, Math.max(0, Math.floor(p.y / this.cell)));

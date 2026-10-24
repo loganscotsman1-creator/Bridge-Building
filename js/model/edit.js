@@ -1,7 +1,9 @@
-// Editing helpers that keep the project consistent (deleting a node also removes the member
-// segments, bolts and plan references that depended on it). All of these mutate the project
-// passed in, so call them inside updateProject(p => ...).
+// Editing helpers that keep the project consistent (deleting a member also removes its bolts and
+// the plan steps that referred to it). All of these mutate the project passed in, so call them
+// inside updateProject(p => ...).
 import { MIRROR_SUFFIX, uid } from './ids.js';
+import { boxLimits } from './schema.js';
+import { polyCentroid } from './geometry.js';
 
 const baseId = (id) => (id.endsWith(MIRROR_SUFFIX) ? id.slice(0, -MIRROR_SUFFIX.length) : id);
 
@@ -10,77 +12,22 @@ export function removeMemberRefs(project, memberIds) {
   for (const id of memberIds) ids.add(id + MIRROR_SUFFIX);
   for (const plan of project.plans) {
     for (const a of plan.assemblies) a.memberIds = a.memberIds.filter((m) => !ids.has(m));
-    plan.steps = plan.steps.filter((s) => !(s.kind === 'install' && s.unit.type === 'member' && ids.has(s.unit.id)));
+    plan.steps = plan.steps.filter((s) => !(s.kind === 'install' && s.unit.type === 'member' && ids.has(s.unit.id)) && !(s.kind === 'support' && ids.has(s.memberId)));
   }
   for (const id of ids) delete project.site.staging[id];
 }
 
 export function removeMember(project, memberId) {
   const d = project.design;
+  const gone = new Set([memberId, memberId + MIRROR_SUFFIX]);
   d.members = d.members.filter((m) => m.id !== memberId);
-  d.bolts = d.bolts.filter((b) => b.memberId !== memberId);
+  d.bolts = d.bolts.filter((b) => !gone.has(b.a) && !gone.has(b.b));
   removeMemberRefs(project, [memberId]);
 }
 
 export function removeBolt(project, boltId) {
   const d = project.design;
   d.bolts = d.bolts.filter((b) => b.id !== baseId(boltId));
-}
-
-export function removeNode(project, nodeId) {
-  const d = project.design;
-  const gone = new Set([nodeId, nodeId + MIRROR_SUFFIX]);
-  d.nodes = d.nodes.filter((n) => n.id !== nodeId);
-  const emptied = [];
-  for (const m of d.members) {
-    const keep = [];
-    const remap = new Map();
-    m.segments.forEach((seg, i) => {
-      if (gone.has(seg[0]) || gone.has(seg[1])) return;
-      remap.set(i, keep.length);
-      keep.push(seg);
-    });
-    if (keep.length === m.segments.length) continue;
-    d.bolts = d.bolts
-      .filter((b) => b.memberId !== m.id || remap.has(b.seg))
-      .map((b) => (b.memberId === m.id ? { ...b, seg: remap.get(b.seg) } : b));
-    m.segments = keep;
-    if (!keep.length) emptied.push(m.id);
-  }
-  for (const id of emptied) removeMember(project, id);
-  for (const plan of project.plans) plan.steps = plan.steps.filter((s) => !(s.kind === 'support' && gone.has(s.nodeId)));
-}
-
-// Turning mirroring off: write the generated truss-B copies into the design (same ids, so laterals,
-// bolts and plans that refer to them keep working) so they can be edited on their own.
-export function materializeMirror(project, model) {
-  const d = project.design;
-  for (const n of model.nodes.values()) {
-    if (n.mirrorOf && !d.nodes.some((x) => x.id === n.id)) {
-      const { mirrorOf, ...rest } = n;
-      d.nodes.push(rest);
-    }
-  }
-  for (const m of d.members.filter((x) => x.plane === 'A')) {
-    const id = m.id + MIRROR_SUFFIX;
-    if (d.members.some((x) => x.id === id)) continue;
-    const mm = model.memberById.get(id);
-    d.members.push({ ...m, id, name: mm ? mm.name : m.name + ' (B)', plane: 'B', segments: m.segments.map(([a, b]) => [a + MIRROR_SUFFIX, b + MIRROR_SUFFIX]) });
-    for (const b of d.bolts.filter((x) => x.memberId === m.id)) d.bolts.push({ ...b, id: b.id + MIRROR_SUFFIX, memberId: id });
-  }
-  d.mirrorB = false;
-}
-
-// Turning mirroring on: drop the stored truss-B pieces; copies of truss A replace them.
-export function enableMirror(project) {
-  const d = project.design;
-  const bMembers = d.members.filter((m) => m.plane === 'B').map((m) => m.id);
-  d.members = d.members.filter((m) => m.plane !== 'B');
-  d.bolts = d.bolts.filter((b) => !bMembers.includes(b.memberId));
-  d.nodes = d.nodes.filter((n) => n.plane !== 'B');
-  // References to mirrored ids (x~B) stay valid; references to hand-drawn B pieces are removed.
-  removeMemberRefs(project, bMembers.filter((id) => !id.endsWith(MIRROR_SUFFIX)));
-  d.mirrorB = true;
 }
 
 export function nextMemberName(project, plane) {
@@ -91,85 +38,88 @@ export function nextMemberName(project, plane) {
   return prefix + n;
 }
 
-export function newNode(plane, x, y, z) {
-  return { id: uid('n'), plane, x, y, z, bearing: false };
+// A new box member at its full allowed size (it can be made smaller, never bigger).
+export function newBox(project, plane, u, v, angle = 0, extra = {}) {
+  const lim = boxLimits(project);
+  return { id: uid('m'), name: nextMemberName(project, plane), plane, u, v, angle, len: lim.len, depth: lim.depth, thick: lim.thick, z: 0, bearing: false, ...extra };
 }
 
-// Put a new joint partway along a segment (fraction t from its first node), splitting it in two.
-// Bolts stay where they were.
-export function splitSegment(project, memberId, segIndex, nodeId, t) {
-  const m = project.design.members.find((x) => x.id === memberId);
-  const [a, b] = m.segments[segIndex];
-  m.segments.splice(segIndex, 1, [a, nodeId], [nodeId, b]);
-  for (const bolt of project.design.bolts) {
-    if (bolt.memberId !== memberId) continue;
-    if (bolt.seg > segIndex) bolt.seg += 1;
-    else if (bolt.seg === segIndex) {
-      if (bolt.s <= t) bolt.s = t ? bolt.s / t : 0;
-      else { bolt.seg += 1; bolt.s = (bolt.s - t) / (1 - t); }
-    }
-  }
-}
-
-// Move one segment (and its bolts) from one member to another. A member left with no
-// segments is deleted.
-export function moveSegment(project, fromId, segIndex, toId) {
-  const d = project.design;
-  const from = d.members.find((x) => x.id === fromId);
-  const to = d.members.find((x) => x.id === toId);
-  if (!from || !to || from === to) return;
-  const [seg] = from.segments.splice(segIndex, 1);
-  const newIndex = to.segments.length;
-  to.segments.push(seg);
-  for (const bolt of d.bolts) {
-    if (bolt.memberId !== fromId) continue;
-    if (bolt.seg === segIndex) { bolt.memberId = toId; bolt.seg = newIndex; }
-    else if (bolt.seg > segIndex) bolt.seg -= 1;
-  }
-  if (!from.segments.length) removeMember(project, fromId);
-}
-
-// Take one segment out of its member into a member of its own; returns the new member's id.
-export function detachSegment(project, memberId, segIndex) {
+export function duplicateMember(project, memberId, du = 0, dv = 0) {
   const m = project.design.members.find((x) => x.id === memberId);
   if (!m) return null;
-  if (m.segments.length === 1) return memberId;
-  const id = uid('m');
-  project.design.members.push({ id, name: nextMemberName(project, m.plane), plane: m.plane, segments: [] });
-  moveSegment(project, memberId, segIndex, id);
-  return id;
+  const copy = { ...m, id: uid('m'), name: nextMemberName(project, m.plane), u: m.u + du, v: m.v + dv };
+  project.design.members.push(copy);
+  return copy.id;
 }
 
-// Give every member end that meets another member `perEnd` bolts, counting bolts that are
-// already there.
-export function autoBolts(project, model, plane, perEnd) {
+// Keep a box within the rule limits (only ever shrinks).
+export function clampBox(project, m) {
+  const lim = boxLimits(project);
+  m.len = Math.min(lim.len, Math.max(0.5, m.len));
+  m.depth = Math.min(lim.depth, Math.max(0.25, m.depth));
+  m.thick = Math.min(lim.thick, Math.max(0.125, m.thick));
+  return m;
+}
+
+// Turning mirroring off: write the generated truss-B copies into the design (same ids, so
+// laterals and plans that refer to them keep working) so they can be edited on their own.
+export function materializeMirror(project, model) {
   const d = project.design;
-  const touching = new Map();
-  for (const m of model.members) for (const n of m.nodeIds) touching.set(n, (touching.get(n) || 0) + 1);
+  for (const m of model.members) {
+    if (!m.mirrorOf || d.members.some((x) => x.id === m.id)) continue;
+    const src = d.members.find((x) => x.id === m.mirrorOf);
+    d.members.push({ ...src, id: m.id, name: m.name, plane: 'B' });
+  }
+  for (const b of model.bolts) {
+    if (b.plane === 'B' && b.id.endsWith(MIRROR_SUFFIX) && !d.bolts.some((x) => x.id === b.id)) {
+      d.bolts.push({ id: b.id, plane: 'B', a: b.a, b: b.b, u: b.u, v: b.v });
+    }
+  }
+  d.mirrorB = false;
+}
+
+// Turning mirroring on: drop the stored truss-B pieces; copies of truss A replace them.
+export function enableMirror(project) {
+  const d = project.design;
+  const bMembers = d.members.filter((m) => m.plane === 'B').map((m) => m.id);
+  const gone = new Set(bMembers);
+  d.members = d.members.filter((m) => m.plane !== 'B');
+  d.bolts = d.bolts.filter((b) => b.plane !== 'B' && !(gone.has(b.a) && !b.a.endsWith(MIRROR_SUFFIX)) && !(gone.has(b.b) && !b.b.endsWith(MIRROR_SUFFIX)));
+  removeMemberRefs(project, bMembers.filter((id) => !id.endsWith(MIRROR_SUFFIX)));
+  d.mirrorB = true;
+}
+
+// Give every connection on this view's plane that has no bolt `count` bolts, spread along the
+// touching edge (or in the middle of an overlap). Returns how many were added.
+export function autoBolts(project, model, plane, count) {
+  const d = project.design;
+  const editable = new Set(d.members.map((m) => m.id));
   let added = 0;
-  for (const m of d.members) {
-    if (m.plane !== plane) continue;
-    const mm = model.memberById.get(m.id);
-    if (!mm) continue;
-    const ends = new Map(); // nodeId -> [{seg, atStart, len}]
-    m.segments.forEach(([a, b], seg) => {
-      const pa = model.nodes.get(a), pb = model.nodes.get(b);
-      if (!pa || !pb) return;
-      const len = Math.hypot(pb.x - pa.x, pb.y - pa.y, pb.z - pa.z);
-      for (const [n, atStart] of [[a, true], [b, false]]) {
-        if (!ends.has(n)) ends.set(n, []);
-        ends.get(n).push({ seg, atStart, len });
+  for (const c of model.contacts) {
+    if (c.plane !== plane || c.bolts > 0) continue;
+    // Truss B mirror copies get their bolts from truss A.
+    if (!editable.has(c.a) && !editable.has(c.b)) continue;
+    const pts = [];
+    if (c.kind === 'edge') {
+      const [p, q] = c.seg;
+      for (let i = 0; i < count; i++) {
+        const t = (i + 1) / (count + 1);
+        pts.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]);
       }
-    });
-    for (const [n, list] of ends) {
-      if ((touching.get(n) || 0) - 1 <= 0) continue; // nothing else connects here
-      const have = d.bolts.filter((b) => b.memberId === m.id && (b.s < 0.5 ? m.segments[b.seg]?.[0] : m.segments[b.seg]?.[1]) === n).length;
-      const { seg, atStart, len } = list[0];
-      for (let i = have; i < perEnd; i++) {
-        const off = Math.min(0.45, (1.5 + 1.5 * i) / Math.max(1, len));
-        d.bolts.push({ id: uid('b'), memberId: m.id, seg, s: atStart ? off : 1 - off });
-        added++;
+    } else {
+      const [cx, cy] = polyCentroid(c.poly);
+      // Spread along the longer direction of the overlap.
+      const xs = c.poly.map((p) => p[0]), ys = c.poly.map((p) => p[1]);
+      const wide = Math.max(...xs) - Math.min(...xs) >= Math.max(...ys) - Math.min(...ys);
+      const span = wide ? Math.max(...xs) - Math.min(...xs) : Math.max(...ys) - Math.min(...ys);
+      for (let i = 0; i < count; i++) {
+        const off = count === 1 ? 0 : (i / (count - 1) - 0.5) * span * 0.5;
+        pts.push(wide ? [cx + off, cy] : [cx, cy + off]);
       }
+    }
+    for (const [u, v] of pts) {
+      d.bolts.push({ id: uid('b'), plane, a: c.a, b: c.b, u: Math.round(u * 100) / 100, v: Math.round(v * 100) / 100 });
+      added++;
     }
   }
   return added;

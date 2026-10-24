@@ -2,7 +2,7 @@
 import { html, useEffect, useMemo, useRef, useState } from '../lib/preact.js';
 import { activePlan } from '../model/schema.js';
 import { stagingSpots } from '../model/plan.js';
-import { fmt } from '../sim/simulate.js';
+import { fmt, fmtCost } from '../sim/simulate.js';
 import { stateAt } from '../sim/playback.js';
 import { PlanView } from './PlanView.js';
 import { IsoView } from './IsoView.js';
@@ -59,7 +59,7 @@ export function SimulateTab({ project, model, sim }) {
       </select>
       <input class="scrub" type="range" min="0" max=${end} step="0.1" value=${t} onInput=${(e) => { setPlaying(false); setT(parseFloat(e.target.value)); }} />
       <span class="clock">${fmt(t)} / ${fmt(end)}</span>
-      <span class="muted">${placed} / ${model.members.length} members placed · plan "${plan.name}"</span>
+      <span class="muted">${placed} / ${model.members.length} members placed · ${sim.handoffs} handed across · construction cost ${fmtCost(sim.cost)} · plan "${plan.name}"</span>
     </div>
     <div class="sim-views">
       <div class="sim-plan">
