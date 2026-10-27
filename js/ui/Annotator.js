@@ -142,7 +142,10 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
   const tolW = 12 / k; // 12 screen pixels, in inches
 
   useEffect(() => { if (cam.ready) cam.fit(bounds); setCalibPts([]); setDraft(null); }, [viewKey]);
-  useEffect(() => { if (cam.ready) cam.fit(bounds); }, [view.imageId, view.calib]);
+  // Re-fit only when the screenshot or its scale really changes. (Every edit copies the project,
+  // so compare the calibration's numbers, not the object, or each edit would zoom back out.)
+  const calibKey = view.calib ? [...view.calib.a, ...view.calib.b].join(',') : '';
+  useEffect(() => { if (cam.ready) cam.fit(bounds); }, [view.imageId, calibKey]);
   useEffect(() => { if (mode !== 'calibrate') setCalibPts([]); setDraft(null); setHoverContact(null); }, [mode]);
 
   const snapTargets = (exceptId) => [
