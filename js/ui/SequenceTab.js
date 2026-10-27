@@ -10,6 +10,8 @@ import { IsoView } from './IsoView.js';
 import { Hint, Section, SelectField } from './common.js';
 
 const KIND_ICON = { install: '⬆', build: '⚒', support: '▲' };
+// One color per assembly, used in the 3D view and the step list.
+export const ASM_COLORS = ['#9333ea', '#0891b2', '#db2777', '#65a30d', '#ea580c', '#4f46e5', '#0d9488', '#b91c1c', '#ca8a04', '#7c3aed'];
 
 export function SequenceTab({ project, model, sim }) {
   const plan = activePlan(project);
@@ -17,6 +19,7 @@ export function SequenceTab({ project, model, sim }) {
   const [editAsm, setEditAsm] = useState(null);
   const [dragFrom, setDragFrom] = useState(null);
   const [compare, setCompare] = useState(null);
+  const [picked, setPicked] = useState([]); // member ids picked in the 3D view
 
   const setPlan = (fn, key) => updateProject((p) => fn(p.plans.find((x) => x.id === p.activePlanId)), { key });
   const steps = plan.steps;
@@ -76,6 +79,42 @@ export function SequenceTab({ project, model, sim }) {
     });
   };
 
+  // Make one assembly out of the pieces picked in the 3D view. They leave any assembly they were
+  // in, and the new assembly's assemble + install steps go where the first of them was installed.
+  const makeAssembly = (ids) => {
+    if (ids.length < 2 || ids.length > maxAsm) return;
+    const id = uid('as');
+    setPlan((pl) => {
+      const isStepOf = (s, mid) => s.kind === 'install' && ((s.unit.type === 'member' && s.unit.id === mid) || (s.unit.type === 'assembly' && pl.assemblies.find((a) => a.id === s.unit.id)?.memberIds.includes(mid)));
+      const positions = ids.map((mid) => pl.steps.findIndex((s) => isStepOf(s, mid))).filter((i) => i >= 0);
+      const pos = positions.length ? Math.min(...positions) : pl.steps.length;
+      const anchor = pl.steps[pos];
+      // Pull the pieces out of other assemblies (an assembly left with one piece goes back to a member).
+      for (const a of pl.assemblies) {
+        if (!a.memberIds.some((m) => ids.includes(m))) continue;
+        a.memberIds = a.memberIds.filter((m) => !ids.includes(m));
+        if (a.memberIds.length <= 1) {
+          const at = pl.steps.findIndex((s) => s.kind === 'install' && s.unit.type === 'assembly' && s.unit.id === a.id);
+          pl.steps = pl.steps.filter((s) => !((s.kind === 'install' && s.unit.type === 'assembly' && s.unit.id === a.id) || (s.kind === 'build' && s.assemblyId === a.id)));
+          if (a.memberIds.length === 1) pl.steps.splice(at >= 0 ? Math.min(at, pl.steps.length) : pl.steps.length, 0, installStep({ type: 'member', id: a.memberIds[0] }));
+          a.memberIds = [];
+        }
+      }
+      pl.assemblies = pl.assemblies.filter((a) => a.memberIds.length);
+      pl.steps = pl.steps.filter((s) => !(s.kind === 'install' && s.unit.type === 'member' && ids.includes(s.unit.id)));
+      let at = anchor ? pl.steps.indexOf(anchor) : -1;
+      if (at < 0) at = Math.min(pos, pl.steps.length);
+      pl.assemblies.push({ id, name: 'Assembly ' + (pl.assemblies.length + 1), memberIds: [...ids], areaZoneId: null });
+      pl.steps.splice(at, 0, { id: uid('s'), kind: 'build', assemblyId: id, builder: 'auto' }, installStep({ type: 'assembly', id }));
+    });
+    setPicked([]);
+  };
+
+  const pick = (m) => {
+    if (editing) { toggleMember(editing.id, m.id); return; }
+    setPicked(picked.includes(m.id) ? picked.filter((x) => x !== m.id) : [...picked, m.id]);
+  };
+
   const deleteAssembly = (asmId) => setPlan((pl) => {
     const a = pl.assemblies.find((x) => x.id === asmId);
     const at = pl.steps.findIndex((s) => s.kind === 'install' && s.unit.type === 'assembly' && s.unit.id === asmId);
@@ -104,18 +143,26 @@ export function SequenceTab({ project, model, sim }) {
   const editing = editAsm && plan.assemblies.find((a) => a.id === editAsm);
   const asmOf = new Map();
   for (const a of plan.assemblies) for (const m of a.memberIds) asmOf.set(m, a.id);
-  const styleOf = (m) => {
+  const asmColor = (asmId) => ASM_COLORS[Math.max(0, plan.assemblies.findIndex((a) => a.id === asmId)) % ASM_COLORS.length];
+  const baseStyle = (m) => {
     if (editing) {
-      if (editing.memberIds.includes(m.id)) return { color: '#a855f7', width: 2.5 };
-      if (asmOf.has(m.id)) return { color: '#d8b4fe', opacity: 0.6 };
+      if (editing.memberIds.includes(m.id)) return { color: asmColor(editing.id) };
+      if (asmOf.has(m.id)) return { color: asmColor(asmOf.get(m.id)), opacity: 0.45 };
       return { color: '#94a3b8', opacity: 0.6 };
     }
-    if (selIndex < 0) return null;
-    if (highlight.now.has(m.id)) return { color: '#f97316', width: 2.5 };
-    if (highlight.building.has(m.id)) return { color: '#a855f7', width: 2.5 };
+    if (selIndex < 0) return asmOf.has(m.id) ? { color: asmColor(asmOf.get(m.id)) } : { color: '#94a3b8' };
+    if (highlight.now.has(m.id)) return { color: '#f97316' };
+    if (highlight.building.has(m.id)) return { color: asmColor(asmOf.get(m.id)) };
     if (highlight.before.has(m.id)) return { color: '#475569' };
     return { color: '#cbd5e1', opacity: 0.5, dash: '2 2' };
   };
+  const styleOf = (m) => {
+    const st = baseStyle(m);
+    return picked.includes(m.id) ? { ...st, color: '#facc15', outline: '#b45309', opacity: 1 } : st;
+  };
+  const pickedNames = picked.map((id) => model.memberById.get(id)?.name).filter(Boolean);
+  const pickedAsms = [...new Set(picked.map((id) => asmOf.get(id)).filter(Boolean))].map((id) => plan.assemblies.find((a) => a.id === id));
+  const unitMembers = (s) => (s.kind === 'install' && s.unit.type === 'assembly' ? s.unit.id : s.kind === 'build' ? s.assemblyId : null);
   const supportsAt = selIndex < 0 ? [] : (() => {
     const placed = new Map();
     steps.slice(0, selIndex + 1).forEach((s) => {
@@ -168,14 +215,20 @@ export function SequenceTab({ project, model, sim }) {
           ${!steps.length && html`<li class="empty">No steps yet. Use <b>Auto order</b> or add pieces from the list on the right.</li>`}
           ${steps.map((s, i) => {
             const t = sim.stepTimes[i];
-            return html`<li key=${s.id} class=${(s.id === selStep ? 'sel ' : '') + (errorSteps.has(i) ? 'flag ' : '') + 'k-' + s.kind}
+            const asmId = unitMembers(s);
+            const asm = asmId && plan.assemblies.find((a) => a.id === asmId);
+            const col = asm && asmColor(asm.id);
+            return html`<li key=${s.id} class=${(s.id === selStep ? 'sel ' : '') + (errorSteps.has(i) ? 'flag ' : '') + 'k-' + s.kind + (asm ? ' k-asm' : '')}
+              style=${asm ? { borderLeft: '4px solid ' + col } : null}
               draggable="true" onDragStart=${() => setDragFrom(i)} onDragOver=${(e) => e.preventDefault()}
               onDrop=${() => { if (dragFrom != null && dragFrom !== i) move(dragFrom, i); setDragFrom(null); }}
               onClick=${() => setSelStep(s.id === selStep ? null : s.id)}>
               <span class="grip" title="Drag to reorder">⋮⋮</span>
               <span class="idx">${i + 1}</span>
               <span class="icon">${KIND_ICON[s.kind]}</span>
-              <span class="label">${stepLabel(s, model, plan, project)}</span>
+              <span class="label">${asm
+                ? html`${s.kind === 'build' ? 'Assemble' : 'Install'} <span class="asm-chip" style=${{ background: col }}>${asm.name}</span>${s.kind === 'build' ? ' where staged' : ''}`
+                : stepLabel(s, model, plan, project)}</span>
               <span class="time">${t ? fmt(t.start) + '–' + fmt(t.end) : ''}</span>
               <span class="assign" onClick=${(e) => e.stopPropagation()}>
                 ${s.kind === 'install' && html`
@@ -190,13 +243,23 @@ export function SequenceTab({ project, model, sim }) {
                 <button class="small" disabled=${i === steps.length - 1} onClick=${() => move(i, i + 1)} title="Move down">↓</button>
                 <button class="small" title="Remove step" onClick=${() => setPlan((pl) => { pl.steps.splice(i, 1); })}>✕</button>
               </span>
+              ${asm && html`<span class="members">${asm.memberIds.map((id) => model.memberById.get(id)?.name).filter(Boolean).join(' + ')}</span>`}
             </li>`;
           })}
         </ol>
         <div class="seq-3d">
-          <${IsoView} model=${model} styleOf=${styleOf} supports=${supportsAt}
-            label=${editing ? `Click members to add/remove them from "${editing.name}"` : selIndex >= 0 ? `Step ${selIndex + 1}: orange = this step, gray = already built` : 'Select a step to see the bridge at that point'}
-            onPick=${editing ? (m) => toggleMember(editing.id, m.id) : null} />
+          <${IsoView} model=${model} styleOf=${styleOf} supports=${supportsAt} onPick=${pick}
+            label=${editing ? `Click pieces to add/remove them from "${editing.name}"` : selIndex >= 0 ? `Step ${selIndex + 1}: orange = this step, gray = already built` : 'Click pieces to pick them for an assembly · colors = assemblies'} />
+          <div class="pickbar">
+            ${editing ? html`<span class="names">Editing <span class="asm-chip" style=${{ background: asmColor(editing.id) }}>${editing.name}</span>: click pieces to add or take them out.</span>
+                <button class="small primary" onClick=${() => setEditAsm(null)}>Done</button>`
+            : picked.length ? html`<span class="names"><b>Picked ${picked.length}${maxAsm < Infinity ? ' of max ' + maxAsm : ''}:</b> ${pickedNames.join(' + ')}
+                ${pickedAsms.length > 0 && html` <span class="muted">(${pickedAsms.length === 1 ? 'already in ' + pickedAsms[0].name : 'from ' + pickedAsms.length + ' assemblies'}; they'll move to the new one)</span>`}
+                ${picked.length > maxAsm && html` <b class="bad">Too many for one assembly.</b>`}</span>
+                <button class="small primary" disabled=${picked.length < 2 || picked.length > maxAsm} onClick=${() => makeAssembly(picked)}>Make assembly</button>
+                <button class="small" onClick=${() => setPicked([])}>Clear</button>`
+            : html`<span class="names muted">Click pieces in the 3D view to pick ${maxAsm < Infinity ? `2–${maxAsm}` : 'some'} of them, then make them an assembly.</span>`}
+          </div>
           <${Problems} sim=${sim} onPick=${(i) => i != null && steps[i] && setSelStep(steps[i].id)} />
         </div>
       </div>
@@ -219,9 +282,14 @@ export function SequenceTab({ project, model, sim }) {
       <div data-tour="assemblies">
       <${Section} title=${`Assemblies (${plan.assemblies.length})`}>
         <${Hint}>${maxAsm < Infinity ? `2 to ${maxAsm} members` : 'Members'} bolted together ${rules.assemblyIn === 'assembly' ? 'in a ground-assembly area' : 'right where they\'re staged (stage them ready to connect)'} after the clock starts, then carried and installed as one piece.<//>
-        <button class="primary" onClick=${createAssembly}>+ New assembly</button>
-        ${plan.assemblies.map((a) => html`<div class=${'asm ' + (editAsm === a.id ? 'editing' : '')} key=${a.id}>
+        <div class="row">
+          <button class="primary" disabled=${picked.length < 2 || picked.length > maxAsm} onClick=${() => makeAssembly(picked)}
+            title="Click pieces in the 3D view first">Make assembly from ${picked.length || 'picked'} piece${picked.length === 1 ? '' : 's'}</button>
+          <button onClick=${createAssembly} title="Start an empty assembly and add pieces to it in the 3D view">Empty assembly</button>
+        </div>
+        ${plan.assemblies.map((a) => html`<div class=${'asm ' + (editAsm === a.id ? 'editing' : '')} key=${a.id} style=${{ borderLeft: '4px solid ' + asmColor(a.id) }}>
           <div class="row">
+            <span class="dot" style=${{ background: asmColor(a.id) }}></span>
             <input type="text" value=${a.name} onInput=${(e) => setPlan((pl) => { pl.assemblies.find((x) => x.id === a.id).name = e.target.value; }, 'asm' + a.id)} />
             <button class="small" onClick=${() => setEditAsm(editAsm === a.id ? null : a.id)}>${editAsm === a.id ? 'Done' : 'Edit'}</button>
             <button class="small danger" onClick=${() => { deleteAssembly(a.id); if (editAsm === a.id) setEditAsm(null); }}>✕</button>
@@ -229,7 +297,7 @@ export function SequenceTab({ project, model, sim }) {
           ${rules.assemblyIn === 'assembly' && asmZones.length > 1 && html`<${SelectField} label="Assembled in" value=${a.areaZoneId || ''}
             options=${[['', '(where its members start)'], ...asmZones.map((z) => [z.id, z.name])]}
             onChange=${(v) => setPlan((pl) => { pl.assemblies.find((x) => x.id === a.id).areaZoneId = v || null; })} />`}
-          <div class=${a.memberIds.length > maxAsm ? 'bad' : 'muted'}>${a.memberIds.map((id) => model.memberById.get(id)?.name).filter(Boolean).join(', ') || 'No members yet. Click Edit, then click members in the 3D view.'}
+          <div class=${a.memberIds.length > maxAsm ? 'bad' : 'muted'}>${a.memberIds.map((id) => model.memberById.get(id)?.name).filter(Boolean).join(' + ') || 'No members yet. Click Edit, then click pieces in the 3D view.'}
             ${a.memberIds.length > 0 && ` (${a.memberIds.length}${maxAsm < Infinity ? ' of ' + maxAsm : ''})`}</div>
         </div>`)}
       <//>

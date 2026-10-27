@@ -64,7 +64,7 @@ export const TOUR = [
   {
     tab: 'sequence', target: 'assemblies',
     title: 'Assemblies and supports',
-    body: 'Group 2–3 members into assemblies that are bolted together right where they\'re staged and carried in as one piece, and add steps that place or remove temporary supports.',
+    body: 'To make an assembly, click 2–3 pieces in the 3D view and press "Make assembly". It\'s bolted together right where its members are staged and carried in as one piece; each assembly gets its own color. You can also add steps that place or remove temporary supports.',
   },
   {
     tab: 'sequence', target: 'total',

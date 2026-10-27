@@ -116,7 +116,13 @@ The plan is an ordered list of steps:
 
 Drag steps (or use ↑ ↓) to reorder. Each step can name its carrier and fastener, or leave them
 on *Auto* (whoever can get there first). *Carrier fastens (solo)* has the holder bolt their own
-piece. **New assembly → Edit**, then click members in the 3D view to group them. **Auto order**
+piece.
+
+**Making assemblies:** click 2–3 pieces in the 3D view (they turn yellow), then **Make
+assembly**. Each assembly gets its own color in the 3D view and the step list, and its steps show
+which members are in it. **Edit** on an assembly card lets you click pieces in or out of it. Every
+piece in the 3D views is labeled with its name (**Names** hides them); scroll to zoom in where
+they're crowded, and drag to rotate. **Auto order**
 starts from the footings and works west to east, trusses before laterals. **Duplicate** copies
 the plan so you can try a variation, and **Compare plans** shows every plan's time and
 construction cost side by side.
