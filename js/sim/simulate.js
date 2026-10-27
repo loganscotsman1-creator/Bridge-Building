@@ -12,7 +12,8 @@
 //   - builders never enter the river, so they can't cross it (10.3.6); pieces are handed across
 //   - builders touch the bridge only from a construction zone, footing or riverbank (10.3.12)
 //   - tools and hardware are picked up after the clock starts (10.6.3)
-//   - assemblies have at most N members and are made only in a staging yard (10.3.7)
+//   - assemblies have at most N members and are made only in a staging yard (10.3.7), right
+//     where their members are staged
 //   - each constructed portion starts on a footing (10.3.11)
 //   - builders finish in a staging yard and supports are picked back up (10.9.1)
 import { buildModel, bridgeToSite, dist2d, memberPoint } from '../model/geometry.js';
@@ -440,6 +441,7 @@ class Sim {
     const max = this.rules.maxAssemblyMembers ?? Infinity;
     if (u.memberIds.length > max) this.error(`${u.name} has ${u.memberIds.length} members; the rules allow at most ${max} (10.3.7).`);
     if (u.memberIds.length < 2) this.warn(`${u.name} has only one member, so it isn't really an assembly.`);
+    if (this.rules.assemblyIn !== 'assembly') { this.buildInPlace(step, u); return; }
     const zone = this.assemblyZone(u);
     if (!zone) { this.error(`${u.name} needs a ${this.rules.assemblyIn === 'assembly' ? 'ground-assembly area' : 'staging yard'} to be assembled in, but the site has none.`); this.aborted = true; return; }
     this.assemblySlots = (this.assemblySlots || 0) + 1;
@@ -482,6 +484,37 @@ class Sim {
     for (let i = 1; i < arrivals.length; i++) {
       const id = arrivals[i].id;
       this.waitUntil(a, arrivals[i].t);
+      const inner = (u.internal || []).filter((j) => (j.a === id && joined.has(j.b)) || (j.b === id && joined.has(j.a)));
+      const bolts = inner.reduce((s, j) => s + j.bolts, 0);
+      if (!inner.length) this.warn(`${this.model.memberById.get(id).name} doesn't touch the rest of ${u.name}.`);
+      const dur = this.T.assemblyJoinTime > 0 ? this.T.assemblyJoinTime : inner.length * this.T.alignTime + bolts * a.boltTime;
+      this.seg(a, 'assemble', a.freeAt, a.freeAt + dur, { label: `Bolt ${this.model.memberById.get(id).name} into ${u.name}`, unitKey: u.key });
+      joined.add(id);
+    }
+    for (const j of u.internal || []) u.fastened[j.id] = true;
+    u.built = true;
+    u.readyAt = a.freeAt;
+    u.pos = spot;
+    this.track(u.memberIds, a.freeAt, { kind: 'ground', x: spot.x, y: spot.y, assembled: true });
+  }
+
+  // Assemblies are bolted together right where their members are staged (they're staged ready to
+  // connect), so nothing is carried; an assembler walks over and joins them one by one.
+  buildInPlace(step, u) {
+    const spots = u.memberIds.map((id) => this.tracks.get(id)[0]);
+    const spot = { x: spots.reduce((s, p) => s + p.x, 0) / spots.length, y: spots.reduce((s, p) => s + p.y, 0) / spots.length };
+    const yards = this.site.zones.filter((z) => ZONE_TYPES[z.type]?.stage);
+    if (yards.length && !spots.every((p) => yards.some((z) => inZone(z, p)))) this.error(`${u.name} is assembled where its members are staged, but some aren't in a staging yard (10.3.7.2).`);
+    const choice = this.pick(ASSEMBLE_ROLES, step.builder, (b) => {
+      const st = this.standFor(b, spots);
+      return st && st.reach <= this.T.maxReach && { to: st.stand };
+    }, 0, null, `assemble ${u.name}`);
+    if (!choice) { this.noBuilder(`assemble ${u.name}`); return; }
+    const a = choice.b;
+    a.tasks++;
+    this.go(a, choice.d.to, 'walk', { label: 'To ' + u.name });
+    const joined = new Set([u.memberIds[0]]);
+    for (const id of u.memberIds.slice(1)) {
       const inner = (u.internal || []).filter((j) => (j.a === id && joined.has(j.b)) || (j.b === id && joined.has(j.a)));
       const bolts = inner.reduce((s, j) => s + j.bolts, 0);
       if (!inner.length) this.warn(`${this.model.memberById.get(id).name} doesn't touch the rest of ${u.name}.`);

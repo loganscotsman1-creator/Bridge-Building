@@ -37,27 +37,37 @@ member**. Bridges are usually two trusses joined by laterals, so you mark up a f
 | **Isometric screenshots** | One or more for reference, shown next to the 3D view built from your markup. If they don't match, a box is placed wrong. |
 | **Member list** | Every member's size, weight, connections and bolts. |
 
-Each view has a checklist on the right that walks you through it:
+Before anything else, tab 1 asks **how far apart your footing supports are** (where the bridge
+stands on the two footings, e.g. pier centers; 22'-0" by default). Your supports are centered on
+the site's footings. Change it later in Bridge settings.
+
+Each view then has a checklist on the right that walks you through it:
 
 1. **Add the screenshot:** drag it onto the canvas, paste it with **Ctrl+V** straight from a
    screen-capture tool, or choose a file.
-2. **Set the scale (S):** click two points you know (the outer edges of the two footings work
-   well, 23'-0" apart in 2027) and type their real positions in inches. x runs along the span
-   from the west footing's outer edge, z is height (y is across, from truss A to truss B, in the
-   top view).
-3. **Place member boxes (M):** drag along a member in the screenshot to drop a box over it, or
-   click to stamp a full-size box. Boxes **snap edge-to-edge**: drag one near another and its
-   edge lines up with the neighbour's edge, its angle matches, and its ends or middle line up.
-   In **Select (V)** drag the square handles to shorten or narrow a box (it can never be made
-   bigger than the size box) and the round handle to rotate it. Arrow keys nudge, R turns 90°,
-   Ctrl+D copies a box, Shift while dragging turns snapping off.
+2. **Set the scale (S):** click the **west footing support**, then the **east** one, on the
+   screenshot. The screenshot is scaled and moved so those two points sit the footing distance
+   apart at ground level, on the program's footings. (In the top view, click truss A at each
+   support. "Use two other points instead" lets you type coordinates for any two points.)
+3. **Member boxes (M)**, one tool for everything:
+   - **Draw:** drag on empty space along a member in the screenshot to drop a box over it, or
+     click to stamp a full-size box. While you draw, the box **snaps edge-to-edge** to the boxes
+     and footings around it (pink guide lines), squares up to vertical/horizontal/neighbours'
+     angles, and its start snaps onto a nearby corner or edge.
+   - **Edit:** click a box to select it and drag to move it (it snaps edge-to-edge again). Drag
+     the **square edge handles** to push/pull that edge, the **corner nodes** to reshape the box
+     (any shape is allowed as long as it still fits the size box; one that doesn't is shown in
+     red and refused), and the round handle to rotate it. Click empty space to deselect.
+   - Arrow keys nudge, R turns 90°, Ctrl+D copies, Delete removes, Shift while dragging turns
+     snapping off, right-drag or Space+drag pans.
 4. **Place bolts (B):** wherever two boxes touch, the app shows a green line (edges snapped
    together) or a green area (boxes overlapping, e.g. a diagonal lapped onto a chord's gusset).
    Click anywhere on it to put a bolt there; bolts snap to ¼" steps along the edge. Orange means
    the boxes touch but have no bolt yet, which rule 9.5.1 doesn't allow. **Auto-fill** puts N
    bolts on every connection that has none. A connection with **two or more bolts is rigid** (it
    can cantilever); the threshold is in Bridge settings.
-5. **Mark footing supports (F):** click the members (usually piers) that stand on a footing.
+5. **Check footing supports (F):** members whose bottom sits on a footing are found
+   automatically; click a member to mark or unmark it by hand.
 
 ### 2 · Site & zones
 The **2027 official layout** from the Site Plan Diagram is set up out of the box: west staging
@@ -99,8 +109,9 @@ fetch a tool, so give each side its own.
 The plan is an ordered list of steps:
 - **Install** a member or assembly (pick it up, carry it, hand it across the river if needed,
   place it, hold it, align, bolt).
-- **Assemble** an assembly of 2–3 members in the staging yard. Drag these steps earlier so
-  assemblies are made while other work goes on.
+- **Assemble** an assembly of 2–3 members right where they're staged (stage them ready to
+  connect; nothing is carried to make one). Drag these steps earlier so assemblies are made
+  while other work goes on.
 - **Place / remove a support** under a member.
 
 Drag steps (or use ↑ ↓) to reorder. Each step can name its carrier and fastener, or leave them
@@ -136,7 +147,8 @@ they can be updated for a new year.
 - **10.3.6** builders never cross the river (the river spans the whole site, so each builder
   stays on their side); members start in the east staging yard, so pieces for the west side are
   **handed across** by a builder on each bank.
-- **10.3.7** assemblies are 2–3 members, made only in a staging yard.
+- **10.3.7** assemblies are 2–3 members, made only in a staging yard, where their members are
+  staged.
 - **10.3.8** a builder outside the staging yard carries one member or assembly at a time (plus
   any tools and nuts & bolts).
 - **10.3.11** each constructed portion starts on a footing: a piece that touches neither a footing

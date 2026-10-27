@@ -27,7 +27,7 @@ export function createExampleProject() {
     const vertical = h > w;
     d.members.push({
       id, name, plane, u: (x0 + x1) / 2, v: (z0 + z1) / 2, angle: vertical ? 90 : 0,
-      len: vertical ? h : w, depth: vertical ? w : h, thick: t, z: 0, bearing: false, ...extra,
+      len: vertical ? h : w, depth: vertical ? w : h, thick: t, z: 0, ...extra,
     });
   };
 
@@ -38,15 +38,17 @@ export function createExampleProject() {
   const bcStart = tcStart + t, bcEnd = tcStart + 7 * tc - t; // between the piers
   const bc = (bcEnd - bcStart) / 7;
   for (let k = 0; k < 7; k++) box('m-BC' + (k + 1), 'A-BC' + (k + 1), 'A', bcStart + k * bc, botZ, bcStart + (k + 1) * bc, botZ + t);
-  box('m-P1', 'A-P1', 'A', tcStart, 0, tcStart + t, topZ - t, { bearing: true }); // west pier
-  box('m-P2', 'A-P2', 'A', bcEnd, 0, bcEnd + t, topZ - t, { bearing: true }); // east pier
+  // Piers stand on the footings (found automatically: their bottoms are at ground level over one).
+  box('m-P1', 'A-P1', 'A', tcStart, 0, tcStart + t, topZ - t); // west pier
+  box('m-P2', 'A-P2', 'A', bcEnd, 0, bcEnd + t, topZ - t); // east pier
+  d.footingSpan = bcEnd + t / 2 - (tcStart + t / 2); // between the pier centers
   for (let k = 1; k < 7; k++) {
     const x = tcStart + k * tc;
     box('m-V' + k, 'A-V' + k, 'A', x - t / 2, botZ + t, x + t / 2, topZ - t);
   }
   // Laterals at bottom-chord height, between the verticals, ends against the chords' inner faces.
   for (const [i, x] of [[1, 20], [2, 98.5], [3, 176], [4, 254]].map(([i, x]) => [i, x])) {
-    d.members.push({ id: 'm-L' + i, name: 'L-' + i, plane: 'L', u: x, v: d.trussSpacing / 2, angle: 90, len: d.trussSpacing - t, depth: t, thick: t, z: botZ + t / 2, bearing: false });
+    d.members.push({ id: 'm-L' + i, name: 'L-' + i, plane: 'L', u: x, v: d.trussSpacing / 2, angle: 90, len: d.trussSpacing - t, depth: t, thick: t, z: botZ + t / 2 });
   }
 
   const model0 = buildModel(p);

@@ -3,7 +3,7 @@
 // replays it.
 import { html, useEffect, useLayoutEffect, useState } from '../lib/preact.js';
 
-const DONE_KEY = 'bss.tourDone.v2'; // bump when the tour changes enough that everyone should see it again
+const DONE_KEY = 'bss.tourDone.v3'; // bump when the tour changes enough that everyone should see it again
 
 export const TOUR = [
   {
@@ -19,17 +19,17 @@ export const TOUR = [
   {
     tab: 'design', target: 'canvas',
     title: '1 · Your bridge, from screenshots',
-    body: 'Drop in a side-view screenshot from your CAD program (or paste it with Ctrl+V). Then place a box outline over each member: every box is at most the rule\'s 3\'-6" × 6" × 4" size box, and everything inside one box is one welded, rigid member.',
+    body: 'First you\'re asked how far apart your footing supports are. Then drop in a side-view screenshot from your CAD program (or paste it with Ctrl+V) and click the two footing supports on it: the screenshot is scaled so they land that far apart, on the site\'s footings.',
   },
   {
     tab: 'design', target: 'checklist',
     title: 'Follow the checklist',
-    body: 'Set the scale, place member boxes (drag along a member, or click to stamp a full-size box; they snap edge-to-edge), put bolts where boxes touch, and mark which members stand on a footing. Each step goes green when it\'s done. Then do the top view for the laterals.',
+    body: 'Place a box outline over each member (every box fits the rule\'s 3\'-6" × 6" × 4" size box, and everything inside one is one welded member), put bolts where boxes touch, and check which members stand on a footing (found automatically). Each step goes green when it\'s done. Then do the top view for the laterals.',
   },
   {
     tab: 'design', target: 'modes',
-    title: 'Markup tools',
-    body: 'These buttons match the checklist. In Select, drag a box to move it, drag its handles to shorten, narrow or rotate it (never bigger than the size box). Each tool has a keyboard shortcut (hover to see it), and Ctrl+Z undoes anything.',
+    title: 'One tool for boxes',
+    body: 'In Member boxes, drag on empty space to draw a box (it snaps edge-to-edge as you go), grab a box to move it, push/pull its square edge handles, drag its corner nodes to reshape it (it must still fit the size box), or use the round handle to rotate it. Each tool has a keyboard shortcut, and Ctrl+Z undoes anything.',
   },
   {
     tab: 'site', target: 'site-canvas',
@@ -64,7 +64,7 @@ export const TOUR = [
   {
     tab: 'sequence', target: 'assemblies',
     title: 'Assemblies and supports',
-    body: 'Group 2–3 members into assemblies that are bolted together in the staging yard and carried in as one piece, and add steps that place or remove temporary supports.',
+    body: 'Group 2–3 members into assemblies that are bolted together right where they\'re staged and carried in as one piece, and add steps that place or remove temporary supports.',
   },
   {
     tab: 'sequence', target: 'total',

@@ -124,7 +124,7 @@ function RulesPanel({ project }) {
     </div>
     <${NumField} label="Most builders (10.2.2)" value=${r.maxBuilders} min=${1} step="1" onChange=${(v) => set('maxBuilders', Math.round(v))} />
     <${NumField} label="Most members per assembly (10.3.7)" value=${r.maxAssemblyMembers} min=${2} step="1" onChange=${(v) => set('maxAssemblyMembers', Math.round(v))} />
-    <${SelectField} label="Assemblies are made in" value=${r.assemblyIn || 'staging'} options=${[['staging', 'Staging yards'], ['assembly', 'Ground-assembly areas']]} onChange=${(v) => set('assemblyIn', v)} />
+    <${SelectField} label="Assemblies are made in" value=${r.assemblyIn || 'staging'} options=${[['staging', 'Where members are staged'], ['assembly', 'Separate ground-assembly areas']]} onChange=${(v) => set('assemblyIn', v)} />
     <${NumField} label="Time limit (10.8.1)" unit="min" value=${r.timeLimitMin} min=${0} onChange=${(v) => set('timeLimitMin', v)} />
     <${NumField} label="Construction halted at (10.8.2)" unit="min" value=${r.haltMin} min=${0} onChange=${(v) => set('haltMin', v)} />
     <${NumField} label="Cost per builder-minute (6.2.5)" unit="$" value=${r.costPerBuilderMin} min=${0} onChange=${(v) => set('costPerBuilderMin', v)} />

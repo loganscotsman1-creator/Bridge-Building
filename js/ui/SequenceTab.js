@@ -218,7 +218,7 @@ export function SequenceTab({ project, model, sim }) {
       <//>
       <div data-tour="assemblies">
       <${Section} title=${`Assemblies (${plan.assemblies.length})`}>
-        <${Hint}>${maxAsm < Infinity ? `2 to ${maxAsm} members` : 'Members'} bolted together ${rules.assemblyIn === 'assembly' ? 'in a ground-assembly area' : 'in the staging yard'} after the clock starts, then carried and installed as one piece.<//>
+        <${Hint}>${maxAsm < Infinity ? `2 to ${maxAsm} members` : 'Members'} bolted together ${rules.assemblyIn === 'assembly' ? 'in a ground-assembly area' : 'right where they\'re staged (stage them ready to connect)'} after the clock starts, then carried and installed as one piece.<//>
         <button class="primary" onClick=${createAssembly}>+ New assembly</button>
         ${plan.assemblies.map((a) => html`<div class=${'asm ' + (editAsm === a.id ? 'editing' : '')} key=${a.id}>
           <div class="row">
@@ -226,7 +226,7 @@ export function SequenceTab({ project, model, sim }) {
             <button class="small" onClick=${() => setEditAsm(editAsm === a.id ? null : a.id)}>${editAsm === a.id ? 'Done' : 'Edit'}</button>
             <button class="small danger" onClick=${() => { deleteAssembly(a.id); if (editAsm === a.id) setEditAsm(null); }}>✕</button>
           </div>
-          ${asmZones.length > 1 && html`<${SelectField} label="Assembled in" value=${a.areaZoneId || ''}
+          ${rules.assemblyIn === 'assembly' && asmZones.length > 1 && html`<${SelectField} label="Assembled in" value=${a.areaZoneId || ''}
             options=${[['', '(where its members start)'], ...asmZones.map((z) => [z.id, z.name])]}
             onChange=${(v) => setPlan((pl) => { pl.assemblies.find((x) => x.id === a.id).areaZoneId = v || null; })} />`}
           <div class=${a.memberIds.length > maxAsm ? 'bad' : 'muted'}>${a.memberIds.map((id) => model.memberById.get(id)?.name).filter(Boolean).join(', ') || 'No members yet. Click Edit, then click members in the 3D view.'}

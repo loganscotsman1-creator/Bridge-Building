@@ -76,6 +76,7 @@ export function emptyProject() {
     images: {}, // imageId -> {url (data URL), w, h, name}
     design: {
       trussSpacing: 38, // centerline distance between truss A and truss B
+      footingSpan: null, // distance between the bridge's two footing supports (asked before markup)
       mirrorB: true,
       lbPerFt: 1.2,
       rigidBoltCount: 2, // a connection with at least this many bolts resists rotation (can cantilever)
@@ -83,8 +84,10 @@ export function emptyProject() {
       isoRefs: [], // [{imageId, caption}]
       // Box members. plane A/B: drawn on a side view (u = x along the span, v = z up).
       // plane L (laterals): drawn on the top view (u = x, v = y across), centered at height z.
-      // len × depth is the outline in its view; thick is the size out of the view.
-      members: [], // {id, name, plane, u, v, angle (deg), len, depth, thick, z?, bearing, lbPerFt?, color?}
+      // len × depth is the outline in its view; thick is the size out of the view. A reshaped
+      // member also has `corners` (4 points), which then define its outline. `bearing` is
+      // true/false when set by hand, or missing to detect it from the footings.
+      members: [], // {id, name, plane, u, v, angle (deg), len, depth, thick, corners?, z?, bearing?, lbPerFt?, color?}
       bolts: [], // {id, plane, a, b, u, v}: a bolt through members a and b, at (u, v) on that plane's view
     },
     site: site2027(),
@@ -111,7 +114,7 @@ export function normalizeProject(p) {
   for (const k of Object.keys(base.design.views)) out.design.views[k] = { ...emptyView(), ...out.design.views[k] };
   out.site = normalizeSite(p.site || base.site);
   if ((p.version || 1) < 2) upgradeV1(out, p);
-  out.design.members = (out.design.members || []).map((m) => ({ bearing: false, angle: 0, z: 0, ...m }));
+  out.design.members = (out.design.members || []).map((m) => ({ angle: 0, z: 0, ...m }));
   out.timing = { ...DEFAULT_TIMING, ...(p.timing || {}) };
   out.images = p.images || {};
   out.tools = (p.tools || []).map((t) => ({ kind: 'other', count: 1, boltTime: 4, placeTime: 6, removeTime: 5, start: { x: 0, y: 0 }, notes: '', ...t }));

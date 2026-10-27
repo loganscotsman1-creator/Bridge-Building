@@ -105,6 +105,9 @@ ol.checklist .tick { flex: none; width: 22px; height: 22px; border-radius: 50%; 
 ol.checklist .what { flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 ol.checklist .autofill input { width: 48px; }
 input.tiny { width: 58px; }
+.dropcard.setup { max-width: 520px; }
+.row.center { justify-content: center; margin: 10px 0; }
+svg.canvas.mode-box { cursor: crosshair; }
 .total .cost { color: #334155; font-weight: 600; }
 text.halo { paint-order: stroke; stroke: #fff; stroke-width: 3px; }
 

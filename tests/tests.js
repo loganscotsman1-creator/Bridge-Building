@@ -1,5 +1,5 @@
 // Browser test runner: open tests/index.html (through a local server) and read the results.
-import { buildModel, calibFromPoints, contact2d, boxCorners, imageToView, viewToImage } from '../js/model/geometry.js';
+import { buildModel, calibFromPoints, contact2d, boxCorners, footingPoints, imageToView, isConvex, polyFits, rectOfPoly, viewToImage } from '../js/model/geometry.js';
 import { computeStability } from '../js/sim/stability.js';
 import { SiteGrid } from '../js/sim/grid.js';
 import { simulate } from '../js/sim/simulate.js';
@@ -7,7 +7,7 @@ import { createExampleProject } from '../js/model/example.js';
 import { emptyProject, normalizeProject } from '../js/model/schema.js';
 import { site2027, RULES_2027 } from '../js/model/rules2027.js';
 import { autoBolts, newBox } from '../js/model/edit.js';
-import { snapBox, snapSize } from '../js/ui/snap.js';
+import { snapBox, snapPoint, snapSize } from '../js/ui/snap.js';
 
 const results = [];
 async function test(name, fn) {
@@ -52,6 +52,46 @@ await test('resizing snaps the moving end to a neighbouring edge', () => {
   const b = box(10, 0, 20, 2); // right end at 20, back end fixed at 0
   const size = snapSize(b, 'len', 1, 24.6, [target], 0.6);
   assert(near(size, 25, 1e-6), 'size ' + size);
+});
+
+await test('a reshaped box must still fit the size box', () => {
+  const lim = { len: 42, depth: 6, thick: 4 };
+  const trapezoid = [[0, 0], [40, 0], [36, 5], [4, 5]];
+  assert(polyFits(trapezoid, lim), 'trapezoid fits');
+  assert(!polyFits([[0, 0], [40, 0], [40, 7], [0, 7]], lim), '7 in deep does not');
+  const r = rectOfPoly(trapezoid);
+  assert(near(r.len, 40, 1e-6) && near(r.depth, 5, 1e-6), JSON.stringify(r));
+  assert(!isConvex([[0, 0], [10, 0], [2, 2], [10, 4], [0, 4]]), 'dented shape is not convex');
+  // A long thin shape on a diagonal still fits when turned.
+  const diag = [[0, 0], [29, 29], [27, 31], [-2, 2]];
+  assert(polyFits(diag, lim), 'diagonal box fits');
+});
+
+await test('snapping a point catches corners first, then edges', () => {
+  const t = [[[0, 0], [10, 0], [10, 2], [0, 2]]];
+  const c = snapPoint([10.3, 2.2], t, 0.6);
+  assert(c.kind === 'corner' && c.p[0] === 10 && c.p[1] === 2, JSON.stringify(c));
+  const e = snapPoint([5, 2.4], t, 0.6);
+  assert(e.kind === 'edge' && near(e.p[1], 2, 1e-9), JSON.stringify(e));
+  assert(snapPoint([5, 4], t, 0.6).kind === null);
+});
+
+await test('footing supports are centered on the 2027 footings at the chosen distance', () => {
+  const p = emptyProject();
+  const def = footingPoints(p);
+  assert(near(def.west, 6) && near(def.east, 270) && near(def.span, 264), JSON.stringify(def));
+  const wide = footingPoints(p, 270);
+  assert(near(wide.west, 3) && near(wide.east, 273), JSON.stringify(wide));
+});
+
+await test('members standing on a footing are found automatically', () => {
+  const m = buildModel(normalizeProject(createExampleProject()));
+  const piers = m.members.filter((x) => /P\d/.test(x.name));
+  assert(piers.length === 4 && piers.every((x) => x.bearing && x.autoBearing), piers.map((x) => x.name + ':' + x.bearing).join(','));
+  assert(m.members.filter((x) => x.bearing).length === 4, 'only the piers');
+  const p = normalizeProject(createExampleProject());
+  p.design.members.find((x) => x.id === 'm-P1').bearing = false;
+  assert(!buildModel(p).memberById.get('m-P1').bearing, 'a hand setting wins');
 });
 
 await test('new boxes start at the full size box and never exceed it', () => {
@@ -188,6 +228,16 @@ await test('example project builds completely with no errors', () => {
   assert(r.cost > 0, 'construction cost');
   window.exampleResult = r;
   window.exampleProject = p;
+});
+
+await test('assemblies are bolted together where their members are staged (nothing carried first)', () => {
+  const r = window.exampleResult;
+  for (const id of ['m-P1', 'm-TC1', 'm-BC1']) {
+    const evs = r.tracks.get(id).map((e) => e.kind + (e.assembled ? '*' : ''));
+    const firstCarry = evs.indexOf('carried'), assembled = evs.indexOf('ground*');
+    assert(assembled > 0 && (firstCarry === -1 || firstCarry > assembled), id + ': ' + evs.join(' → '));
+  }
+  assert(r.segments.some((s) => s.kind === 'assemble'), 'there is assembly work');
 });
 
 await test('construction cost follows the 2027 formula', () => {

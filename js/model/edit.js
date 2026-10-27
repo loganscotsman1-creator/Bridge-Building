@@ -3,7 +3,7 @@
 // inside updateProject(p => ...).
 import { MIRROR_SUFFIX, uid } from './ids.js';
 import { boxLimits } from './schema.js';
-import { polyCentroid } from './geometry.js';
+import { polyCentroid, rectOfPoly } from './geometry.js';
 
 const baseId = (id) => (id.endsWith(MIRROR_SUFFIX) ? id.slice(0, -MIRROR_SUFFIX.length) : id);
 
@@ -41,15 +41,24 @@ export function nextMemberName(project, plane) {
 // A new box member at its full allowed size (it can be made smaller, never bigger).
 export function newBox(project, plane, u, v, angle = 0, extra = {}) {
   const lim = boxLimits(project);
-  return { id: uid('m'), name: nextMemberName(project, plane), plane, u, v, angle, len: lim.len, depth: lim.depth, thick: lim.thick, z: 0, bearing: false, ...extra };
+  return { id: uid('m'), name: nextMemberName(project, plane), plane, u, v, angle, len: lim.len, depth: lim.depth, thick: lim.thick, z: 0, ...extra };
 }
 
 export function duplicateMember(project, memberId, du = 0, dv = 0) {
   const m = project.design.members.find((x) => x.id === memberId);
   if (!m) return null;
   const copy = { ...m, id: uid('m'), name: nextMemberName(project, m.plane), u: m.u + du, v: m.v + dv };
+  if (m.corners) copy.corners = m.corners.map(([u, v]) => [u + du, v + dv]);
   project.design.members.push(copy);
   return copy.id;
+}
+
+// Turn a reshaped member back into a plain rectangle (its tightest enclosing rectangle).
+export function squareUp(project, m) {
+  if (!m.corners) return m;
+  Object.assign(m, rectOfPoly(m.corners));
+  delete m.corners;
+  return clampBox(project, m);
 }
 
 // Keep a box within the rule limits (only ever shrinks).

@@ -5,10 +5,11 @@ import { html, useState } from '../lib/preact.js';
 import { updateProject } from '../model/store.js';
 import { uid } from '../model/ids.js';
 import { boxLimits } from '../model/schema.js';
-import { autoBolts, clampBox, duplicateMember, enableMirror, materializeMirror, removeBolt, removeMember } from '../model/edit.js';
+import { autoBolts, clampBox, duplicateMember, enableMirror, materializeMirror, removeBolt, removeMember, squareUp } from '../model/edit.js';
+import { footingPoints } from '../model/geometry.js';
 import { imageFileToData, pickFile } from '../model/storage.js';
 import { jointLabel } from '../model/plan.js';
-import { Annotator, PLANE_COLORS, loadViewImage } from './Annotator.js';
+import { Annotator, PLANE_COLORS, ftIn, loadViewImage } from './Annotator.js';
 import { IsoView } from './IsoView.js';
 import { Check, Hint, NumField, Section, TextField } from './common.js';
 
@@ -18,7 +19,7 @@ export function DesignTab({ project, model }) {
   const d = project.design;
   const [view, setView] = useState('sideA');
   const [sel, setSel] = useState(null);
-  const [mode, setMode] = useState('select');
+  const [mode, setMode] = useState('box');
   const views = [
     ['sideA', d.mirrorB ? 'Side view (both trusses)' : 'Side view · truss A'],
     ...(d.mirrorB ? [] : [['sideB', 'Side view · truss B']]),
@@ -29,7 +30,7 @@ export function DesignTab({ project, model }) {
   const current = views.some((v) => v[0] === view) ? view : 'sideA';
   const bad = model.members.filter((m) => !m.box.fits).length;
   const isMarkup = current === 'sideA' || current === 'sideB' || current === 'top';
-  const switchView = (k) => { setView(k); setSel(null); setMode('select'); };
+  const switchView = (k) => { setView(k); setSel(null); setMode('box'); };
 
   return html`<div class="tab-layout">
     <div class="main">
@@ -83,16 +84,16 @@ function Checklist({ project, model, viewKey, mode, setMode }) {
           await loadViewImage(project, model, viewKey, f);
           setMode('calibrate');
         }}>${view.imageId ? 'Replace' : 'Choose file'}</button>`)}
-      ${step(2, !!view.scaled, 'Set the scale', view.scaled ? 'Done. Redo it any time.' : 'Click two known points (e.g. the footings\' outer edges) and type their positions.', 'calibrate')}
+      ${step(2, !!view.scaled, 'Set the scale', view.scaled ? 'Done. Redo it any time.' : isTop ? 'Click truss A at the west and east footing supports.' : `Click the west and east footing supports; they're placed ${ftIn(footingPoints(project).span)} apart.`, 'calibrate')}
       ${step(3, members.length > 0 && !tooBig.length, isTop ? 'Place lateral boxes' : 'Place member boxes',
-        html`${members.length} member${members.length === 1 ? '' : 's'}. Each box is one welded member, at most ${lim.len} × ${lim.depth} × ${lim.thick} in.${tooBig.length ? html` <b class="bad">${tooBig.length} too big.</b>` : ''}`, 'box')}
+        html`${members.length} member${members.length === 1 ? '' : 's'}. Each box is one welded member that fits ${lim.len} × ${lim.depth} × ${lim.thick} in. Draw, move, push/pull edges and drag corners all in this one tool.${tooBig.length ? html` <b class="bad">${tooBig.length} too big.</b>` : ''}`, 'box')}
       ${step(4, contacts.length > 0 && !unbolted.length && !orphans.length, 'Place the bolts',
         html`${contacts.length} place${contacts.length === 1 ? '' : 's'} where boxes touch, ${bolts.length} bolts.${unbolted.length ? html` <b class="bad">${unbolted.length} touching with no bolt.</b>` : ''}${orphans.length ? html` <b class="bad">${orphans.length} bolt${orphans.length === 1 ? '' : 's'} off a connection.</b>` : ''}`, 'bolt',
         html`<div class="row autofill"><span class="muted">Auto-fill</span>
           <input type="number" min="1" max="6" step="1" value=${perEdge} onInput=${(e) => setPerEdge(Math.max(1, parseInt(e.target.value) || 1))} />
           <span class="muted">per unbolted connection</span>
           <button class="small" disabled=${!unbolted.length} onClick=${() => updateProject((p) => { autoBolts(p, model, plane, perEdge); })}>Fill</button></div>`)}
-      ${!isTop && step(5, bearings >= 2, 'Mark footing supports', `${bearings} member${bearings === 1 ? '' : 's'} stand on a footing.`, 'bearing')}
+      ${!isTop && step(5, bearings >= 2, 'Check footing supports', `${bearings} member${bearings === 1 ? '' : 's'} stand on a footing (found automatically when a box's bottom sits on one; click to change).`, 'bearing')}
     </ol>
     ${viewKey === 'sideA' && d.mirrorB && html`<${Hint}>Truss B is copied from this view as a mirror image. If your trusses differ, untick "Truss B mirrors truss A" in Bridge settings below and mark up a second side view.<//>`}
     ${isTop && html`<${Hint}>The trusses show up here automatically from the side view. Place only the laterals: pick their height, then drag each lateral from truss A to truss B so its ends snap against the trusses.<//>`}
@@ -111,6 +112,9 @@ function BridgeSettings({ project, model, open }) {
           updateProject((p) => enableMirror(p));
         } else updateProject((p) => materializeMirror(p, model));
       }} />
+    <${NumField} label=${'Footing supports apart (' + ftIn(footingPoints(project).span) + ')'} unit="in" value=${footingPoints(project).span} min=${12}
+      title="Distance between where the bridge stands on the two footings. Clicking the footings on a screenshot places them this far apart."
+      onChange=${(v) => set((x) => { x.footingSpan = v; }, 'span')} />
     <${NumField} label="Truss spacing" unit="in" value=${d.trussSpacing} min=${1} title="Center-to-center distance between truss A and truss B"
       onChange=${(v) => set((x) => { x.trussSpacing = v; }, 'spacing')} />
     <${NumField} label="Default weight" unit="lb/ft" value=${d.lbPerFt} min=${0} onChange=${(v) => set((x) => { x.lbPerFt = v; }, 'lb')} />
@@ -136,20 +140,25 @@ function SelectionPanel({ project, model, sel, setSel }) {
       <tr><td>Touches</td><td>${joints.length ? joints.map((c) => html`<div class=${c.bolts ? '' : 'bad'}>${jointLabel(model, c).replace(m.name + ' ↔ ', '').replace(' ↔ ' + m.name, '')} · ${c.bolts} bolt${c.bolts === 1 ? '' : 's'}</div>`) : 'nothing yet'}</td></tr>
     </table>`;
     if (!raw) return html`<${Section} title=${'Member · ' + m.name}>${info}<${Hint}>Mirror copy of ${m.mirrorOf ? model.memberById.get(m.mirrorOf)?.name : 'a truss A member'}. Edit that one instead.<//><//>`;
-    const set = (patch) => updateProject((p) => { const x = p.design.members.find((q) => q.id === sel.id); Object.assign(x, patch); clampBox(p, x); }, { key: 'mem' + sel.id + Object.keys(patch)[0] });
+    const set = (patch) => updateProject((p) => { const x = p.design.members.find((q) => q.id === sel.id); Object.assign(x, patch); if (!x.corners) clampBox(p, x); }, { key: 'mem' + sel.id + Object.keys(patch)[0] });
     return html`<${Section} title=${'Member · ' + m.name}>
       <${TextField} label="Name" value=${raw.name} onChange=${(v) => set({ name: v })} />
       ${info}
-      <${NumField} label=${'Length (max ' + lim.len + ')'} unit="in" value=${raw.len} min=${0.5} onChange=${(v) => set({ len: v })} />
-      <${NumField} label=${'Depth (max ' + lim.depth + ')'} unit="in" value=${raw.depth} min=${0.25} onChange=${(v) => set({ depth: v })} />
-      <${NumField} label=${'Thickness (max ' + lim.thick + ')'} unit="in" value=${raw.thick} min=${0.125} title="Size out of the view" onChange=${(v) => set({ thick: v })} />
-      <${NumField} label="Angle" unit="°" value=${raw.angle} onChange=${(v) => set({ angle: v })} />
-      <div class="row2">
-        <${NumField} label="Center x" unit="in" value=${raw.u} onChange=${(v) => set({ u: v })} />
-        <${NumField} label=${raw.plane === 'L' ? 'Center y' : 'Center z'} unit="in" value=${raw.v} onChange=${(v) => set({ v })} />
-      </div>
+      ${raw.corners ? html`
+        <${Hint}>Reshaped by its corners: ${m.len.toFixed(2)} × ${m.depth.toFixed(2)} in overall.<//>
+        <button onClick=${() => updateProject((p) => squareUp(p, p.design.members.find((q) => q.id === sel.id)))}>Make rectangular again</button>`
+      : html`
+        <${NumField} label=${'Length (max ' + lim.len + ')'} unit="in" value=${raw.len} min=${0.5} onChange=${(v) => set({ len: v })} />
+        <${NumField} label=${'Depth (max ' + lim.depth + ')'} unit="in" value=${raw.depth} min=${0.25} onChange=${(v) => set({ depth: v })} />
+        <${NumField} label="Angle" unit="°" value=${raw.angle} onChange=${(v) => set({ angle: v })} />
+        <div class="row2">
+          <${NumField} label="Center x" unit="in" value=${raw.u} onChange=${(v) => set({ u: v })} />
+          <${NumField} label=${raw.plane === 'L' ? 'Center y' : 'Center z'} unit="in" value=${raw.v} onChange=${(v) => set({ v })} />
+        </div>`}
+      <${NumField} label=${'Thickness (max ' + lim.thick + ')'} unit="in" value=${raw.thick} min=${0.125} title="Size out of the view" onChange=${(v) => set({ thick: Math.min(lim.thick, v) })} />
       ${raw.plane === 'L' && html`<${NumField} label="Height (z)" unit="in" value=${raw.z} onChange=${(v) => set({ z: v })} />`}
-      ${raw.plane !== 'L' && html`<${Check} label="Stands on a footing" checked=${raw.bearing} onChange=${(v) => set({ bearing: v })} />`}
+      ${raw.plane !== 'L' && html`<div class="row"><${Check} label=${'Stands on a footing' + (m.autoBearing ? ' (automatic)' : '')} checked=${m.bearing} onChange=${(v) => set({ bearing: v })} />
+        ${!m.autoBearing && html`<button class="small" onClick=${() => updateProject((p) => { delete p.design.members.find((q) => q.id === sel.id).bearing; })}>Detect automatically</button>`}</div>`}
       <${NumField} label="Weight" unit="lb/ft" value=${raw.lbPerFt ?? d.lbPerFt} min=${0} onChange=${(v) => set({ lbPerFt: v })} />
       <label class="field"><span class="lbl">Color</span><span class="inp"><input type="color" value=${raw.color || PLANE_COLORS[raw.plane]} onInput=${(e) => set({ color: e.target.value })} /></span></label>
       <div class="row">

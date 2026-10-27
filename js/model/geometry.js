@@ -117,6 +117,86 @@ export function contact2d(P, Q) {
   return best && { kind: 'edge', seg: best.seg };
 }
 
+// ---------- shaped members ----------
+export function memberPoly(m) {
+  return m.corners ? m.corners.map((p) => [p[0], p[1]]) : boxCorners(m);
+}
+
+// Extents of a polygon measured along angle `deg` and across it.
+function extentsAt(poly, deg) {
+  const a = rad(deg), c = Math.cos(a), s = Math.sin(a);
+  let a0 = Infinity, a1 = -Infinity, b0 = Infinity, b1 = -Infinity;
+  for (const [x, y] of poly) {
+    const p = x * c + y * s, q = -x * s + y * c;
+    if (p < a0) a0 = p; if (p > a1) a1 = p;
+    if (q < b0) b0 = q; if (q > b1) b1 = q;
+  }
+  return { len: a1 - a0, depth: b1 - b0, a0, a1, b0, b1, c, s };
+}
+
+function candidateAngles(poly) {
+  const out = [];
+  for (const [p, q] of polyEdges(poly)) if (Math.hypot(q[0] - p[0], q[1] - p[1]) > 1e-6) out.push((Math.atan2(q[1] - p[1], q[0] - p[0]) * 180) / Math.PI);
+  for (let a = 0; a < 180; a += 1) out.push(a);
+  return out;
+}
+
+// Tightest rectangle around a shape: {u, v, angle, len, depth} with len ≥ depth.
+export function rectOfPoly(poly) {
+  let best = null;
+  for (const ang of candidateAngles(poly)) {
+    const e = extentsAt(poly, ang);
+    const area = e.len * e.depth;
+    if (!best || area < best.area - 1e-9) best = { area, ang, e };
+  }
+  let { ang, e } = best;
+  if (e.depth > e.len) { ang += 90; e = extentsAt(poly, ang); }
+  const mu = (e.a0 + e.a1) / 2, mv = (e.b0 + e.b1) / 2;
+  return { u: mu * e.c - mv * e.s, v: mu * e.s + mv * e.c, angle: ((ang % 360) + 360) % 360, len: e.len, depth: e.depth };
+}
+
+// Does the shape fit inside a len × depth rectangle in some orientation?
+export function polyFits(poly, lim) {
+  for (const ang of candidateAngles(poly)) {
+    const e = extentsAt(poly, ang);
+    if ((e.len <= lim.len + 1e-6 && e.depth <= lim.depth + 1e-6) || (e.depth <= lim.len + 1e-6 && e.len <= lim.depth + 1e-6)) return true;
+  }
+  return false;
+}
+
+export function isConvex(poly) {
+  let sign = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length], c = poly[(i + 2) % poly.length];
+    const z = cross2(sub2(b, a), sub2(c, b));
+    if (Math.abs(z) < 1e-9) continue;
+    if (sign && Math.sign(z) !== sign) return false;
+    sign = Math.sign(z);
+  }
+  return true;
+}
+
+// ---------- footings ----------
+// Footings in bridge x, from the site layout ([x0, x1] pairs, west first).
+export function footingRanges(project) {
+  const site = project.site;
+  const out = [];
+  for (const z of site.zones || []) {
+    if (z.type !== 'footing') continue;
+    const xs = [[z.x, z.y], [z.x + z.w, z.y], [z.x, z.y + z.h], [z.x + z.w, z.y + z.h]].map(([x, y]) => siteToBridge(site, x, y).x);
+    out.push([Math.min(...xs), Math.max(...xs)]);
+  }
+  return out.sort((a, b) => a[0] - b[0]);
+}
+
+// Where the bridge's two footing supports sit along x, `span` apart and centered on the footings.
+export function footingPoints(project, span = project.design.footingSpan) {
+  const f = footingRanges(project);
+  const mid = f.length >= 2 ? ((f[0][0] + f[0][1]) / 2 + (f[f.length - 1][0] + f[f.length - 1][1]) / 2) / 2 : (span || 264) / 2;
+  const s = span || (f.length >= 2 ? (f[f.length - 1][0] + f[f.length - 1][1]) / 2 - (f[0][0] + f[0][1]) / 2 : 264);
+  return { west: mid - s / 2, east: mid + s / 2, span: s };
+}
+
 // ---------- model ----------
 function mirrorName(name) {
   if (/^A[-_ ]/.test(name)) return 'B' + name.slice(1);
@@ -138,8 +218,13 @@ export function buildModel(project) {
     if (d.mirrorB && m.plane === 'A') raw.push({ ...m, id: m.id + MIRROR_SUFFIX, name: mirrorName(m.name), plane: 'B', mirrorOf: m.id });
   }
 
-  const members = raw.map((m) => {
-    const poly = boxCorners(m);
+  const footings = footingRanges(project);
+  const members = raw.map((src) => {
+    // A shaped member stores its own corners; otherwise it's the rectangle (u, v, angle, len, depth).
+    // Either way, len/depth/angle below describe its tightest enclosing rectangle.
+    const poly = memberPoly(src);
+    const rect = src.corners ? rectOfPoly(poly) : null;
+    const m = rect ? { ...src, ...rect } : src;
     const planeY = m.plane === 'A' ? 0 : m.plane === 'B' ? S : null;
     const to3 = m.plane === 'L' ? ([u, v]) => [u, v, m.z || 0] : ([u, v]) => [u, planeY, v];
     const corners3 = poly.map(to3);
@@ -161,9 +246,12 @@ export function buildModel(project) {
     const { d: dir } = boxAxes(m);
     const ends = [to3([m.u - dir[0] * m.len / 2, m.v - dir[1] * m.len / 2]), to3([m.u + dir[0] * m.len / 2, m.v + dir[1] * m.len / 2])];
     const dims = [m.len, m.depth, m.thick];
-    const fits = m.len <= lim.len + 1e-6 && m.depth <= lim.depth + 1e-6 && m.thick <= lim.thick + 1e-6;
+    const fits = polyFits(poly, lim) && m.thick <= lim.thick + 1e-6;
     const lbPerFt = m.lbPerFt ?? d.lbPerFt;
-    return { ...m, poly, corners3, footprint, zRange, centroid, ends, bearingPoint, length: m.len, weight: (m.len / 12) * lbPerFt, box: { dims, fits } };
+    // Stands on a footing: set by hand, or (if never set) its lowest point is at ground level over one.
+    const autoBearing = m.plane !== 'L' && Math.abs(low[2]) <= 0.5 && footings.some(([x0, x1]) => bearingPoint[0] >= x0 - 0.5 && bearingPoint[0] <= x1 + 0.5);
+    const bearing = m.bearing == null ? autoBearing : !!m.bearing;
+    return { ...m, bearing, autoBearing: m.bearing == null, poly, corners3, footprint, zRange, centroid, ends, bearingPoint, length: m.len, weight: (m.len / 12) * lbPerFt, box: { dims, fits } };
   });
   const memberById = new Map(members.map((m) => [m.id, m]));
 
