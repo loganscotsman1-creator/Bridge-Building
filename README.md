@@ -36,6 +36,7 @@ member**. Bridges are usually two trusses joined by laterals, so you mark up a f
 | **Top view · laterals** | A plan view. The trusses appear on it automatically; you only place the laterals between them. |
 | **Isometric screenshots** | One or more for reference, shown next to the 3D view built from your markup. If they don't match, a box is placed wrong. |
 | **Member list** | Every member's size, weight, connections and bolts. |
+| **Connections** | Every place two members touch, each with its own align time and time per bolt if the defaults don't fit (leave empty for the default). Truss B copies use truss A's times. |
 
 Before anything else, tab 1 asks **how far apart your footing supports are** (where the bridge
 stands on the two footings, e.g. pier centers; 22'-0" by default). Your supports are centered on
@@ -71,7 +72,10 @@ Each view then has a checklist on the right that walks you through it:
    the boxes touch but have no bolt yet, which rule 9.5.1 doesn't allow. **Auto-fill** puts N
    bolts on every connection that has none. Where three or more boxes overlap, one click puts a
    single bolt through all of them (marked ×3, ×4…); it holds every connection in the stack and
-   is fastened once. A connection with **two or more bolts is rigid** (it
+   is fastened once. Select it to choose **when it goes in**: as soon as two of the members are
+   joined, once all of them are in place, or when a particular member is placed. Until then it
+   doesn't hold anything, so a piece may have to be held longer. A selected bolt also shows the
+   time fields of each connection it's on. A connection with **two or more bolts is rigid** (it
    can cantilever); the threshold is in Bridge settings.
 5. **Check footing supports (F):** members whose bottom sits on a footing are found
    automatically; click a member to mark or unmark it by hand.
@@ -109,7 +113,8 @@ fetch a tool, so give each side its own.
     assembler* only get those jobs when the program assigns work automatically.
   - *May be in* can limit a builder to certain zones.
 - **Timing:** walking and carrying speed, pick-up / hand-off time, align time per connection,
-  hand-bolt time, time to add a member to an assembly, gear-up time, the slowdown when a carrier
+  hand-bolt time, **align and per-bolt times in the staging yard** (for making assemblies, when
+  they differ from the bridge), a flat time to add a member to an assembly, gear-up time, the slowdown when a carrier
   fastens their own piece one-handed, reach, and **hand-off distance** (how far apart two builders
   can stand and still pass a piece across the river).
 

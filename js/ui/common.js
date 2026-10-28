@@ -3,18 +3,20 @@ import { html, useEffect, useRef, useState } from '../lib/preact.js';
 
 const fmtNum = (v) => (v == null || Number.isNaN(v) ? '' : String(Math.round(v * 1000) / 1000));
 
-export function NumField({ label, value, onChange, step = 'any', min, max, unit, title, disabled }) {
+// `optional`: the box may be left empty (onChange(null)), showing `placeholder` instead.
+export function NumField({ label, value, onChange, step = 'any', min, max, unit, title, disabled, optional, placeholder }) {
   const [text, setText] = useState(fmtNum(value));
   const focused = useRef(false);
   useEffect(() => { if (!focused.current) setText(fmtNum(value)); }, [value]);
   return html`<label class="field" title=${title}>
     <span class="lbl">${label}</span>
     <span class="inp">
-      <input type="number" step=${step} min=${min} max=${max} value=${text} disabled=${disabled}
+      <input type="number" step=${step} min=${min} max=${max} value=${text} disabled=${disabled} placeholder=${placeholder}
         onFocus=${() => { focused.current = true; }}
         onBlur=${() => { focused.current = false; setText(fmtNum(value)); }}
         onInput=${(e) => {
           setText(e.target.value);
+          if (optional && e.target.value.trim() === '') { onChange(null); return; }
           const n = parseFloat(e.target.value);
           if (Number.isFinite(n)) onChange(min != null ? Math.max(min, n) : n);
         }} />

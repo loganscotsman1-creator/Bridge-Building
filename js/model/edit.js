@@ -89,8 +89,13 @@ export function materializeMirror(project, model) {
   }
   for (const b of model.bolts) {
     if (b.plane === 'B' && b.id.endsWith(MIRROR_SUFFIX) && !d.bolts.some((x) => x.id === b.id)) {
-      d.bolts.push({ id: b.id, plane: 'B', a: b.a, b: b.b, ...(b.more ? { more: b.more } : {}), u: b.u, v: b.v });
+      d.bolts.push({ id: b.id, plane: 'B', a: b.a, b: b.b, ...(b.more ? { more: b.more } : {}), ...(b.when ? { when: b.when } : {}), u: b.u, v: b.v });
     }
+  }
+  // Truss B connections keep the times they had from truss A.
+  d.connections = d.connections || {};
+  for (const c of model.contacts) {
+    if (c.timeKey !== c.id && d.connections[c.timeKey] && !d.connections[c.id]) d.connections[c.id] = { ...d.connections[c.timeKey] };
   }
   d.mirrorB = false;
 }

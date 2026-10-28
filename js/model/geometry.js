@@ -13,6 +13,14 @@ const BOLT_TOL = 0.35; // in: a bolt this close to a connection belongs to it
 // Every member a bolt passes through: a and b, plus any more stacked where boxes overlap.
 export const boltMembers = (b) => [b.a, b.b, ...(b.more || [])];
 
+// The truss A connection a mirrored truss B connection was copied from (or the id itself).
+export function mirrorSourceJointId(id) {
+  const m = /^j:(.*)\|(.*):B$/.exec(id);
+  if (!m || !m[1].endsWith(MIRROR_SUFFIX) || !m[2].endsWith(MIRROR_SUFFIX)) return id;
+  const a = m[1].slice(0, -MIRROR_SUFFIX.length), b = m[2].slice(0, -MIRROR_SUFFIX.length);
+  return 'j:' + pairKey(a, b) + ':A';
+}
+
 // ---------- 2D helpers (points are [u, v]) ----------
 const rad = (deg) => (deg * Math.PI) / 180;
 const dot2 = (a, b) => a[0] * b[0] + a[1] * b[1];
@@ -328,6 +336,7 @@ export function buildModel(project) {
     if (d.mirrorB && b.plane === 'A') {
       const mb = { ...b, id: b.id + MIRROR_SUFFIX, plane: 'B', a: b.a + MIRROR_SUFFIX, b: b.b + MIRROR_SUFFIX };
       if (b.more) mb.more = b.more.map((id) => id + MIRROR_SUFFIX);
+      if (b.when && b.when !== 'first' && b.when !== 'all') mb.when = b.when + MIRROR_SUFFIX;
       rawBolts.push(mb);
     }
   }
@@ -348,10 +357,17 @@ export function buildModel(project) {
     const pos = b.plane === 'L' ? [b.u, b.v, joint ? joint.pos[2] : 0] : [b.u, b.plane === 'A' ? 0 : S, b.v];
     return { ...b, memberIds: ids, jointId: joint ? joint.id : null, jointIds: joints.map((c) => c.id), pos };
   });
+  // Time overrides for each connection; truss B copies use truss A's.
+  const times = d.connections || {};
   for (const c of contacts) {
     const on = bolts.filter((b) => b.jointIds.includes(c.id));
     c.bolts = on.length;
     c.boltIds = on.map((b) => b.id);
+    const src = d.mirrorB ? mirrorSourceJointId(c.id) : c.id;
+    const t = times[c.id] || times[src] || {};
+    c.alignTime = t.alignTime ?? null;
+    c.boltTime = t.boltTime ?? null;
+    c.timeKey = src; // where an edit to this connection's times is stored
   }
 
   return { members, memberById, contacts, joints: contacts, bolts, limits: lim };

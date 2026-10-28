@@ -52,6 +52,8 @@ export const DEFAULT_TIMING = {
   alignTime: 6, // s to line up one bolted connection
   boltTimeHand: 12, // s per bolt with no fastening tool (insert + hand tighten)
   assemblyJoinTime: 0, // s to add one member to an assembly; 0 = align time + bolt times
+  assemblyAlignTime: 0, // s to line up one connection in the staging yard; 0 = same as alignTime
+  assemblyBoltTime: 0, // s per bolt in the staging yard; 0 = the builder's fastening tool time
   gearUpTime: 2, // s to grab one tool or the nuts & bolts at the start
   soloMultiplier: 1.5, // align/fasten time multiplier when the carrier fastens while holding
   maxReach: 40, // in a builder can reach from where they stand
@@ -88,7 +90,13 @@ export function emptyProject() {
       // member also has `corners` (4 points), which then define its outline. `bearing` is
       // true/false when set by hand, or missing to detect it from the footings.
       members: [], // {id, name, plane, u, v, angle (deg), len, depth, thick, corners?, z?, bearing?, lbPerFt?, color?}
-      bolts: [], // {id, plane, a, b, u, v}: a bolt through members a and b, at (u, v) on that plane's view
+      // A bolt through members a and b (plus `more` where 3+ boxes overlap), at (u, v) on that
+      // plane's view. `when` (3+ members only): 'first' (default, as soon as two are joined),
+      // 'all' (once every member is in place), or a member id (once that member is placed).
+      bolts: [], // {id, plane, a, b, more?, when?, u, v}
+      // Per-connection time overrides, by connection id: {alignTime?, boltTime?} (s; missing =
+      // the default for where it's made: staging yard or bridge).
+      connections: {},
     },
     site: site2027(),
     tools: [], // {id, name, kind, count, boltTime, placeTime, removeTime, start: {x, y}, notes}

@@ -241,6 +241,56 @@ await test('assemblies are bolted together where their members are staged (nothi
   assert(r.segments.some((s) => s.kind === 'assemble'), 'there is assembly work');
 });
 
+await test('staging-yard bolt times and per-connection overrides change only what they should', () => {
+  const base = normalizeProject(createExampleProject());
+  const asmTime = (r) => r.segments.filter((s) => s.kind === 'assemble').reduce((a, s) => a + s.t1 - s.t0, 0);
+  const fastenOf = (r, jid) => r.segments.filter((s) => s.kind === 'fasten' && s.nodeId === jid).reduce((a, s) => a + s.t1 - s.t0, 0);
+  const r0 = simulate(base);
+  const p1 = structuredClone(base);
+  p1.timing.assemblyBoltTime = 30;
+  const r1 = simulate(p1);
+  assert(asmTime(r1) > asmTime(r0) + 1, `assembly ${asmTime(r0)} -> ${asmTime(r1)}`);
+  // A bridge connection (not inside an assembly) with its own per-bolt time.
+  const seg = r0.segments.find((x) => x.kind === 'fasten' && x.nodeId && x.nodeId.endsWith(':A'));
+  const p2 = structuredClone(base);
+  p2.design.connections = { [seg.nodeId]: { boltTime: 20 } };
+  const r2 = simulate(p2);
+  assert(near(fastenOf(r2, seg.nodeId), seg.bolts * 20, 1e-6), `override ${fastenOf(r2, seg.nodeId)} vs ${seg.bolts * 20}`);
+  // ...and its truss B copy follows it.
+  const bId = seg.nodeId.replace(/^j:(.*)\|(.*):A$/, (_, a, b) => 'j:' + [a + '~B', b + '~B'].sort().join('|') + ':B');
+  if (r0.segments.some((x) => x.nodeId === bId)) assert(near(fastenOf(r2, bId), seg.bolts * 20, 1e-6), 'mirror copy uses the override');
+});
+
+await test('a bolt through three members can wait until all three are in place', () => {
+  const p = normalizeProject(createExampleProject());
+  // Stack a gusset X over the TC1|TC2 joint and put one bolt through all three.
+  const model = buildModel(p);
+  const c = model.contacts.find((q) => q.plane === 'A' && q.kind === 'edge' && q.a === 'm-TC1' && q.b === 'm-TC2');
+  const pt = [(c.seg[0][0] + c.seg[1][0]) / 2, (c.seg[0][1] + c.seg[1][1]) / 2];
+  p.design.members.push({ id: 'mX', name: 'X1', plane: 'A', u: pt[0], v: pt[1], angle: 0, len: 6, depth: 2, thick: 1, z: 0 });
+  p.design.bolts = p.design.bolts.filter((b) => !(['m-TC1', 'm-TC2'].includes(b.a) && ['m-TC1', 'm-TC2'].includes(b.b)));
+  p.design.bolts.push({ id: 'bX', plane: 'A', a: 'm-TC1', b: 'm-TC2', more: ['mX'], u: pt[0], v: pt[1] - 0.3 });
+  const m2 = buildModel(p);
+  for (const q of m2.contacts.filter((q) => q.plane === 'A' && (q.a === 'mX' || q.b === 'mX'))) {
+    if (!q.bolts) p.design.bolts.push({ id: 'bf' + q.id, plane: 'A', a: q.a, b: q.b, u: (q.poly ? q.poly[0][0] : q.seg[0][0]), v: (q.poly ? q.poly[0][1] : q.seg[0][1]) });
+  }
+  const plan = p.plans[0];
+  const idxTC2 = plan.steps.findIndex((s) => s.kind === 'install' && s.unit.id === 'm-TC2');
+  plan.steps.splice(idxTC2 + 1, 0, { id: 'sX', kind: 'install', unit: { type: 'member', id: 'mX' }, carrier: 'auto', fastener: 'auto' });
+  const idxB = plan.steps.findIndex((s) => s.kind === 'install' && s.unit.id === 'm-TC2~B');
+  plan.steps.splice(idxB + 1, 0, { id: 'sXB', kind: 'install', unit: { type: 'member', id: 'mX~B' }, carrier: 'auto', fastener: 'auto' });
+  const fastenedWith = (r) => r.segments.filter((s) => s.kind === 'fasten' && s.label.includes('X1') === false && s.nodeId === c.id).reduce((a, s) => a + (s.bolts || 0), 0);
+  const first = simulate(p);
+  p.design.bolts.find((b) => b.id === 'bX').when = 'all';
+  const all = simulate(p);
+  // With "first" the stack bolt goes in at TC1-TC2; with "all" it waits for X1.
+  assert(fastenedWith(first) >= 1, 'first: bolt at TC1-TC2');
+  assert(fastenedWith(all) === 0, 'all: nothing fastened at TC1-TC2 yet');
+  const xSeg = all.segments.filter((s) => s.kind === 'fasten' && s.unitKey === 'm:mX').reduce((a, s) => a + (s.bolts || 0), 0);
+  assert(xSeg >= 1, 'all: the bolt goes in with X1');
+  assert(!all.warnings.some((w) => /never go/.test(w.msg || w)), 'every bolt goes in');
+});
+
 await test('construction cost follows the 2027 formula', () => {
   const r = window.exampleResult;
   const expected = (r.endTime / 60) * 4 * 172500 * 0.8;

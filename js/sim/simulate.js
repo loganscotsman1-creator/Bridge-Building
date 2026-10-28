@@ -65,7 +65,10 @@ class Sim {
     this.grid = new SiteGrid(project.site);
     this.segments = [];
     this.holds = [];
-    this.boltsDone = new Set(); // a bolt through 3+ members is fastened once, at its first connection
+    this.boltsDone = new Set(); // bolts put in so far (a bolt through 3+ members goes in once)
+    this.credited = new Set(); // "boltId|connectionId" pairs already counted toward stability
+    this.boltById = new Map(this.model.bolts.map((b) => [b.id, b]));
+    this.jointById = new Map(this.model.contacts.map((c) => [c.id, c]));
     this.warnings = [];
     this.errors = [];
     this.tracks = new Map(); // memberId -> [{t, kind: staging|carried|ground|bridge, x, y, builderId}]
@@ -486,9 +489,8 @@ class Sim {
       const id = arrivals[i].id;
       this.waitUntil(a, arrivals[i].t);
       const inner = (u.internal || []).filter((j) => (j.a === id && joined.has(j.b)) || (j.b === id && joined.has(j.a)));
-      const bolts = this.newBolts(inner);
       if (!inner.length) this.warn(`${this.model.memberById.get(id).name} doesn't touch the rest of ${u.name}.`);
-      const dur = this.T.assemblyJoinTime > 0 ? this.T.assemblyJoinTime : inner.length * this.T.alignTime + bolts * a.boltTime;
+      const dur = this.joinTime(a, inner, joined, id);
       this.seg(a, 'assemble', a.freeAt, a.freeAt + dur, { label: `Bolt ${this.model.memberById.get(id).name} into ${u.name}`, unitKey: u.key });
       joined.add(id);
     }
@@ -517,9 +519,8 @@ class Sim {
     const joined = new Set([u.memberIds[0]]);
     for (const id of u.memberIds.slice(1)) {
       const inner = (u.internal || []).filter((j) => (j.a === id && joined.has(j.b)) || (j.b === id && joined.has(j.a)));
-      const bolts = this.newBolts(inner);
       if (!inner.length) this.warn(`${this.model.memberById.get(id).name} doesn't touch the rest of ${u.name}.`);
-      const dur = this.T.assemblyJoinTime > 0 ? this.T.assemblyJoinTime : inner.length * this.T.alignTime + bolts * a.boltTime;
+      const dur = this.joinTime(a, inner, joined, id);
       this.seg(a, 'assemble', a.freeAt, a.freeAt + dur, { label: `Bolt ${this.model.memberById.get(id).name} into ${u.name}`, unitKey: u.key });
       joined.add(id);
     }
@@ -672,10 +673,11 @@ class Sim {
         }
         this.waitUntil(f, placeAt, 'wait', { label: `Wait for ${u.name}` });
         if (rec.alignStart == null) rec.alignStart = f.freeAt;
-        this.seg(f, 'align', f.freeAt, f.freeAt + this.T.alignTime * mult, { label: 'Align ' + label, unitKey: u.key, nodeId: j.id, holding: solo });
+        this.seg(f, 'align', f.freeAt, f.freeAt + this.alignTimeOf(j, false) * mult, { label: 'Align ' + label, unitKey: u.key, nodeId: j.id, holding: solo });
         const bolts = this.fastenJoint(j);
-        // (0 when its bolts already went in with an earlier connection through the same stack)
-        if (bolts > 0) this.seg(f, 'fasten', f.freeAt, f.freeAt + bolts * f.boltTime * mult, { label: `Fasten ${bolts} bolt${bolts === 1 ? '' : 's'}: ${label}`, unitKey: u.key, nodeId: j.id, holding: solo, bolts });
+        // (0 when its bolts went in with an earlier connection through the same stack, or wait for a
+        // later member)
+        if (bolts > 0) this.seg(f, 'fasten', f.freeAt, f.freeAt + bolts * this.boltTimeOf(j, f, false) * mult, { label: `Fasten ${bolts} bolt${bolts === 1 ? '' : 's'}: ${label}`, unitKey: u.key, nodeId: j.id, holding: solo, bolts });
         this.updateStability(f.freeAt);
       }
       rec.workEnd = f.freeAt;
@@ -698,22 +700,81 @@ class Sim {
     });
   }
 
-  // Bolts in these connections that haven't been put in yet (each one counts once, even when it
-  // passes through several members and so holds several connections).
-  newBolts(joints) {
-    let n = 0;
-    for (const j of joints) for (const id of j.boltIds || []) if (!this.boltsDone.has(id)) { this.boltsDone.add(id); n++; }
-    return n;
+  // Can this bolt go in once the members in `joined` are together? A bolt through 3+ members goes
+  // in as soon as two are joined, once all are in place, or once a chosen member is placed.
+  boltReady(b, joined) {
+    const here = b.memberIds.filter((id) => joined.has(id)).length;
+    if (here < 2) return false;
+    if (b.when === 'all') return here === b.memberIds.length;
+    if (b.when && b.when !== 'first' && b.memberIds.includes(b.when)) return joined.has(b.when);
+    return true;
+  }
+
+  // Put in the bolts at these connections that are ready and not in yet (each bolt once, even
+  // when it passes through several members). Every connection a bolt passes through gets
+  // stronger, including ones fastened earlier. Returns the bolts put in, per connection.
+  newBolts(joints, joined) {
+    const out = new Map();
+    for (const j of joints) {
+      let n = 0;
+      for (const id of j.boltIds || []) {
+        if (this.boltsDone.has(id)) continue;
+        const b = this.boltById.get(id);
+        if (!b || !this.boltReady(b, joined)) continue;
+        this.boltsDone.add(id);
+        n++;
+        for (const jid of b.jointIds) this.credit(b.id, jid);
+      }
+      out.set(j.id, n);
+    }
+    return out;
+  }
+
+  // Count a bolt that's in toward one of its connections, once both sides are in the bridge.
+  credit(boltId, jid) {
+    const key = boltId + '|' + jid;
+    if (this.credited.has(key)) return;
+    const jj = this.jointById.get(jid);
+    const ua = jj && this.unitOfMember.get(jj.a), ub = jj && this.unitOfMember.get(jj.b);
+    if (!ua || !ub || ua === ub || !ua.installed || !ub.installed) return; // bolts inside an assembly don't attach it to anything
+    this.credited.add(key);
+    for (const x of [ua, ub]) x.attached[jid] = (x.attached[jid] || 0) + 1;
+  }
+
+  // Members already in the bridge (including the piece being installed).
+  installedMembers() {
+    const s = new Set();
+    for (const u of this.units.values()) if (u.installed) for (const id of u.memberIds) s.add(id);
+    return s;
+  }
+
+  // Align time and time per bolt for one connection: its own override if it has one, otherwise
+  // the staging-yard times for assemblies and the builder's tool time in the bridge.
+  alignTimeOf(j, staging) {
+    if (j.alignTime != null) return j.alignTime;
+    return staging && this.T.assemblyAlignTime > 0 ? this.T.assemblyAlignTime : this.T.alignTime;
+  }
+  boltTimeOf(j, builder, staging) {
+    if (j.boltTime != null) return j.boltTime;
+    return staging && this.T.assemblyBoltTime > 0 ? this.T.assemblyBoltTime : builder.boltTime;
+  }
+
+  // Time to bolt one more member into an assembly in the staging yard.
+  joinTime(a, inner, joined, id) {
+    const now = new Set([...joined, id]);
+    const put = this.newBolts(inner, now);
+    if (this.T.assemblyJoinTime > 0 && !inner.some((j) => j.alignTime != null || j.boltTime != null)) return this.T.assemblyJoinTime;
+    return inner.reduce((s, j) => s + this.alignTimeOf(j, true) + put.get(j.id) * this.boltTimeOf(j, a, true), 0);
   }
 
   // Returns how many bolts have to be put in for this connection.
   fastenJoint(j) {
     const ua = this.unitOfMember.get(j.a), ub = this.unitOfMember.get(j.b);
-    for (const x of [ua, ub]) {
-      x.fastened[j.id] = true;
-      x.attached[j.id] = j.bolts;
-    }
-    return this.newBolts([j]);
+    for (const x of [ua, ub]) x.fastened[j.id] = true;
+    const n = this.newBolts([j], this.installedMembers()).get(j.id);
+    // Bolts that went in earlier (with another connection through the same stack) hold this one too.
+    for (const id of j.boltIds || []) if (this.boltsDone.has(id)) this.credit(id, j.id);
+    return n;
   }
 
   doSupport(step) {
@@ -795,6 +856,10 @@ class Sim {
         this.stepIndex = null;
         this.go(b, { x: s.x, y: s.y }, 'walk', { label: 'Return to staging yard' });
       }
+    }
+    if (!this.aborted) {
+      const left = this.model.bolts.filter((b) => b.jointId && !this.boltsDone.has(b.id) && b.memberIds.every((id) => this.unitOfMember.get(id)?.installed));
+      if (left.length) this.warn(`${left.length} bolt${left.length === 1 ? ' never goes' : 's never go'} in (check when each bolt through a stack is set to go in): ${left.map((b) => b.memberIds.map((id) => this.model.memberById.get(id)?.name).join('/')).join(', ')}.`);
     }
     const finite = this.segments.filter((s) => Number.isFinite(s.t1));
     let end = finite.length ? Math.max(...finite.map((s) => s.t1)) : 0;

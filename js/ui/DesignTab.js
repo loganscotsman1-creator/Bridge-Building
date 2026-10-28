@@ -11,7 +11,7 @@ import { imageFileToData, pickFile } from '../model/storage.js';
 import { jointLabel } from '../model/plan.js';
 import { Annotator, PLANE_COLORS, ftIn, loadViewImage } from './Annotator.js';
 import { IsoView } from './IsoView.js';
-import { Check, Hint, NumField, Section, TextField } from './common.js';
+import { Check, Hint, NumField, Section, SelectField, TextField } from './common.js';
 
 const VIEW_PLANE = { sideA: 'A', sideB: 'B', top: 'L' };
 
@@ -26,6 +26,7 @@ export function DesignTab({ project, model }) {
     ['top', 'Top view · laterals'],
     ['iso', 'Isometric screenshots'],
     ['members', 'Member list'],
+    ['connections', 'Connections'],
   ];
   const current = views.some((v) => v[0] === view) ? view : 'sideA';
   const bad = model.members.filter((m) => !m.box.fits).length;
@@ -41,6 +42,7 @@ export function DesignTab({ project, model }) {
       ${isMarkup && html`<${Annotator} project=${project} model=${model} viewKey=${current} sel=${sel} setSel=${setSel} mode=${mode} setMode=${setMode} />`}
       ${current === 'iso' && html`<${IsoRefs} project=${project} model=${model} />`}
       ${current === 'members' && html`<${MemberTable} project=${project} model=${model} sel=${sel} setSel=${setSel} />`}
+      ${current === 'connections' && html`<${ConnectionTable} project=${project} model=${model} />`}
     </div>
     <aside class="side">
       ${isMarkup && html`<div data-tour="checklist"><${Checklist} project=${project} model=${model} viewKey=${current} mode=${mode} setMode=${setMode} /></div>`}
@@ -172,14 +174,83 @@ function SelectionPanel({ project, model, sel, setSel }) {
     const b = model.bolts.find((x) => x.id === sel.id);
     if (!b) return null;
     const names = b.memberIds.map((id) => model.memberById.get(id)?.name || '?');
+    const raw = d.bolts.find((x) => x.id === sel.id);
+    const joints = b.jointIds.map((id) => model.contacts.find((c) => c.id === id)).filter(Boolean);
     return html`<${Section} title="Bolt">
       <${Hint}>Through ${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}${b.jointId ? '' : html` · <b class="bad">no longer on a place where they touch</b>`}.<//>
+      ${b.memberIds.length > 2 && html`<${SelectField} label="Put in" value=${b.when && b.when !== 'first' ? (b.when === 'all' ? 'all' : String(b.when).replace(/~B$/, '')) : 'first'}
+        title="When this bolt goes through the stack during the build"
+        options=${[['first', 'As soon as two of them are joined'], ['all', `Once all ${names.length} are in place`],
+          ...b.memberIds.filter((id) => raw ? true : !id.endsWith('~B')).map((id) => [raw ? id : id.replace(/~B$/, ''), 'When ' + (model.memberById.get(id)?.name || '?') + ' is placed'])]}
+        onChange=${(v) => updateProject((p) => { const x = p.design.bolts.find((q) => q.id === (raw ? sel.id : sel.id.replace(/~B$/, ''))); if (!x) return; if (v === 'first') delete x.when; else x.when = v; })} />
+        <${Hint}>Until it goes in, the members it joins aren't held by it, so someone may have to keep holding them.<//>`}
+      ${joints.map((c) => html`<${ConnTimes} key=${c.id} project=${project} model=${model} joint=${c} />`)}
       ${d.bolts.some((x) => x.id === sel.id)
         ? html`<button class="danger" onClick=${() => { updateProject((p) => removeBolt(p, sel.id)); setSel(null); }}>Delete bolt</button>`
         : html`<${Hint}>Mirror copy. Delete the truss A bolt instead.<//>`}
     <//>`;
   }
   return null;
+}
+
+// Time overrides for one connection (empty = the default for where it's made).
+function setConnTime(joint, field, v) {
+  updateProject((p) => {
+    const all = (p.design.connections = p.design.connections || {});
+    const t = { ...(all[joint.timeKey] || {}) };
+    if (v == null) delete t[field]; else t[field] = v;
+    if (Object.keys(t).length) all[joint.timeKey] = t; else delete all[joint.timeKey];
+  }, { key: 'ct' + joint.timeKey + field });
+}
+
+function defaultTimes(project) {
+  const T = project.timing;
+  const tool = project.tools.filter((t) => t.kind === 'fastener').map((t) => t.boltTime);
+  const bridgeBolt = tool.length ? Math.min(...tool) : T.boltTimeHand;
+  return {
+    align: `${T.alignTime} s in the bridge, ${T.assemblyAlignTime > 0 ? T.assemblyAlignTime : T.alignTime} s in the staging yard`,
+    bolt: `${bridgeBolt} s with the tool in the bridge, ${T.assemblyBoltTime > 0 ? T.assemblyBoltTime : bridgeBolt} s in the staging yard`,
+  };
+}
+
+function ConnTimes({ project, model, joint }) {
+  const def = defaultTimes(project);
+  return html`<div class="conn-times">
+    <div class="muted small">${jointLabel(model, joint)} · ${joint.bolts} bolt${joint.bolts === 1 ? '' : 's'}</div>
+    <div class="row2">
+      <${NumField} label="Align" unit="s" optional placeholder="default" min=${0} value=${joint.alignTime} title=${'Empty = default (' + def.align + ')'} onChange=${(v) => setConnTime(joint, 'alignTime', v)} />
+      <${NumField} label="Per bolt" unit="s" optional placeholder="default" min=${0} value=${joint.boltTime} title=${'Empty = default (' + def.bolt + ')'} onChange=${(v) => setConnTime(joint, 'boltTime', v)} />
+    </div>
+  </div>`;
+}
+
+// Every connection, with its own align and per-bolt times where the defaults don't fit.
+function ConnectionTable({ project, model }) {
+  const [filter, setFilter] = useState('');
+  const d = project.design;
+  const def = defaultTimes(project);
+  const list = model.contacts
+    .filter((c) => !(d.mirrorB && c.plane === 'B' && c.timeKey !== c.id))
+    .filter((c) => jointLabel(model, c).toLowerCase().includes(filter.toLowerCase()));
+  const custom = list.filter((c) => c.alignTime != null || c.boltTime != null).length;
+  const [picked, setPicked] = useState(null);
+  return html`<div class="split">
+    <div class="table-wrap">
+      <div class="row"><input type="search" placeholder="Filter connections" value=${filter} onInput=${(e) => setFilter(e.target.value)} />
+        <span class="muted">${list.length} connections · ${custom} with their own times</span>
+        ${custom > 0 && html`<button class="small" onClick=${() => updateProject((p) => { p.design.connections = {}; })}>Clear all overrides</button>`}</div>
+      <${Hint}>Leave a time empty to use the default: align ${def.align}; per bolt ${def.bolt} (set in Crew → Timing and Tools). A time typed here is used for that connection wherever it's made.${d.mirrorB ? ' Truss B copies use the truss A times.' : ''}<//>
+      <table class="grid">
+        <thead><tr><th>Connection</th><th>View</th><th>Bolts</th><th>Align (s)</th><th>Per bolt (s)</th></tr></thead>
+        <tbody>${list.map((c) => html`<tr class=${picked === c.id ? 'sel' : ''} onClick=${() => setPicked(c.id)}>
+          <td>${jointLabel(model, c)}</td><td>${c.plane === 'L' ? 'Top' : 'Truss ' + c.plane}</td><td class=${c.bolts ? '' : 'bad'}>${c.bolts}</td>
+          <td><input type="number" class="tiny" min="0" step="any" placeholder="default" value=${c.alignTime ?? ''} onInput=${(e) => { const v = e.target.value.trim(); setConnTime(c, 'alignTime', v === '' ? null : Math.max(0, parseFloat(v) || 0)); }} /></td>
+          <td><input type="number" class="tiny" min="0" step="any" placeholder="default" value=${c.boltTime ?? ''} onInput=${(e) => { const v = e.target.value.trim(); setConnTime(c, 'boltTime', v === '' ? null : Math.max(0, parseFloat(v) || 0)); }} /></td>
+        </tr>`)}</tbody>
+      </table>
+    </div>
+    <${IsoView} model=${model} styleOf=${(m) => { const c = picked && model.contacts.find((x) => x.id === picked); return c ? (m.id === c.a || m.id === c.b ? { color: '#f59e0b' } : { opacity: 0.35 }) : null; }} />
+  </div>`;
 }
 
 function MemberTable({ project, model, sel, setSel }) {

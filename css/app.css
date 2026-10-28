@@ -131,6 +131,8 @@ text.halo { paint-order: stroke; stroke: #fff; stroke-width: 3px; }
 .row.wrap { flex-wrap: wrap; }
 .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
 .row2 .field .inp input[type=number] { width: 70px; }
+.conn-times { margin: 8px 0 4px; padding-top: 6px; border-top: 1px solid var(--line); }
+.muted.small { font-size: 12px; }
 .row3 { display: grid; grid-template-columns: auto 1fr 1fr 1fr; gap: 4px; align-items: center; }
 .row3 .field .inp input[type=number] { width: 52px; }
 .float-panel .row { margin-bottom: 6px; }
