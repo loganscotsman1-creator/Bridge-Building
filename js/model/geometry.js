@@ -65,7 +65,7 @@ function ccw(poly) {
   return polyArea(poly) < 0 ? [...poly].reverse() : poly;
 }
 
-// Sutherland–Hodgman clip of convex polygons.
+// Sutherland–Hodgman clip by a convex polygon (the subject may be any simple outline).
 export function clipPoly(subject, clip) {
   let out = ccw(subject);
   const c = ccw(clip);
@@ -88,14 +88,86 @@ export function clipPoly(subject, clip) {
   return out;
 }
 
+// Inside any simple outline (convex or not), or within `tol` of its boundary.
 export function pointInPoly(p, poly, tol = 0) {
-  const c = ccw(poly);
-  for (let i = 0; i < c.length; i++) {
-    const a = c[i], b = c[(i + 1) % c.length];
-    const e = sub2(b, a);
-    if (cross2(e, sub2(p, a)) / (len2(e) || 1) < -tol) return false;
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i], b = poly[j];
+    if ((a[1] > p[1]) !== (b[1] > p[1]) && p[0] < ((b[0] - a[0]) * (p[1] - a[1])) / (b[1] - a[1]) + a[0]) inside = !inside;
   }
+  if (inside || tol <= 0) return inside;
+  for (let i = 0; i < poly.length; i++) if (distToSegment2(p, poly[i], poly[(i + 1) % poly.length]).d <= tol) return true;
+  return false;
+}
+
+// Does the outline cross itself? (Edges that aren't neighbours must not touch.)
+export function isSimple(poly) {
+  const n = poly.length;
+  if (n < 3) return false;
+  const hit = (a, b, c, d) => {
+    const d1 = cross2(sub2(b, a), sub2(c, a)), d2 = cross2(sub2(b, a), sub2(d, a));
+    const d3 = cross2(sub2(d, c), sub2(a, c)), d4 = cross2(sub2(d, c), sub2(b, c));
+    return ((d1 > 1e-9 && d2 < -1e-9) || (d1 < -1e-9 && d2 > 1e-9)) && ((d3 > 1e-9 && d4 < -1e-9) || (d3 < -1e-9 && d4 > 1e-9));
+  };
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 2; j < n; j++) {
+      if (i === 0 && j === n - 1) continue;
+      if (hit(poly[i], poly[(i + 1) % n], poly[j], poly[(j + 1) % n])) return false;
+    }
+  }
+  for (let i = 0; i < n; i++) if (len2(sub2(poly[i], poly[(i + 1) % n])) < 1e-6) return false;
   return true;
+}
+
+// Convex hull (counter-clockwise).
+export function convexHull(poly) {
+  const pts = [...poly].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  if (pts.length < 3) return pts;
+  const half = (list) => {
+    const h = [];
+    for (const p of list) {
+      while (h.length >= 2 && cross2(sub2(h[h.length - 1], h[h.length - 2]), sub2(p, h[h.length - 2])) <= 1e-12) h.pop();
+      h.push(p);
+    }
+    h.pop();
+    return h;
+  };
+  return [...half(pts), ...half([...pts].reverse())];
+}
+
+// A simple outline as convex pieces: itself if convex, otherwise triangles (ear clipping).
+export function convexPieces(poly) {
+  if (isConvex(poly)) return [ccw(poly)];
+  const rest = ccw(poly).slice();
+  const tris = [];
+  let guard = 0;
+  while (rest.length > 3 && guard++ < 1000) {
+    let cut = false;
+    for (let i = 0; i < rest.length; i++) {
+      const a = rest[(i + rest.length - 1) % rest.length], b = rest[i], c = rest[(i + 1) % rest.length];
+      if (cross2(sub2(b, a), sub2(c, b)) <= 1e-12) continue; // reflex corner
+      const tri = [a, b, c];
+      if (rest.some((q) => q !== a && q !== b && q !== c && pointInTri(q, tri))) continue;
+      tris.push(tri);
+      rest.splice(i, 1);
+      cut = true;
+      break;
+    }
+    if (!cut) break; // degenerate leftovers
+  }
+  if (rest.length >= 3) tris.push(rest);
+  return tris;
+}
+
+function pointInTri(p, [a, b, c]) {
+  const s1 = cross2(sub2(b, a), sub2(p, a)), s2 = cross2(sub2(c, b), sub2(p, b)), s3 = cross2(sub2(a, c), sub2(p, c));
+  return s1 >= -1e-12 && s2 >= -1e-12 && s3 >= -1e-12;
+}
+
+// Is a point on a contact (its edge, or any piece of its overlap)?
+export function pointOnContact(c, p, tol = 0) {
+  if (c.kind === 'edge') return distToSegment2(p, c.seg[0], c.seg[1]).d <= tol;
+  return (c.pieces || [c.poly]).some((q) => pointInPoly(p, q, tol));
 }
 
 export function distToSegment2(p, a, b) {
@@ -105,10 +177,22 @@ export function distToSegment2(p, a, b) {
   return { d: len2(sub2(p, q)), t, q };
 }
 
-// Where two convex outlines touch: {kind: 'overlap', poly} | {kind: 'edge', seg: [p, q]} | null.
+// Where two outlines touch: {kind: 'overlap', poly, pieces} | {kind: 'edge', seg: [p, q]} | null.
+// Outlines that aren't convex are split into convex pieces first; an overlap is then the list of
+// overlapping pieces (`poly` is the largest).
 export function contact2d(P, Q) {
-  const inter = clipPoly(P, Q);
-  if (inter.length >= 3 && Math.abs(polyArea(inter)) > 0.05) return { kind: 'overlap', poly: inter };
+  const pieces = [];
+  for (const a of convexPieces(P)) {
+    for (const b of convexPieces(Q)) {
+      const inter = clipPoly(a, b);
+      if (inter.length >= 3 && Math.abs(polyArea(inter)) > 1e-4) pieces.push(inter);
+    }
+  }
+  const area = pieces.reduce((t, q) => t + Math.abs(polyArea(q)), 0);
+  if (area > 0.05) {
+    const poly = pieces.reduce((best, q) => (Math.abs(polyArea(q)) > Math.abs(polyArea(best)) ? q : best));
+    return { kind: 'overlap', poly, pieces };
+  }
   let best = null;
   for (const [a, b] of polyEdges(P)) {
     const e = sub2(b, a), el = len2(e);
@@ -147,7 +231,7 @@ function extentsAt(poly, deg) {
 
 function candidateAngles(poly) {
   const out = [];
-  for (const [p, q] of polyEdges(poly)) if (Math.hypot(q[0] - p[0], q[1] - p[1]) > 1e-6) out.push((Math.atan2(q[1] - p[1], q[0] - p[0]) * 180) / Math.PI);
+  for (const [p, q] of polyEdges(convexHull(poly))) if (Math.hypot(q[0] - p[0], q[1] - p[1]) > 1e-6) out.push((Math.atan2(q[1] - p[1], q[0] - p[0]) * 180) / Math.PI);
   for (let a = 0; a < 180; a += 1) out.push(a);
   return out;
 }
@@ -312,9 +396,11 @@ export function buildModel(project) {
           c = { kind: 'edge', seg: [s0, s1] };
         }
       } else {
-        const clipped = clipPoly(c.poly, [[hx0, -1e4], [hx1, -1e4], [hx1, 1e4], [hx0, 1e4]]);
-        if (clipped.length < 3) continue;
-        c = { kind: 'overlap', poly: clipped };
+        const strip = [[hx0, -1e4], [hx1, -1e4], [hx1, 1e4], [hx0, 1e4]];
+        const parts = (c.pieces || [c.poly]).map((q) => clipPoly(q, strip)).filter((q) => q.length >= 3 && Math.abs(polyArea(q)) > 1e-4);
+        if (!parts.length) continue;
+        const poly = parts.reduce((best, q) => (Math.abs(polyArea(q)) > Math.abs(polyArea(best)) ? q : best));
+        c = { kind: 'overlap', poly, pieces: parts };
       }
       const mid = c.kind === 'edge' ? [(c.seg[0][0] + c.seg[1][0]) / 2, (c.seg[0][1] + c.seg[1][1]) / 2] : polyCentroid(c.poly);
       add(a, t, 'L', c, [mid[0], mid[1], a.z || 0]);
@@ -348,7 +434,7 @@ export function buildModel(project) {
       for (let j = i + 1; j < ids.length; j++) {
         for (const c of contactByKey.get(pairKey(ids[i], ids[j])) || []) {
           if (c.plane !== b.plane) continue;
-          const ok = c.kind === 'edge' ? distToSegment2(p, c.seg[0], c.seg[1]).d <= BOLT_TOL : pointInPoly(p, c.poly, BOLT_TOL);
+          const ok = pointOnContact(c, p, BOLT_TOL);
           if (ok) { joints.push(c); break; }
         }
       }

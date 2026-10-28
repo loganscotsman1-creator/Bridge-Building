@@ -87,7 +87,7 @@ export function emptyProject() {
       // Box members. plane A/B: drawn on a side view (u = x along the span, v = z up).
       // plane L (laterals): drawn on the top view (u = x, v = y across), centered at height z.
       // len × depth is the outline in its view; thick is the size out of the view. A reshaped
-      // member also has `corners` (4 points), which then define its outline. `bearing` is
+      // member also has `corners` (3 or more points, any simple shape), which then define its outline. `bearing` is
       // true/false when set by hand, or missing to detect it from the footings.
       members: [], // {id, name, plane, u, v, angle (deg), len, depth, thick, corners?, z?, bearing?, lbPerFt?, color?}
       // A bolt through members a and b (plus `more` where 3+ boxes overlap), at (u, v) on that

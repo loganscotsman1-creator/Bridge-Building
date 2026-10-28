@@ -1,5 +1,5 @@
 // Browser test runner: open tests/index.html (through a local server) and read the results.
-import { buildModel, calibFromPoints, contact2d, boxCorners, footingPoints, imageToView, isConvex, polyFits, rectOfPoly, viewToImage } from '../js/model/geometry.js';
+import { buildModel, calibFromPoints, contact2d, boxCorners, footingPoints, imageToView, isConvex, isSimple, pointInPoly, pointOnContact, polyArea, polyFits, rectOfPoly, viewToImage } from '../js/model/geometry.js';
 import { computeStability } from '../js/sim/stability.js';
 import { SiteGrid } from '../js/sim/grid.js';
 import { simulate } from '../js/sim/simulate.js';
@@ -66,6 +66,27 @@ await test('a reshaped box must still fit the size box', () => {
   // A long thin shape on a diagonal still fits when turned.
   const diag = [[0, 0], [29, 29], [27, 31], [-2, 2]];
   assert(polyFits(diag, lim), 'diagonal box fits');
+});
+
+await test('shapes with extra corners (even notched ones) fit, hit-test and touch correctly', () => {
+  const lim = { len: 42, depth: 6, thick: 4 };
+  // A chord with a gusset tab sticking up in the middle (a T), 40 x 6 overall.
+  const T = [[0, 0], [40, 0], [40, 3], [24, 3], [24, 6], [16, 6], [16, 3], [0, 3]];
+  assert(isSimple(T) && !isConvex(T) && polyFits(T, lim), 'T is a valid shape');
+  assert(!isSimple([[0, 0], [10, 0], [0, 4], [10, 4]]), 'a crossed outline is refused');
+  assert(pointInPoly([20, 5], T) && !pointInPoly([5, 5], T), 'inside the tab, not over the notch');
+  const r = rectOfPoly(T);
+  assert(near(r.len, 40, 1e-6) && near(r.depth, 6, 1e-6), JSON.stringify(r));
+  // A post standing in the notch beside the tab touches the tab's side edge and the chord top.
+  const post = [[10, 3], [16, 3], [16, 20], [10, 20]];
+  const c = contact2d(T, post);
+  assert(c && c.kind === 'edge', 'post in the notch touches along an edge: ' + JSON.stringify(c));
+  // A plate lapped over the tab overlaps only the tab, not the empty notch beside it.
+  const plate = [[12, 4], [28, 4], [28, 10], [12, 10]];
+  const o = contact2d(T, plate);
+  const area = o.pieces.reduce((s, q) => s + Math.abs(polyArea(q)), 0);
+  assert(o.kind === 'overlap' && near(area, 16, 1e-6), 'overlap area ' + area);
+  assert(pointOnContact(o, [20, 5]) && !pointOnContact(o, [13, 5]), 'bolt spots follow the real overlap');
 });
 
 await test('snapping a point catches corners first, then edges', () => {

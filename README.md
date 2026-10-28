@@ -58,7 +58,10 @@ Each view then has a checklist on the right that walks you through it:
    - **Edit:** click a box to select it and drag to move it (it snaps edge-to-edge again). Drag
      the **square edge handles** to push/pull that edge, the **corner nodes** to reshape the box
      (any shape is allowed as long as it still fits the size box; one that doesn't is shown in
-     red and refused), and the round handle to rotate it. Click empty space to deselect.
+     red and refused), and the round handle to rotate it. Drag a **"+" node** in the middle of an
+     edge to add a corner there, for example to give a chord a gusset tab or a notch that makes
+     more surfaces to connect to; double-click a corner to remove it. Notched (non-convex) shapes
+     work too, as long as the outline doesn't cross itself. Click empty space to deselect.
    - Arrow keys nudge, R turns 90°, Ctrl+D copies, Delete removes, Shift while dragging turns
      snapping off, right-drag or Space+drag pans. You can pan in the middle of a drag too: hold
      Space or the right mouse button while moving a box, or carry it to the canvas edge and the

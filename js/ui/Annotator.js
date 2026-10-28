@@ -10,8 +10,8 @@ import { uid } from '../model/ids.js';
 import { boxLimits } from '../model/schema.js';
 import { clampBox, duplicateMember, newBox, removeBolt, removeMember } from '../model/edit.js';
 import {
-  boxAxes, boxCorners, calibFromPoints, defaultCalib, distToSegment2, footingPoints, imageToView, isConvex, memberPoly,
-  pointInPoly, polyArea, polyCentroid, polyEdges, polyFits, siteToBridge, viewToImage,
+  boxAxes, boxCorners, calibFromPoints, defaultCalib, distToSegment2, footingPoints, imageToView, isSimple, memberPoly,
+  pointInPoly, pointOnContact, polyArea, polyCentroid, polyEdges, polyFits, siteToBridge, viewToImage,
 } from '../model/geometry.js';
 import { imageFileToData, pickFile } from '../model/storage.js';
 import { applySnap, rotatePoly, snapAngle, snapBox, snapPoint, snapPoly, snapSize } from './snap.js';
@@ -188,7 +188,7 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
         const r = distToSegment2([w.u, w.v], c.seg[0], c.seg[1]);
         dd = r.d; at = r.q;
       } else {
-        dd = pointInPoly([w.u, w.v], c.poly) ? 0 : Infinity;
+        dd = pointOnContact(c, [w.u, w.v]) ? 0 : Infinity;
         at = [w.u, w.v];
       }
       if (dd <= 12 / k && (!best || dd < best.d)) best = { c, d: dd, at };
@@ -196,8 +196,9 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
     return best;
   };
 
-  // Handles of the selected box: corner nodes, edge push/pull handles just outside each edge's
-  // middle (so grabbing the middle of a small box still moves it), and a rotate handle.
+  // Handles of the selected box: corner nodes, a "+" node in the middle of each edge (drag it to
+  // add a corner there), edge push/pull handles just outside each edge's middle (so grabbing the
+  // middle of a small box still moves it), and a rotate handle.
   function handles(m) {
     const poly = m.poly;
     const sign = polyArea(poly) >= 0 ? 1 : -1;
@@ -207,6 +208,7 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
       const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
       const n = [((b[1] - a[1]) / L) * sign, (-(b[0] - a[0]) / L) * sign];
       hs.push({ kind: 'edge', i, n, p: [(a[0] + b[0]) / 2 + n[0] * out, (a[1] + b[1]) / 2 + n[1] * out] });
+      if (L * k > 28) hs.push({ kind: 'insert', i, p: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2] });
     });
     const front = hs.find((h) => h.kind === 'edge' && h.i === 1);
     hs.push({ kind: 'rotate', p: [front.p[0] + front.n[0] * (18 / k), front.p[1] + front.n[1] * (18 / k)] });
@@ -248,7 +250,22 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
   };
 
   // A reshaped box is accepted only if it's still a proper (convex) shape inside the size box.
-  const shapeOk = (poly) => isConvex(poly) && polyFits(poly, lim) && Math.abs(polyArea(poly)) > 0.05;
+  const shapeOk = (poly) => isSimple(poly) && polyFits(poly, lim) && Math.abs(polyArea(poly)) > 0.05;
+
+  // Double-click a corner node to remove it (a shape keeps at least 3).
+  const removeNode = (m, i) => {
+    const raw = stored(m.id);
+    const poly = memberPoly(raw);
+    if (poly.length <= 3) return;
+    const next = poly.filter((_, j) => j !== i);
+    if (shapeOk(next)) setBox(raw.id, { corners: next });
+  };
+  const onDoubleClick = (e) => {
+    if (mode !== 'box' || !selMember) return;
+    const { sx, sy } = eventPos(e);
+    const h = handleAt(selMember, sx, sy);
+    if (h && h.kind === 'corner') removeNode(selMember, h.i);
+  };
 
   const deleteSelection = () => {
     if (!sel) return;
@@ -390,6 +407,13 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
       if (h) {
         const raw = stored(selMember.id);
         const orig = { ...raw, poly: memberPoly(raw) };
+        if (h.kind === 'insert') {
+          // A new corner in the middle of this edge, dragged like any other corner.
+          orig.poly.splice(h.i + 1, 0, h.p);
+          orig.corners = orig.poly;
+          dragRef.current = { kind: 'corner', i: h.i + 1, id: raw.id, orig, start: w, key: 'drag-' + uid() };
+          return;
+        }
         const grab = h.kind === 'edge' && !raw.corners ? resizeProj(orig, RECT_EDGE[h.i].kind, RECT_EDGE[h.i].sign, w) - (RECT_EDGE[h.i].kind === 'len' ? orig.len : orig.depth) : 0;
         dragRef.current = { ...h, id: raw.id, orig, start: w, grab, key: 'drag-' + uid() };
         return;
@@ -428,7 +452,7 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
       const ids = [c.a, c.b];
       for (const o of contacts) {
         if (o === c) continue;
-        const on = o.kind === 'edge' ? distToSegment2([u, v], o.seg[0], o.seg[1]).d <= 0.3 : pointInPoly([u, v], o.poly, 0.3);
+        const on = pointOnContact(o, [u, v], 0.3);
         if (on) for (const id of [o.a, o.b]) if (!ids.includes(id)) ids.push(id);
       }
       const [a, bb, ...more] = ids;
@@ -636,7 +660,8 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
       const a = S(c.seg[0]), b = S(c.seg[1]);
       return html`<line key=${c.id} x1=${a.x} y1=${a.y} x2=${b.x} y2=${b.y} stroke=${color} stroke-width=${hot ? 7 : mode === 'bolt' ? 4 : 2.5} stroke-linecap="round" opacity=${mode === 'bolt' || hot ? 0.9 : 0.6} stroke-dasharray=${c.bolts ? null : '3 3'} pointer-events="none" />`;
     }
-    return html`<polygon key=${c.id} points=${pts(c.poly)} fill=${color} fill-opacity=${hot ? 0.45 : mode === 'bolt' ? 0.3 : 0.15} stroke=${color} stroke-width=${hot ? 2 : 1} pointer-events="none" />`;
+    const pieces = c.pieces || [c.poly];
+    return html`<g key=${c.id} pointer-events="none">${pieces.map((q, i) => html`<polygon key=${i} points=${pts(q)} fill=${color} fill-opacity=${hot ? 0.45 : mode === 'bolt' ? 0.3 : 0.15} stroke=${pieces.length > 1 ? 'none' : color} stroke-width=${hot ? 2 : 1} />`)}</g>`;
   });
 
   const boltEls = model.bolts.filter((b) => b.plane === plane).map((b) => {
@@ -653,7 +678,9 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
     handleEls = html`<g>
       <line x1=${f.x} y1=${f.y} x2=${r.x} y2=${r.y} stroke="#f59e0b" stroke-width="1.5" />
       ${hs.filter((h) => h.kind === 'edge').map((h) => { const s = S(h.p); return html`<rect key=${'e' + h.i} x=${s.x - 5} y=${s.y - 5} width="10" height="10" fill="#fff" stroke="#f59e0b" stroke-width="2"><title>Push / pull this edge</title></rect>`; })}
-      ${hs.filter((h) => h.kind === 'corner').map((h) => { const s = S(h.p); return html`<circle key=${'c' + h.i} cx=${s.x} cy=${s.y} r="5.5" fill="#f59e0b" stroke="#fff" stroke-width="2"><title>Drag to reshape (must still fit the size box)</title></circle>`; })}
+      ${hs.filter((h) => h.kind === 'insert').map((h) => { const s = S(h.p); return html`<g key=${'i' + h.i}><circle cx=${s.x} cy=${s.y} r="4.5" fill="#fff" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="2 1.5"><title>Drag to add a corner here</title></circle>
+        <path d=${`M${s.x - 2.5} ${s.y}h5M${s.x} ${s.y - 2.5}v5`} stroke="#b45309" stroke-width="1.4" pointer-events="none" /></g>`; })}
+      ${hs.filter((h) => h.kind === 'corner').map((h) => { const s = S(h.p); return html`<circle key=${'c' + h.i} cx=${s.x} cy=${s.y} r="5.5" fill="#f59e0b" stroke="#fff" stroke-width="2"><title>Drag to reshape (must still fit the size box). Double-click to remove this corner.</title></circle>`; })}
       <circle cx=${r.x} cy=${r.y} r="6" fill="#fff" stroke="#f59e0b" stroke-width="2.5"><title>Rotate</title></circle>
       <text x=${c.x} y=${c.y - 10} font-size="11" text-anchor="middle" fill="#92400e" class="halo" pointer-events="none">${selMember.len.toFixed(2)} × ${selMember.depth.toFixed(2)} in${stored(selMember.id).corners ? ' (reshaped)' : ''}</text>
     </g>`;
@@ -684,7 +711,7 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
   const axisV = isTop ? 'y' : 'z';
   const hints = {
     box: selMember && editable(selMember)
-      ? 'Drag the box to move it (it snaps to neighbouring edges; hold Shift to place freely). Square handles push/pull an edge, round corner nodes reshape it, the outlined circle rotates it. Click empty space to deselect. Arrow keys nudge, R turns 90°, Ctrl+D copies, Delete removes.' + (selLateral ? ' PageUp / PageDown raise or lower this lateral.' : '') + ' While dragging, hold Space or the right mouse button to pan, or drag to the canvas edge.'
+      ? 'Drag the box to move it (it snaps to neighbouring edges; hold Shift to place freely). Square handles push/pull an edge, round corner nodes reshape it, a "+" node on an edge adds a corner there (double-click a corner to remove it), the outlined circle rotates it. Click empty space to deselect. Arrow keys nudge, R turns 90°, Ctrl+D copies, Delete removes.' + (selLateral ? ' PageUp / PageDown raise or lower this lateral.' : '') + ' While dragging, hold Space or the right mouse button to pan, or drag to the canvas edge.'
       : `Drag along a member in the screenshot to draw a box over it, or click to stamp a full ${lim.len} × ${lim.depth} in box. Click a box to select and edit it. Everything inside one box is one welded member. Pan with the right mouse button or Space+drag (also mid-drag); scroll to zoom.`,
     calibrate: calibMethod === 'footings'
       ? (isTop ? `Click truss A at the west footing support, then at the east one. They'll be placed ${ftIn(fp.span)} apart.` : `Click the west footing support on the screenshot, then the east one (where the bridge stands on each footing). They'll be placed ${ftIn(fp.span)} apart at ground level.`)
@@ -733,7 +760,7 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
     <div class=${'canvas-wrap' + (dropping ? ' dropping' : '')} data-tour="canvas"
       onDragOver=${(e) => { e.preventDefault(); setDropping(true); }} onDragLeave=${() => setDropping(false)}
       onDrop=${(e) => { e.preventDefault(); setDropping(false); loadFile(e.dataTransfer.files[0]); }}>
-      <svg ref=${cam.svgRef} class=${'canvas mode-' + mode + (selMember ? ' has-sel' : '')} onPointerDown=${onPointerDown} onPointerMove=${onPointerMove} onPointerUp=${onPointerUp}
+      <svg ref=${cam.svgRef} class=${'canvas mode-' + mode + (selMember ? ' has-sel' : '')} onPointerDown=${onPointerDown} onPointerMove=${onPointerMove} onPointerUp=${onPointerUp} onDblClick=${onDoubleClick}
         onPointerLeave=${() => { setCursor(null); setHoverContact(null); }} onContextMenu=${(e) => e.preventDefault()}>
         <rect x="0" y="0" width=${cam.size.w} height=${cam.size.h} fill="#f8fafc" />
         ${gridLines(cam).map((l, i) => html`<line key=${'g' + i} ...${l} stroke=${l.zero ? '#94a3b8' : l.major ? '#cbd5e1' : '#e2e8f0'} stroke-width=${l.zero ? 1.5 : 1} />`)}

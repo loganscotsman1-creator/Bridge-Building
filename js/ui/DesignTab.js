@@ -88,7 +88,7 @@ function Checklist({ project, model, viewKey, mode, setMode }) {
         }}>${view.imageId ? 'Replace' : 'Choose file'}</button>`)}
       ${step(2, !!view.scaled, 'Set the scale', view.scaled ? 'Done. Redo it any time.' : isTop ? 'Click truss A at the west and east footing supports.' : `Click the west and east footing supports; they're placed ${ftIn(footingPoints(project).span)} apart.`, 'calibrate')}
       ${step(3, members.length > 0 && !tooBig.length, isTop ? 'Place lateral boxes' : 'Place member boxes',
-        html`${members.length} member${members.length === 1 ? '' : 's'}. Each box is one welded member that fits ${lim.len} × ${lim.depth} × ${lim.thick} in. Draw, move, push/pull edges and drag corners all in this one tool.${tooBig.length ? html` <b class="bad">${tooBig.length} too big.</b>` : ''}`, 'box')}
+        html`${members.length} member${members.length === 1 ? '' : 's'}. Each box is one welded member that fits ${lim.len} × ${lim.depth} × ${lim.thick} in. Draw, move, push/pull edges, drag corners and add corners ("+") all in this one tool.${tooBig.length ? html` <b class="bad">${tooBig.length} too big.</b>` : ''}`, 'box')}
       ${step(4, contacts.length > 0 && !unbolted.length && !orphans.length, 'Place the bolts',
         html`${contacts.length} place${contacts.length === 1 ? '' : 's'} where boxes touch, ${bolts.length} bolts.${unbolted.length ? html` <b class="bad">${unbolted.length} touching with no bolt.</b>` : ''}${orphans.length ? html` <b class="bad">${orphans.length} bolt${orphans.length === 1 ? '' : 's'} off a connection.</b>` : ''}`, 'bolt',
         html`<div class="row autofill"><span class="muted">Auto-fill</span>

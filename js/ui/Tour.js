@@ -29,7 +29,7 @@ export const TOUR = [
   {
     tab: 'design', target: 'modes',
     title: 'One tool for boxes',
-    body: 'In Member boxes, drag on empty space to draw a box (it snaps edge-to-edge as you go), grab a box to move it, push/pull its square edge handles, drag its corner nodes to reshape it (it must still fit the size box), or use the round handle to rotate it. Each tool has a keyboard shortcut, and Ctrl+Z undoes anything.',
+    body: 'In Member boxes, drag on empty space to draw a box (it snaps edge-to-edge as you go), grab a box to move it, push/pull its square edge handles, drag its corner nodes to reshape it or a "+" node on an edge to add a corner (it must still fit the size box), or use the round handle to rotate it. Each tool has a keyboard shortcut, and Ctrl+Z undoes anything.',
   },
   {
     tab: 'site', target: 'site-canvas',

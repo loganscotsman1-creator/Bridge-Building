@@ -2,7 +2,7 @@
 import { html, useEffect, useLayoutEffect, useRef, useState } from '../lib/preact.js';
 import { PLANE_COLORS } from './Annotator.js';
 
-// The 8 corners of a member's box: its outline offset ± half its thickness out of the view.
+// A member's solid: its outline (any number of corners) offset ± half its thickness out of the view.
 function prism(m) {
   const h = m.thick / 2;
   const off = m.plane === 'L' ? [0, 0, h] : [0, h, 0];
@@ -11,10 +11,11 @@ function prism(m) {
   return { lo, hi };
 }
 
-const FACES = [
-  ['lo', [0, 1, 2, 3]], ['hi', [0, 1, 2, 3]],
-  ['side', [0, 1]], ['side', [1, 2]], ['side', [2, 3]], ['side', [3, 0]],
-];
+// Both outline faces, then one side face per edge.
+const faceList = (n) => {
+  const all = [...Array(n).keys()];
+  return [['lo', all], ['hi', all], ...all.map((i) => ['side', [i, (i + 1) % n]])];
+};
 
 function shade(hex, f) {
   const n = parseInt(hex.slice(1), 16);
@@ -66,7 +67,7 @@ export function IsoView({ model, styleOf, onPick, supports = [], className = '',
     tags.push({ m, st, p: proj(m.centroid) });
     const { lo, hi } = prism(m);
     const color = st.color || m.color || PLANE_COLORS[m.plane];
-    for (const [kind, idx] of FACES) {
+    for (const [kind, idx] of faceList(lo.length)) {
       let pts3;
       if (kind === 'lo') pts3 = idx.map((i) => lo[i]);
       else if (kind === 'hi') pts3 = idx.map((i) => hi[i]);
