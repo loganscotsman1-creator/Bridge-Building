@@ -238,6 +238,15 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
     }
   }, { key });
 
+  // The selected lateral's height (top view): it's set apart from its outline, so it can be
+  // raised or lowered any time after placing it.
+  const selLateral = isTop && selMember && selMember.plane === 'L' && editable(selMember) ? selMember : null;
+  const setLateralZ = (z) => {
+    if (!selLateral) return;
+    const id = selLateral.id;
+    updateProject((p) => { const m = p.design.members.find((x) => x.id === id); if (m) m.z = Math.round(z * 1000) / 1000; }, { key: 'lz' + id });
+  };
+
   // A reshaped box is accepted only if it's still a proper (convex) shape inside the size box.
   const shapeOk = (poly) => isConvex(poly) && polyFits(poly, lim) && Math.abs(polyArea(poly)) > 0.05;
 
@@ -300,6 +309,11 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
         else setBox(raw.id, { u: raw.u + du, v: raw.v + dv }, 'nudge' + raw.id);
         return;
       }
+      if (selLateral && (e.key === 'PageUp' || e.key === 'PageDown')) {
+        e.preventDefault();
+        setLateralZ(stored(selLateral.id).z + (e.key === 'PageUp' ? 1 : -1) * (e.shiftKey ? 1 : 0.25));
+        return;
+      }
       if (selMember && editable(selMember) && key === 'r' && !e.ctrlKey) { turn90(selMember); return; }
       if (!e.ctrlKey && !e.metaKey && !e.altKey) {
         const m = MODES.find((x) => x[2].toLowerCase() === key);
@@ -342,6 +356,29 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
     }
     return { box, lines };
   };
+
+  // Dragging a piece near the canvas edge scrolls the view that way, so it can be carried past
+  // what's on screen. The timer replays the last pointer move against the moved view.
+  const moveRef = useRef(null);
+  const lastMoveRef = useRef(null);
+  const midPanRef = useRef(false);
+  const draftRef = useRef(null);
+  const edgeRef = useRef(null);
+  const stopEdgePan = () => { if (edgeRef.current) { clearInterval(edgeRef.current.timer); edgeRef.current = null; } };
+  const edgePan = (sx, sy) => {
+    const { w, h } = cam.size, band = 28, speed = 12;
+    const vx = sx < band ? -1 : sx > w - band ? 1 : 0, vy = sy < band ? -1 : sy > h - band ? 1 : 0;
+    if (!vx && !vy) { stopEdgePan(); return; }
+    if (edgeRef.current) { edgeRef.current.vx = vx; edgeRef.current.vy = vy; return; }
+    const st = { vx, vy };
+    st.timer = setInterval(() => {
+      if (!lastMoveRef.current || !(dragRef.current || draftRef.current)) { stopEdgePan(); return; }
+      cam.panBy(st.vx * speed, st.vy * speed);
+      setTimeout(() => moveRef.current && lastMoveRef.current && moveRef.current(lastMoveRef.current), 0);
+    }, 30);
+    edgeRef.current = st;
+  };
+  useEffect(() => stopEdgePan, []);
 
   const onPointerDown = (e) => {
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* synthetic or finished pointer */ }
@@ -386,7 +423,16 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
         const t = L ? Math.round((Math.hypot(u - p[0], v - p[1]) * 4)) / 4 / L : 0;
         u = p[0] + (q[0] - p[0]) * Math.min(1, t); v = p[1] + (q[1] - p[1]) * Math.min(1, t);
       }
-      const bolt = { id: uid('b'), plane, a: c.a, b: c.b, u: Math.round(u * 100) / 100, v: Math.round(v * 100) / 100 };
+      // Every other connection at the same spot joins in, so one bolt goes through the whole stack
+      // of overlapping members there.
+      const ids = [c.a, c.b];
+      for (const o of contacts) {
+        if (o === c) continue;
+        const on = o.kind === 'edge' ? distToSegment2([u, v], o.seg[0], o.seg[1]).d <= 0.3 : pointInPoly([u, v], o.poly, 0.3);
+        if (on) for (const id of [o.a, o.b]) if (!ids.includes(id)) ids.push(id);
+      }
+      const [a, bb, ...more] = ids;
+      const bolt = { id: uid('b'), plane, a, b: bb, ...(more.length ? { more } : {}), u: Math.round(u * 100) / 100, v: Math.round(v * 100) / 100 };
       updateProject((p) => { p.design.bolts.push(bolt); });
       setSel({ type: 'bolt', id: bolt.id });
     } else if (mode === 'bearing') {
@@ -415,6 +461,19 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
     const { sx, sy } = eventPos(e);
     const w = toWorld(sx, sy);
     setCursor(w);
+    const busy = draft || dragRef.current;
+    if (busy) {
+      lastMoveRef.current = { clientX: e.clientX, clientY: e.clientY, shiftKey: e.shiftKey, buttons: e.buttons };
+      // Mid-drag, holding Space or pressing the right/middle button too pans the view; the piece
+      // stays where it is and picks up again when you let go.
+      if (spaceRef.current || (e.buttons & 6)) {
+        if (!midPanRef.current) { cam.beginPan(e); midPanRef.current = true; }
+        cam.movePan(e);
+        return;
+      }
+      if (midPanRef.current) { cam.endPan(); midPanRef.current = false; }
+      edgePan(sx, sy);
+    }
     if (cam.movePan(e)) return;
     if (mode === 'bolt') { const h = hitContact(w); setHoverContact(h ? h.c.id : null); }
     if (mode === 'box' && draft) {
@@ -490,8 +549,13 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
     }
   };
 
+  moveRef.current = onPointerMove;
+  draftRef.current = draft;
+
   const onPointerUp = () => {
     cam.endPan();
+    midPanRef.current = false;
+    stopEdgePan();
     if (dragRef.current) { dragRef.current = null; setGuides([]); setBadShape(null); }
     if (mode === 'box' && draft) {
       const dist = Math.hypot(draft.end.u - draft.start.u, draft.end.v - draft.start.v);
@@ -578,7 +642,7 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
   const boltEls = model.bolts.filter((b) => b.plane === plane).map((b) => {
     const s = toScreen(b.u, b.v);
     const on = isSel('bolt', b.id);
-    return html`<circle key=${b.id} cx=${s.x} cy=${s.y} r=${on ? 5.5 : 4} fill=${!b.jointId ? '#dc2626' : on ? '#facc15' : '#111827'} stroke="#fff" stroke-width="1.2"><title>${b.jointId ? 'Bolt' : 'Bolt not on a connection'}</title></circle>`;
+    return html`<circle key=${b.id} cx=${s.x} cy=${s.y} r=${on ? 5.5 : 4} fill=${!b.jointId ? '#dc2626' : on ? '#facc15' : '#111827'} stroke="#fff" stroke-width="1.2"><title>${b.jointId ? 'Bolt through ' + b.memberIds.map((id) => model.memberById.get(id)?.name || '?').join(', ') : 'Bolt not on a connection'}</title></circle>${b.memberIds.length > 2 && html`<text x=${s.x + 6} y=${s.y - 5} font-size="10" font-weight="700" fill="#111827" class="halo" pointer-events="none">×${b.memberIds.length}</text>`}`;
   });
 
   let handleEls = null;
@@ -620,8 +684,8 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
   const axisV = isTop ? 'y' : 'z';
   const hints = {
     box: selMember && editable(selMember)
-      ? 'Drag the box to move it (it snaps to neighbouring edges; hold Shift to place freely). Square handles push/pull an edge, round corner nodes reshape it, the outlined circle rotates it. Click empty space to deselect. Arrow keys nudge, R turns 90°, Ctrl+D copies, Delete removes.'
-      : `Drag along a member in the screenshot to draw a box over it, or click to stamp a full ${lim.len} × ${lim.depth} in box. Click a box to select and edit it. Everything inside one box is one welded member. Pan with the right mouse button or Space+drag; scroll to zoom.`,
+      ? 'Drag the box to move it (it snaps to neighbouring edges; hold Shift to place freely). Square handles push/pull an edge, round corner nodes reshape it, the outlined circle rotates it. Click empty space to deselect. Arrow keys nudge, R turns 90°, Ctrl+D copies, Delete removes.' + (selLateral ? ' PageUp / PageDown raise or lower this lateral.' : '') + ' While dragging, hold Space or the right mouse button to pan, or drag to the canvas edge.'
+      : `Drag along a member in the screenshot to draw a box over it, or click to stamp a full ${lim.len} × ${lim.depth} in box. Click a box to select and edit it. Everything inside one box is one welded member. Pan with the right mouse button or Space+drag (also mid-drag); scroll to zoom.`,
     calibrate: calibMethod === 'footings'
       ? (isTop ? `Click truss A at the west footing support, then at the east one. They'll be placed ${ftIn(fp.span)} apart.` : `Click the west footing support on the screenshot, then the east one (where the bridge stands on each footing). They'll be placed ${ftIn(fp.span)} apart at ground level.`)
       : 'Click two points on the screenshot whose positions you know, type their real coordinates in inches, then Apply.',
@@ -646,10 +710,19 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
       ${mode === 'box' && selMember && editable(selMember) && html`<span class="sep"></span><button onClick=${duplicate}>Copy</button>
         <button onClick=${() => turn90(selMember)}>Turn 90°</button>
         <button class="danger" onClick=${deleteSelection}>Delete</button>`}
-      ${isTop && mode === 'box' && html`<label class="check" title="Height of new laterals' centerline">Lateral height
-        <select value=${String(lateralZ)} onChange=${(e) => setLevel(parseFloat(e.target.value))}>
-          ${levels.map((z) => html`<option value=${String(z)}>z = ${z} in</option>`)}
-        </select></label>`}
+      ${isTop && mode === 'box' && (selLateral
+        ? html`<span class="sep"></span><label class="check" title="Height of this lateral's centerline (PageUp / PageDown step it ¼ in, with Shift 1 in)">${selLateral.name} height
+          <button class="small" title="Lower ¼ in" onClick=${() => setLateralZ(stored(selLateral.id).z - 0.25)}>▼</button>
+          <input type="number" class="tiny" step="0.25" value=${stored(selLateral.id).z} onInput=${(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) setLateralZ(v); }} />
+          <button class="small" title="Raise ¼ in" onClick=${() => setLateralZ(stored(selLateral.id).z + 0.25)}>▲</button> in
+          <select title="Move it to the height of a truss member" value="" onChange=${(e) => { if (e.target.value !== '') setLateralZ(parseFloat(e.target.value)); }}>
+            <option value="">to a level…</option>
+            ${levels.map((z) => html`<option value=${String(z)}>z = ${z} in</option>`)}
+          </select></label>`
+        : html`<label class="check" title="Height of new laterals' centerline">New lateral height
+          <select value=${String(lateralZ)} onChange=${(e) => setLevel(parseFloat(e.target.value))}>
+            ${levels.map((z) => html`<option value=${String(z)}>z = ${z} in</option>`)}
+          </select></label>`)}
       <label class="check" title="Snap boxes to neighbouring edges and corners, bolts to ¼ in steps"><input type="checkbox" checked=${snapOn} onChange=${(e) => setSnapOn(e.target.checked)} /> Snap</label>
       <span class="spacer"></span>
       ${img && html`<label class="check">Screenshot <input type="range" min="0" max="1" step="0.05" value=${view.opacity}

@@ -10,6 +10,9 @@ const EPS_EDGE = 0.15; // in: edges this close count as touching
 const MIN_CONTACT = 0.1; // in: shortest touching length that counts
 const BOLT_TOL = 0.35; // in: a bolt this close to a connection belongs to it
 
+// Every member a bolt passes through: a and b, plus any more stacked where boxes overlap.
+export const boltMembers = (b) => [b.a, b.b, ...(b.more || [])];
+
 // ---------- 2D helpers (points are [u, v]) ----------
 const rad = (deg) => (deg * Math.PI) / 180;
 const dot2 = (a, b) => a[0] * b[0] + a[1] * b[1];
@@ -310,7 +313,8 @@ export function buildModel(project) {
     }
   }
 
-  // Bolts: each belongs to the connection between its two members, if it sits on it.
+  // Bolts: each belongs to every connection between two of its members that it sits on (one bolt
+  // through three overlapping members holds all three together).
   const contactByKey = new Map();
   for (const c of contacts) {
     if (!contactByKey.has(c.key)) contactByKey.set(c.key, []);
@@ -318,23 +322,37 @@ export function buildModel(project) {
   }
   const rawBolts = [];
   for (const b of d.bolts) {
-    const ma = d.members.find((m) => m.id === b.a), mb = d.members.find((m) => m.id === b.b);
-    if (d.mirrorB && (b.plane === 'B' || ma?.plane === 'B' || mb?.plane === 'B')) continue;
+    const ids = boltMembers(b);
+    if (d.mirrorB && (b.plane === 'B' || ids.some((id) => d.members.find((m) => m.id === id)?.plane === 'B'))) continue;
     rawBolts.push(b);
-    if (d.mirrorB && b.plane === 'A') rawBolts.push({ ...b, id: b.id + MIRROR_SUFFIX, plane: 'B', a: b.a + MIRROR_SUFFIX, b: b.b + MIRROR_SUFFIX });
+    if (d.mirrorB && b.plane === 'A') {
+      const mb = { ...b, id: b.id + MIRROR_SUFFIX, plane: 'B', a: b.a + MIRROR_SUFFIX, b: b.b + MIRROR_SUFFIX };
+      if (b.more) mb.more = b.more.map((id) => id + MIRROR_SUFFIX);
+      rawBolts.push(mb);
+    }
   }
   const bolts = rawBolts.map((b) => {
-    const list = (contactByKey.get(pairKey(b.a, b.b)) || []).filter((c) => c.plane === b.plane);
-    let joint = null;
-    for (const c of list) {
-      const p = [b.u, b.v];
-      const ok = c.kind === 'edge' ? distToSegment2(p, c.seg[0], c.seg[1]).d <= BOLT_TOL : pointInPoly(p, c.poly, BOLT_TOL);
-      if (ok) { joint = c; break; }
+    const ids = boltMembers(b);
+    const p = [b.u, b.v];
+    const joints = [];
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) {
+        for (const c of contactByKey.get(pairKey(ids[i], ids[j])) || []) {
+          if (c.plane !== b.plane) continue;
+          const ok = c.kind === 'edge' ? distToSegment2(p, c.seg[0], c.seg[1]).d <= BOLT_TOL : pointInPoly(p, c.poly, BOLT_TOL);
+          if (ok) { joints.push(c); break; }
+        }
+      }
     }
+    const joint = joints[0] || null;
     const pos = b.plane === 'L' ? [b.u, b.v, joint ? joint.pos[2] : 0] : [b.u, b.plane === 'A' ? 0 : S, b.v];
-    return { ...b, jointId: joint ? joint.id : null, pos };
+    return { ...b, memberIds: ids, jointId: joint ? joint.id : null, jointIds: joints.map((c) => c.id), pos };
   });
-  for (const c of contacts) c.bolts = bolts.filter((b) => b.jointId === c.id).length;
+  for (const c of contacts) {
+    const on = bolts.filter((b) => b.jointIds.includes(c.id));
+    c.bolts = on.length;
+    c.boltIds = on.map((b) => b.id);
+  }
 
   return { members, memberById, contacts, joints: contacts, bolts, limits: lim };
 }

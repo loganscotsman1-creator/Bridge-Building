@@ -36,20 +36,30 @@ export function membersArea(site) {
 }
 
 // Starting spot of every member on the site. Members without a saved spot are laid out in rows
-// inside the members area.
+// inside the members area. When there are too many to fit side by side, the rows (and columns)
+// are squeezed together so they overlap but all stay inside the area: it's only a rough model.
 export function stagingSpots(project, model) {
   const site = project.site;
   const spots = new Map();
   const auto = model.members.filter((m) => !site.staging[m.id]);
   const longest = Math.max(12, ...model.members.map((m) => m.len));
-  const colW = longest + 4;
-  const rowH = Math.max(3, Math.max(0, ...model.members.map((m) => m.depth)) + 1.5);
+  const deepest = Math.max(0, ...model.members.map((m) => m.depth));
   const area = membersArea(site);
-  const cols = Math.max(1, Math.floor((area.w - 6) / colW));
+  const margin = Math.min(4, area.w / 10, area.h / 10);
+  const innerW = Math.max(0, area.w - 2 * margin), innerH = Math.max(0, area.h - 2 * margin);
+  const colW = longest + 4;
+  const cols = Math.max(1, Math.floor(innerW / colW));
+  const rows = Math.max(1, Math.ceil(auto.length / cols));
+  // Centers range over the area minus half a piece at each edge (or the middle if it's too small).
+  const xSpan = Math.max(0, innerW - Math.min(longest, innerW)), ySpan = Math.max(0, innerH - Math.min(deepest, innerH));
+  const colStep = cols > 1 ? Math.min(colW, xSpan / (cols - 1)) : 0;
+  const rowStep = rows > 1 ? Math.min(Math.max(3, deepest + 1.5), ySpan / (rows - 1)) : 0;
+  const x0 = area.x + area.w / 2 - (colStep * (cols - 1)) / 2;
+  const y0 = area.y + margin + Math.min(deepest, innerH) / 2;
   auto.sort((a, b) => a.plane.localeCompare(b.plane) || a.name.localeCompare(b.name, undefined, { numeric: true }));
   auto.forEach((m, i) => {
     const col = i % cols, row = Math.floor(i / cols);
-    spots.set(m.id, { x: area.x + 4 + col * colW + colW / 2, y: area.y + 6 + row * rowH, auto: true });
+    spots.set(m.id, { x: x0 + col * colStep, y: y0 + row * rowStep, auto: true });
   });
   for (const m of model.members) if (site.staging[m.id]) spots.set(m.id, { ...site.staging[m.id] });
   return spots;

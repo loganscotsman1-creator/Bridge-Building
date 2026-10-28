@@ -78,8 +78,10 @@ export function useCamera({ flipY = false, bounds = null }) {
     return true;
   };
   const endPan = () => { panRef.current = null; };
+  // Shift the view by screen pixels (positive dx shows more of what's to the right).
+  const panBy = (dx, dy) => setCam((q) => q && { ...q, cx: q.cx + dx / q.k, cy: flipY ? q.cy - dy / q.k : q.cy + dy / q.k });
 
-  return { svgRef, size, cam: c, ready: !!cam, toScreen, toWorld, eventPos, fit, beginPan, movePan, endPan, panning: () => !!panRef.current };
+  return { svgRef, size, cam: c, ready: !!cam, toScreen, toWorld, eventPos, fit, beginPan, movePan, endPan, panBy, panning: () => !!panRef.current };
 }
 
 function toWorldWith(c, size, flipY, sx, sy) {

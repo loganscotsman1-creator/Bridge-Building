@@ -3,7 +3,7 @@
 // inside updateProject(p => ...).
 import { MIRROR_SUFFIX, uid } from './ids.js';
 import { boxLimits } from './schema.js';
-import { polyCentroid, rectOfPoly } from './geometry.js';
+import { boltMembers, polyCentroid, rectOfPoly } from './geometry.js';
 
 const baseId = (id) => (id.endsWith(MIRROR_SUFFIX) ? id.slice(0, -MIRROR_SUFFIX.length) : id);
 
@@ -21,7 +21,15 @@ export function removeMember(project, memberId) {
   const d = project.design;
   const gone = new Set([memberId, memberId + MIRROR_SUFFIX]);
   d.members = d.members.filter((m) => m.id !== memberId);
-  d.bolts = d.bolts.filter((b) => !gone.has(b.a) && !gone.has(b.b));
+  // A bolt through several members keeps going through the ones that are left (if two or more).
+  d.bolts = d.bolts.flatMap((b) => {
+    const left = boltMembers(b).filter((id) => !gone.has(id));
+    if (left.length < 2) return [];
+    const [a, c, ...more] = left;
+    const nb = { ...b, a, b: c };
+    if (more.length) nb.more = more; else delete nb.more;
+    return [nb];
+  });
   removeMemberRefs(project, [memberId]);
 }
 
@@ -81,7 +89,7 @@ export function materializeMirror(project, model) {
   }
   for (const b of model.bolts) {
     if (b.plane === 'B' && b.id.endsWith(MIRROR_SUFFIX) && !d.bolts.some((x) => x.id === b.id)) {
-      d.bolts.push({ id: b.id, plane: 'B', a: b.a, b: b.b, u: b.u, v: b.v });
+      d.bolts.push({ id: b.id, plane: 'B', a: b.a, b: b.b, ...(b.more ? { more: b.more } : {}), u: b.u, v: b.v });
     }
   }
   d.mirrorB = false;

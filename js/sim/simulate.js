@@ -65,6 +65,7 @@ class Sim {
     this.grid = new SiteGrid(project.site);
     this.segments = [];
     this.holds = [];
+    this.boltsDone = new Set(); // a bolt through 3+ members is fastened once, at its first connection
     this.warnings = [];
     this.errors = [];
     this.tracks = new Map(); // memberId -> [{t, kind: staging|carried|ground|bridge, x, y, builderId}]
@@ -485,7 +486,7 @@ class Sim {
       const id = arrivals[i].id;
       this.waitUntil(a, arrivals[i].t);
       const inner = (u.internal || []).filter((j) => (j.a === id && joined.has(j.b)) || (j.b === id && joined.has(j.a)));
-      const bolts = inner.reduce((s, j) => s + j.bolts, 0);
+      const bolts = this.newBolts(inner);
       if (!inner.length) this.warn(`${this.model.memberById.get(id).name} doesn't touch the rest of ${u.name}.`);
       const dur = this.T.assemblyJoinTime > 0 ? this.T.assemblyJoinTime : inner.length * this.T.alignTime + bolts * a.boltTime;
       this.seg(a, 'assemble', a.freeAt, a.freeAt + dur, { label: `Bolt ${this.model.memberById.get(id).name} into ${u.name}`, unitKey: u.key });
@@ -516,7 +517,7 @@ class Sim {
     const joined = new Set([u.memberIds[0]]);
     for (const id of u.memberIds.slice(1)) {
       const inner = (u.internal || []).filter((j) => (j.a === id && joined.has(j.b)) || (j.b === id && joined.has(j.a)));
-      const bolts = inner.reduce((s, j) => s + j.bolts, 0);
+      const bolts = this.newBolts(inner);
       if (!inner.length) this.warn(`${this.model.memberById.get(id).name} doesn't touch the rest of ${u.name}.`);
       const dur = this.T.assemblyJoinTime > 0 ? this.T.assemblyJoinTime : inner.length * this.T.alignTime + bolts * a.boltTime;
       this.seg(a, 'assemble', a.freeAt, a.freeAt + dur, { label: `Bolt ${this.model.memberById.get(id).name} into ${u.name}`, unitKey: u.key });
@@ -673,7 +674,8 @@ class Sim {
         if (rec.alignStart == null) rec.alignStart = f.freeAt;
         this.seg(f, 'align', f.freeAt, f.freeAt + this.T.alignTime * mult, { label: 'Align ' + label, unitKey: u.key, nodeId: j.id, holding: solo });
         const bolts = this.fastenJoint(j);
-        this.seg(f, 'fasten', f.freeAt, f.freeAt + bolts * f.boltTime * mult, { label: `Fasten ${bolts} bolt${bolts === 1 ? '' : 's'}: ${label}`, unitKey: u.key, nodeId: j.id, holding: solo, bolts });
+        // (0 when its bolts already went in with an earlier connection through the same stack)
+        if (bolts > 0) this.seg(f, 'fasten', f.freeAt, f.freeAt + bolts * f.boltTime * mult, { label: `Fasten ${bolts} bolt${bolts === 1 ? '' : 's'}: ${label}`, unitKey: u.key, nodeId: j.id, holding: solo, bolts });
         this.updateStability(f.freeAt);
       }
       rec.workEnd = f.freeAt;
@@ -696,13 +698,22 @@ class Sim {
     });
   }
 
+  // Bolts in these connections that haven't been put in yet (each one counts once, even when it
+  // passes through several members and so holds several connections).
+  newBolts(joints) {
+    let n = 0;
+    for (const j of joints) for (const id of j.boltIds || []) if (!this.boltsDone.has(id)) { this.boltsDone.add(id); n++; }
+    return n;
+  }
+
+  // Returns how many bolts have to be put in for this connection.
   fastenJoint(j) {
     const ua = this.unitOfMember.get(j.a), ub = this.unitOfMember.get(j.b);
     for (const x of [ua, ub]) {
       x.fastened[j.id] = true;
       x.attached[j.id] = j.bolts;
     }
-    return j.bolts;
+    return this.newBolts([j]);
   }
 
   doSupport(step) {

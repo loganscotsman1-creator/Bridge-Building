@@ -6,8 +6,9 @@ import { simulate } from '../js/sim/simulate.js';
 import { createExampleProject } from '../js/model/example.js';
 import { emptyProject, normalizeProject } from '../js/model/schema.js';
 import { site2027, RULES_2027 } from '../js/model/rules2027.js';
-import { autoBolts, newBox } from '../js/model/edit.js';
+import { autoBolts, newBox, removeMember } from '../js/model/edit.js';
 import { snapBox, snapPoint, snapSize } from '../js/ui/snap.js';
+import { membersArea, stagingSpots } from '../js/model/plan.js';
 
 const results = [];
 async function test(name, fn) {
@@ -297,6 +298,38 @@ await test('a support left under the bridge at the finish is reported (10.9.1)',
   p.plans[0].steps = p.plans[0].steps.filter((s) => !(s.kind === 'support' && s.action === 'remove'));
   const r = simulate(p);
   assert(r.errors.some((e) => /10\.9\.1/.test(e.msg)), r.errors.map((e) => e.msg).join(' | '));
+});
+
+await test('every new member is staged inside the members area, even when there are many', () => {
+  const p = normalizeProject(createExampleProject());
+  for (const n of [p.design.members.length, 150]) {
+    while (p.design.members.length < n) p.design.members.push({ ...newBox(p, 'A', 0, 0), id: 'X' + p.design.members.length, name: 'X' + p.design.members.length });
+    p.site.staging = {};
+    const model = buildModel(p);
+    const area = membersArea(p.site);
+    const spots = stagingSpots(p, model);
+    assert(spots.size === model.members.length, 'spots ' + spots.size);
+    for (const m of model.members) {
+      const s = spots.get(m.id);
+      assert(s.x - m.len / 2 >= area.x - 1e-6 && s.x + m.len / 2 <= area.x + area.w + 1e-6 && s.y - m.depth / 2 >= area.y - 1e-6 && s.y + m.depth / 2 <= area.y + area.h + 1e-6, `${m.name} at ${s.x},${s.y} (n=${n})`);
+    }
+  }
+});
+
+await test('one bolt through three overlapping members holds all three connections', () => {
+  const p = emptyProject();
+  p.design.footingSpan = 200;
+  const mk = (id, u, v, angle) => ({ ...newBox(p, 'A', u, v, angle), id, name: id });
+  p.design.members = [mk('P', 20, 3, 0), mk('Q', 20, 3, 90), mk('R', 20, 3, 45)];
+  p.design.bolts = [{ id: 'b1', plane: 'A', a: 'P', b: 'Q', more: ['R'], u: 20, v: 3 }];
+  const model = buildModel(p);
+  const b = model.bolts[0];
+  assert(b.memberIds.length === 3 && b.jointIds.length === 3, JSON.stringify(b.jointIds));
+  for (const c of model.contacts) assert(c.bolts === 1, c.id + ' has ' + c.bolts);
+  removeMember(p, 'R');
+  assert(p.design.bolts.length === 1 && !p.design.bolts[0].more, JSON.stringify(p.design.bolts));
+  removeMember(p, 'Q');
+  assert(p.design.bolts.length === 0, 'bolt through one member should go');
 });
 
 await test('old (version 1) project files still open', () => {

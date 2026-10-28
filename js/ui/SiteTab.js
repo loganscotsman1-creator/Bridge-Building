@@ -5,7 +5,7 @@ import { updateProject } from '../model/store.js';
 import { uid } from '../model/ids.js';
 import { ZONE_TYPES, normalizeSite } from '../model/schema.js';
 import { site2027 } from '../model/rules2027.js';
-import { membersArea, stagingSpots } from '../model/plan.js';
+import { stagingSpots } from '../model/plan.js';
 import { deleteMySite, downloadJSON, fetchLibrarySite, fetchSiteLibrary, mySites, pickFile, readJSONFile, safeFilename, saveMySite, siteForSharing } from '../model/storage.js';
 import { PlanView } from './PlanView.js';
 import { Check, Hint, NumField, Section, SelectField, TextField } from './common.js';
@@ -15,8 +15,6 @@ export function SiteTab({ project, model }) {
   const [newType, setNewType] = useState('staging');
   const site = project.site;
   const spots = stagingSpots(project, model);
-  const area = membersArea(site);
-  const overflow = [...spots.values()].filter((s) => s.auto && s.y > area.y + area.h).length;
 
   const addZone = (type) => {
     const id = uid('z');
@@ -35,15 +33,14 @@ export function SiteTab({ project, model }) {
           </select></label>
         <button onClick=${() => addZone(newType)}><span class="dot" style=${{ background: ZONE_TYPES[newType].color }}></span>Add</button>
         <span class="sep"></span>
-        <button onClick=${() => updateProject((p) => { p.site.staging = {}; })} title="Forget dragged positions and lay members out in rows in the members area">Re-stack members</button>
+        <button onClick=${() => updateProject((p) => { p.site.staging = {}; })} title="Forget dragged positions and lay members out in rows that fit in the members area">Re-stack members</button>
         <button title="Put back the official 2027 layout and rules (members, builders and tools keep their start points)" onClick=${() => {
           if (!confirm('Replace this layout and its rules with the official 2027 layout?')) return;
           updateProject((p) => { const keep = p.site.staging; p.site = { ...site2027(), staging: keep }; });
         }}>Reset to 2027 layout</button>
       </div>
       <${PlanView} project=${project} model=${model} spots=${spots} sel=${sel} setSel=${setSel} editable=${true} />
-      <div class="hint-bar">Drag zones, corners, the bridge, builders, tools and members to place them. Scroll to zoom, drag empty space to pan.
-        ${overflow > 0 && html` <b class="bad">${overflow} member${overflow === 1 ? " doesn't" : "s don't"} fit in the members area; make it bigger or drag ${overflow === 1 ? 'it' : 'them'}.</b>`}</div>
+      <div class="hint-bar">Drag zones, corners, the bridge, builders, tools and members to place them. Scroll to zoom, drag empty space to pan.</div>
     </div>
     <aside class="side">
       ${sel && html`<${SelectedPanel} project=${project} sel=${sel} setSel=${setSel} />`}

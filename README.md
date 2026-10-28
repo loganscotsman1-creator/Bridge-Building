@@ -59,12 +59,19 @@ Each view then has a checklist on the right that walks you through it:
      (any shape is allowed as long as it still fits the size box; one that doesn't is shown in
      red and refused), and the round handle to rotate it. Click empty space to deselect.
    - Arrow keys nudge, R turns 90°, Ctrl+D copies, Delete removes, Shift while dragging turns
-     snapping off, right-drag or Space+drag pans.
+     snapping off, right-drag or Space+drag pans. You can pan in the middle of a drag too: hold
+     Space or the right mouse button while moving a box, or carry it to the canvas edge and the
+     view scrolls along.
+   - **Lateral heights:** in the top view, select a lateral and set its height in the toolbar
+     (type it, use ▲/▼ or PageUp/PageDown, or pick a truss member's level) any time after
+     placing it.
 4. **Place bolts (B):** wherever two boxes touch, the app shows a green line (edges snapped
    together) or a green area (boxes overlapping, e.g. a diagonal lapped onto a chord's gusset).
    Click anywhere on it to put a bolt there; bolts snap to ¼" steps along the edge. Orange means
    the boxes touch but have no bolt yet, which rule 9.5.1 doesn't allow. **Auto-fill** puts N
-   bolts on every connection that has none. A connection with **two or more bolts is rigid** (it
+   bolts on every connection that has none. Where three or more boxes overlap, one click puts a
+   single bolt through all of them (marked ×3, ×4…); it holds every connection in the stack and
+   is fastened once. A connection with **two or more bolts is rigid** (it
    can cantilever); the threshold is in Bridge settings.
 5. **Check footing supports (F):** members whose bottom sits on a footing are found
    automatically; click a member to mark or unmark it by hand.
@@ -75,7 +82,8 @@ yard (tools, nuts & bolts and builders areas), west construction zone with its f
 river, east construction zone with its footing, transportation zone, and east staging yard
 (members, builders, nuts & bolts and tools areas). Adjust it for local conditions (for example the
 host may shorten the transportation zone), and drag the bridge, builders, tools and members to
-where they start (members are stacked in the members area until you move them).
+where they start (members are stacked in the members area until you move them; when there are too many to
+lie side by side they're drawn overlapping so they all stay inside it).
 
 **Competition rules** (in the same tab) holds the numbers that change each year: member box size,
 most builders, most members per assembly, where assemblies are made, time limits and the

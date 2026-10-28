@@ -6,7 +6,7 @@ import { updateProject } from '../model/store.js';
 import { uid } from '../model/ids.js';
 import { boxLimits } from '../model/schema.js';
 import { autoBolts, clampBox, duplicateMember, enableMirror, materializeMirror, removeBolt, removeMember, squareUp } from '../model/edit.js';
-import { footingPoints } from '../model/geometry.js';
+import { boltMembers, footingPoints } from '../model/geometry.js';
 import { imageFileToData, pickFile } from '../model/storage.js';
 import { jointLabel } from '../model/plan.js';
 import { Annotator, PLANE_COLORS, ftIn, loadViewImage } from './Annotator.js';
@@ -163,7 +163,7 @@ function SelectionPanel({ project, model, sel, setSel }) {
       <label class="field"><span class="lbl">Color</span><span class="inp"><input type="color" value=${raw.color || PLANE_COLORS[raw.plane]} onInput=${(e) => set({ color: e.target.value })} /></span></label>
       <div class="row">
         <button onClick=${() => { let id; updateProject((p) => { id = duplicateMember(p, sel.id, 0, raw.depth); }); setSel({ type: 'member', id }); }}>Copy box</button>
-        <button onClick=${() => updateProject((p) => { p.design.bolts = p.design.bolts.filter((b) => b.a !== sel.id && b.b !== sel.id); })}>Remove its bolts</button>
+        <button onClick=${() => updateProject((p) => { p.design.bolts = p.design.bolts.filter((b) => !boltMembers(b).includes(sel.id)); })}>Remove its bolts</button>
         <button class="danger" onClick=${() => { updateProject((p) => removeMember(p, sel.id)); setSel(null); }}>Delete</button>
       </div>
     <//>`;
@@ -171,9 +171,9 @@ function SelectionPanel({ project, model, sel, setSel }) {
   if (sel.type === 'bolt') {
     const b = model.bolts.find((x) => x.id === sel.id);
     if (!b) return null;
-    const a = model.memberById.get(b.a), c = model.memberById.get(b.b);
+    const names = b.memberIds.map((id) => model.memberById.get(id)?.name || '?');
     return html`<${Section} title="Bolt">
-      <${Hint}>Through ${a ? a.name : '?'} and ${c ? c.name : '?'}${b.jointId ? '' : html` · <b class="bad">no longer on a place where they touch</b>`}.<//>
+      <${Hint}>Through ${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}${b.jointId ? '' : html` · <b class="bad">no longer on a place where they touch</b>`}.<//>
       ${d.bolts.some((x) => x.id === sel.id)
         ? html`<button class="danger" onClick=${() => { updateProject((p) => removeBolt(p, sel.id)); setSel(null); }}>Delete bolt</button>`
         : html`<${Hint}>Mirror copy. Delete the truss A bolt instead.<//>`}
