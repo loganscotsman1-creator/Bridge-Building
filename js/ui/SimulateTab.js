@@ -79,12 +79,12 @@ export function SimulateTab({ project, model, sim }) {
     <div data-tour="gantt"><${Gantt} result=${sim} t=${t} setT=${(v) => { setPlaying(false); setT(v); }} /></div>
     <div class="sim-reports">
       <${Section} title=${`Holding time (${fmt(totalHold)} total)`}>
-        <p class="hint">How long someone had to hold each piece after placing it: waiting for a fastener, then aligning and bolting, then until the piece became stable.</p>
+        <p class="hint">How long someone had to hold each piece after placing it: waiting for a fastener, then aligning and bolting, then until the piece became stable or another builder's held piece (say a lateral bolted to both trusses) could hold it up instead.</p>
         <table class="grid">
           <thead><tr><th>Piece</th><th>Held by</th><th>From</th><th>Held for</th><th>Waiting for fastener</th><th>Align + bolt</th><th></th></tr></thead>
           <tbody>${holds.map((h) => html`<tr onClick=${() => { setPlaying(false); setT(h.start); }} class=${h.open ? 'bad' : ''}>
             <td>${h.name}</td><td>${sim.builders.find((b) => b.id === h.builderId)?.name}${h.solo ? ' (solo)' : ''}</td>
-            <td>${fmt(h.start)}</td><td><b>${h.duration.toFixed(1)} s</b>${h.open ? ' – never released' : ''}</td>
+            <td>${fmt(h.start)}</td><td><b>${h.duration.toFixed(1)} s</b>${h.open ? ' – never released' : ''}${h.heldUpBy ? html`<div class="muted small">then held up through ${h.heldUpBy.name}${h.heldUpBy.builder ? ' (' + h.heldUpBy.builder + ')' : ''}</div>` : ''}</td>
             <td>${h.waitForFastener != null ? h.waitForFastener.toFixed(1) + ' s' : '—'}</td>
             <td>${h.working != null ? h.working.toFixed(1) + ' s' : '—'}</td>
             <td><span class="bar" style=${{ width: Math.min(120, (h.duration / Math.max(1, holds[0]?.duration || 1)) * 120) + 'px' }}></span></td></tr>`)}</tbody>

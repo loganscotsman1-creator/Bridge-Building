@@ -327,35 +327,71 @@ class Sim {
   }
 
   // ---------- stability ----------
+  // Which pieces stand on their own, and which builders can let go. A held piece counts as
+  // fixed, so it can hold up what's bolted to it; a holder lets go as soon as everything that's up
+  // stays up without them (pieces that now stand on their own first, then the longest-held, so
+  // the builder holding the newest piece is the one who keeps holding).
   updateStability(t) {
     const installed = [...this.units.values()].filter((u) => u.installed);
     const supportNodes = new Set(this.bearings);
     for (const [n, c] of this.supported) if (c > 0) supportNodes.add(n);
-    const res = computeStability({
+    const solve = (held) => computeStability({
       units: installed.map((u) => ({ key: u.key, nodeIds: u.nodeIds, attached: u.attached })),
       supportNodes,
       nodePos: this.nodePos,
       rigidBoltCount: this.project.design.rigidBoltCount,
-    });
+      held,
+    }).stable;
+    const real = solve(new Set());
+    let holds = new Set(installed.filter((u) => u.holder).map((u) => u.key));
+    let up = solve(holds);
+    const order = [...holds].sort((a, b) => (real.has(b) - real.has(a)) || (this.units.get(a).holdStart - this.units.get(b).holdStart));
+    for (const k of order) {
+      const next = new Set(holds);
+      next.delete(k);
+      const s = solve(next);
+      if ([...up].every((x) => s.has(x))) {
+        const u = this.units.get(k);
+        // Who keeps it up now: the held piece it would fall without (for the holding table).
+        let by = null;
+        if (!real.has(k)) {
+          for (const h of next) {
+            const fewer = new Set(next);
+            fewer.delete(h);
+            if (!solve(fewer).has(k)) { by = this.units.get(h); break; }
+          }
+        }
+        holds = next;
+        up = s;
+        this.release(u, t, by);
+      }
+    }
     for (const u of installed) {
-      const now = res.stable.has(u.key);
+      const now = real.has(u.key);
       if (now && !u.stable) {
         u.stable = true;
         u.stableAt = t;
         this.status(u, t, 'stable');
-        if (u.holder) this.release(u, t);
       } else if (!now && u.stable) {
         u.stable = false;
-        this.status(u, t, 'unstable');
-        if (!u.holder) this.error(`${u.name} loses its support at ${fmt(t)} and would fall.`);
+        this.status(u, t, up.has(u.key) ? 'held' : 'unstable');
       }
+      // Up only because someone is holding it or a piece it's bolted to.
+      if (!now && !up.has(u.key) && !u.fell) {
+        u.fell = true;
+        this.status(u, t, 'unstable');
+        this.error(`${u.name} loses its support at ${fmt(t)} and would fall.`);
+      } else if (up.has(u.key)) u.fell = false;
     }
   }
 
-  release(u, t) {
+  release(u, t, heldUpBy = null) {
     const b = this.builderById.get(u.holder);
     const rec = this.holds.find((h) => h.unitKey === u.key && h.end == null);
-    if (rec) rec.end = t;
+    if (rec) {
+      rec.end = t;
+      if (heldUpBy) rec.heldUpBy = { name: heldUpBy.name, builder: this.builderById.get(heldUpBy.holder)?.name };
+    }
     u.holder = null;
     b.holding = null;
     if (!Number.isFinite(b.freeAt)) {
@@ -629,6 +665,7 @@ class Sim {
     u.holder = c.id;
     c.holding = u.key;
     c.holdSince = placeAt;
+    u.holdStart = placeAt;
     const rec = { unitKey: u.key, name: u.name, builderId: c.id, start: placeAt, end: null, alignStart: null, workEnd: null, solo: false, step: this.stepIndex };
     this.holds.push(rec);
     c.freeAt = Infinity;

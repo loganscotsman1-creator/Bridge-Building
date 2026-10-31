@@ -191,7 +191,11 @@ points by things that are already fixed (footings, supports, or stable pieces, t
 bolts), or at one point by a rigid connection. Two bodies pinned together, each already held
 somewhere else and not in a straight line, lock that connection in place, which is how a
 triangulated truss becomes rigid. Until a piece is stable the builder who placed it keeps holding
-it. If every builder ends up holding something, the plan stops and tells you why.
+it. A held piece counts as fixed, so it can hold up whatever is bolted to it: once a lateral is
+bolted to both trusses, the one builder holding the lateral holds both sides up, and the builders
+holding the truss pieces let go (the holding table shows "then held up through L-1"). Holders let
+go whenever everything stays up without them, with the builder holding the newest piece keeping
+hold. If every builder ends up holding something, the plan stops and tells you why.
 
 Not modelled (yet): a single truss tipping sideways, deflection and member strength, clearances
 and stringer checks (9.3), builders bumping into each other, and accident time penalties. These

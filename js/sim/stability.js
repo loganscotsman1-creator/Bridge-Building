@@ -13,6 +13,10 @@
 // A joint counts as a moment connection when the body has at least `rigidBoltCount` fastened bolts
 // there.
 //
+// Pieces a builder is holding can be passed in as `held`: a hand holds a piece firmly (like a
+// moment connection), so a held piece counts as fixed and can hold up whatever is bolted to it,
+// e.g. one builder holding a lateral that's bolted to both trusses holds both sides up.
+//
 // Known simplifications (good places to improve the model):
 //   - out-of-plane tipping of a single truss is ignored
 //   - deflection, bolt slop and member strength are ignored
@@ -29,9 +33,10 @@ const JOINT = '#joint';
  * @param {Set<string>} args.supportNodes bearing nodes and nodes with a support tool
  * @param {Map<string, {x:number,y:number,z:number}>} args.nodePos
  * @param {number} args.rigidBoltCount
+ * @param {Set<string>} [args.held] unit keys being held by a builder
  * @returns {{stable: Set<string>, fixedNodes: Set<string>}}
  */
-export function computeStability({ units, supportNodes, nodePos, rigidBoltCount }) {
+export function computeStability({ units, supportNodes, nodePos, rigidBoltCount, held = new Set() }) {
   // Pieces joined by rigid connections move together, so treat each rigidly connected group as
   // one body (a whole truss bolted with 2-bolt connections is one body pinned at its footings).
   const parent = new Map(units.map((u) => [u.key, u.key]));
@@ -62,13 +67,14 @@ export function computeStability({ units, supportNodes, nodePos, rigidBoltCount 
     for (const u of list) for (const [n, c] of Object.entries(u.attached)) if (nodeIds.includes(n)) attached[n] = Math.max(attached[n] || 0, c);
     bodies.push({ key: 'group:' + r, nodeIds, attached, members: list.map((u) => u.key) });
   }
-  const res = solveBodies({ units: bodies, supportNodes, nodePos, rigidBoltCount });
+  const heldBodies = new Set(bodies.filter((b) => (b.members || [b.key]).some((k) => held.has(k))).map((b) => b.key));
+  const res = solveBodies({ units: bodies, supportNodes, nodePos, rigidBoltCount, held: heldBodies });
   const stable = new Set();
   for (const b of bodies) if (res.stable.has(b.key)) for (const k of b.members || [b.key]) stable.add(k);
   return { stable, fixedNodes: res.fixedNodes };
 }
 
-function solveBodies({ units, supportNodes, nodePos, rigidBoltCount }) {
+function solveBodies({ units, supportNodes, nodePos, rigidBoltCount, held }) {
   const stable = new Set();
   const fixedBy = new Map();
   const addSource = (n, s) => {
@@ -77,6 +83,11 @@ function solveBodies({ units, supportNodes, nodePos, rigidBoltCount }) {
     set.add(s);
   };
   for (const n of supportNodes) addSource(n, SUPPORT);
+  for (const u of units) {
+    if (!held.has(u.key)) continue;
+    stable.add(u.key);
+    for (const n of u.nodeIds) addSource(n, u.key);
+  }
 
   const contactsOf = (u) => {
     const pts = [];

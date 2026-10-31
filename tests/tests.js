@@ -219,6 +219,22 @@ await test('stability: a pinned triangle is rigid', () => {
   assert(r.stable.has('left') && r.stable.has('right'));
 });
 
+await test('stability: one builder holding a lateral holds up both trusses through it', () => {
+  // Truss A and truss B pieces each pinned once at a footing (they'd swing), and a lateral pinned
+  // to both of them.
+  const units = [
+    { key: 'A', nodeIds: ['fa', 'la'], attached: { fa: 1, la: 1 } },
+    { key: 'B', nodeIds: ['fb', 'lb'], attached: { fb: 1, lb: 1 } },
+    { key: 'L', nodeIds: ['la', 'lb'], attached: { la: 1, lb: 1 } },
+  ];
+  const nodePos = new Map([['fa', { x: 0, y: 0, z: 0 }], ['fb', { x: 0, y: 38, z: 0 }], ['la', { x: 30, y: 0, z: 12 }], ['lb', { x: 30, y: 38, z: 12 }]]);
+  const args = { units, supportNodes: new Set(['fa', 'fb']), nodePos, rigidBoltCount: 2 };
+  const free = computeStability(args).stable;
+  assert(!free.has('A') && !free.has('B') && !free.has('L'), 'nothing stands without a hand');
+  const held = computeStability({ ...args, held: new Set(['L']) }).stable;
+  assert(held.has('A') && held.has('B'), 'holding the lateral holds both sides');
+});
+
 await test('builders cannot cross the river on the 2027 site', () => {
   const g = new SiteGrid(site2027());
   const m = g.mask(null);
