@@ -54,6 +54,9 @@ export const DEFAULT_TIMING = {
   assemblyJoinTime: 0, // s to add one member to an assembly; 0 = align time + bolt times
   assemblyAlignTime: 0, // s to line up one connection in the staging yard; 0 = same as alignTime
   assemblyBoltTime: 0, // s per bolt in the staging yard; 0 = the builder's fastening tool time
+  stagedAlignTime: 1, // s to line up an assembly connection whose members are staged touching
+  stagedBoltTime: 0, // s per bolt at such a connection; 0 = the staging-yard bolt time
+  insertTime: 2, // s to push in a bolt that holds without its nut (the nut comes later)
   gearUpTime: 2, // s to grab one tool or the nuts & bolts at the start
   soloMultiplier: 1.5, // align/fasten time multiplier when the carrier fastens while holding
   maxReach: 40, // in a builder can reach from where they stand
@@ -89,11 +92,14 @@ export function emptyProject() {
       // len × depth is the outline in its view; thick is the size out of the view. A reshaped
       // member also has `corners` (3 or more points, any simple shape), which then define its outline. `bearing` is
       // true/false when set by hand, or missing to detect it from the footings.
-      members: [], // {id, name, plane, u, v, angle (deg), len, depth, thick, corners?, z?, bearing?, lbPerFt?, color?}
+      // `thick` can be long too (a member can run across the bridge): the three sizes together
+      // must fit the size box. `off` shifts a side-view member's center across the bridge.
+      members: [], // {id, name, plane, u, v, angle (deg), len, depth, thick, off?, corners?, z?, bearing?, lbPerFt?, color?}
       // A bolt through members a and b (plus `more` where 3+ boxes overlap), at (u, v) on that
       // plane's view. `when` (3+ members only): 'first' (default, as soon as two are joined),
       // 'all' (once every member is in place), or a member id (once that member is placed).
-      bolts: [], // {id, plane, a, b, more?, when?, u, v}
+      // `snug`: the connection holds with the bolt just inserted; the nut goes on later.
+      bolts: [], // {id, plane, a, b, more?, when?, snug?, u, v}
       // Per-connection time overrides, by connection id: {alignTime?, boltTime?} (s; missing =
       // the default for where it's made: staging yard or bridge).
       connections: {},
@@ -127,7 +133,7 @@ export function normalizeProject(p) {
   out.images = p.images || {};
   out.tools = (p.tools || []).map((t) => ({ kind: 'other', count: 1, boltTime: 4, placeTime: 6, removeTime: 5, start: { x: 0, y: 0 }, notes: '', ...t }));
   out.builders = (p.builders || []).map((b, i) => ({
-    role: 'any', color: DEFAULT_COLORS[i % DEFAULT_COLORS.length], start: { x: 0, y: 0 }, allowedZones: null, loadout: [], hardware: true, ...b,
+    role: 'any', color: DEFAULT_COLORS[i % DEFAULT_COLORS.length], start: { x: 0, y: 0 }, allowedZones: null, loadout: [], hardware: true, boltCount: null, ...b,
   }));
   out.plans = (p.plans && p.plans.length ? p.plans : base.plans).map((pl) => ({ assemblies: [], steps: [], ...pl }));
   if (!out.plans.some((pl) => pl.id === out.activePlanId)) out.activePlanId = out.plans[0].id;

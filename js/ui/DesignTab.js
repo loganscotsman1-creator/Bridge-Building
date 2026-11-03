@@ -6,7 +6,7 @@ import { updateProject } from '../model/store.js';
 import { uid } from '../model/ids.js';
 import { boxLimits } from '../model/schema.js';
 import { autoBolts, clampBox, duplicateMember, enableMirror, materializeMirror, removeBolt, removeMember, squareUp } from '../model/edit.js';
-import { boltMembers, footingPoints } from '../model/geometry.js';
+import { boltMembers, footingPoints, maxThickness, memberPoly } from '../model/geometry.js';
 import { imageFileToData, pickFile } from '../model/storage.js';
 import { jointLabel } from '../model/plan.js';
 import { Annotator, PLANE_COLORS, ftIn, loadViewImage } from './Annotator.js';
@@ -157,7 +157,9 @@ function SelectionPanel({ project, model, sel, setSel }) {
           <${NumField} label="Center x" unit="in" value=${raw.u} onChange=${(v) => set({ u: v })} />
           <${NumField} label=${raw.plane === 'L' ? 'Center y' : 'Center z'} unit="in" value=${raw.v} onChange=${(v) => set({ v })} />
         </div>`}
-      <${NumField} label=${'Thickness (max ' + lim.thick + ')'} unit="in" value=${raw.thick} min=${0.125} title="Size out of the view" onChange=${(v) => set({ thick: Math.min(lim.thick, v) })} />
+      ${(() => { const maxT = maxThickness(memberPoly(raw), lim); return html`<${NumField} label=${(raw.plane === 'L' ? 'Height of the box' : 'Across the bridge') + ' (max ' + maxT + ')'} unit="in" value=${raw.thick} min=${0.125}
+        title=${`Size out of the view. The box is 3D: all three sizes must fit ${lim.len} × ${lim.depth} × ${lim.thick} in, so what's allowed depends on the other two.`} onChange=${(v) => set({ thick: Math.min(maxT, v) })} />`; })()}
+      ${raw.plane !== 'L' && html`<${NumField} label="Shifted across the bridge" unit="in" value=${raw.off || 0} title="Moves the box toward the other truss. In the top view you can drag its ends instead." onChange=${(v) => set({ off: v })} />`}
       ${raw.plane === 'L' && html`<${NumField} label="Height (z)" unit="in" value=${raw.z} onChange=${(v) => set({ z: v })} />`}
       ${raw.plane !== 'L' && html`<div class="row"><${Check} label=${'Stands on a footing' + (m.autoBearing ? ' (automatic)' : '')} checked=${m.bearing} onChange=${(v) => set({ bearing: v })} />
         ${!m.autoBearing && html`<button class="small" onClick=${() => updateProject((p) => { delete p.design.members.find((q) => q.id === sel.id).bearing; })}>Detect automatically</button>`}</div>`}
@@ -184,6 +186,9 @@ function SelectionPanel({ project, model, sel, setSel }) {
           ...b.memberIds.filter((id) => raw ? true : !id.endsWith('~B')).map((id) => [raw ? id : id.replace(/~B$/, ''), 'When ' + (model.memberById.get(id)?.name || '?') + ' is placed'])]}
         onChange=${(v) => updateProject((p) => { const x = p.design.bolts.find((q) => q.id === (raw ? sel.id : sel.id.replace(/~B$/, ''))); if (!x) return; if (v === 'first') delete x.when; else x.when = v; })} />
         <${Hint}>Until it goes in, the members it joins aren't held by it, so someone may have to keep holding them.<//>`}
+      <${Check} label="Holds with the bolt just inserted" checked=${!!b.snug}
+        title="The bridge can rest on this bolt before its nut is on. It's pushed in quickly when the piece goes up, and shows as only partly connected until someone comes back to fasten it."
+        onChange=${(v) => updateProject((p) => { const x = p.design.bolts.find((q) => q.id === (raw ? sel.id : sel.id.replace(/~B$/, ''))); if (!x) return; if (v) x.snug = true; else delete x.snug; })} />
       ${joints.map((c) => html`<${ConnTimes} key=${c.id} project=${project} model=${model} joint=${c} />`)}
       ${d.bolts.some((x) => x.id === sel.id)
         ? html`<button class="danger" onClick=${() => { updateProject((p) => removeBolt(p, sel.id)); setSel(null); }}>Delete bolt</button>`
@@ -194,7 +199,7 @@ function SelectionPanel({ project, model, sel, setSel }) {
 }
 
 // Time overrides for one connection (empty = the default for where it's made).
-function setConnTime(joint, field, v) {
+export function setConnTime(joint, field, v) {
   updateProject((p) => {
     const all = (p.design.connections = p.design.connections || {});
     const t = { ...(all[joint.timeKey] || {}) };
@@ -241,11 +246,13 @@ function ConnectionTable({ project, model }) {
         ${custom > 0 && html`<button class="small" onClick=${() => updateProject((p) => { p.design.connections = {}; })}>Clear all overrides</button>`}</div>
       <${Hint}>Leave a time empty to use the default: align ${def.align}; per bolt ${def.bolt} (set in Crew → Timing and Tools). A time typed here is used for that connection wherever it's made.${d.mirrorB ? ' Truss B copies use the truss A times.' : ''}<//>
       <table class="grid">
-        <thead><tr><th>Connection</th><th>View</th><th>Bolts</th><th>Align (s)</th><th>Per bolt (s)</th></tr></thead>
+        <thead><tr><th>Connection</th><th>View</th><th>Bolts</th><th>Align (s)</th><th>Per bolt (s)</th><th title="The connection holds on bolts just pushed in; a builder comes back later for the nuts">Holds inserted</th></tr></thead>
         <tbody>${list.map((c) => html`<tr class=${picked === c.id ? 'sel' : ''} onClick=${() => setPicked(c.id)}>
           <td>${jointLabel(model, c)}</td><td>${c.plane === 'L' ? 'Top' : 'Truss ' + c.plane}</td><td class=${c.bolts ? '' : 'bad'}>${c.bolts}</td>
           <td><input type="number" class="tiny" min="0" step="any" placeholder="default" value=${c.alignTime ?? ''} onInput=${(e) => { const v = e.target.value.trim(); setConnTime(c, 'alignTime', v === '' ? null : Math.max(0, parseFloat(v) || 0)); }} /></td>
           <td><input type="number" class="tiny" min="0" step="any" placeholder="default" value=${c.boltTime ?? ''} onInput=${(e) => { const v = e.target.value.trim(); setConnTime(c, 'boltTime', v === '' ? null : Math.max(0, parseFloat(v) || 0)); }} /></td>
+          <td>${c.bolts > 0 && html`<input type="checkbox" checked=${model.bolts.filter((b) => c.boltIds.includes(b.id)).every((b) => b.snug)}
+            onChange=${(e) => updateProject((p) => { const ids = c.boltIds.map((id) => id.replace(/~B$/, '')); for (const b of p.design.bolts) { if (!ids.includes(b.id)) continue; if (e.target.checked) b.snug = true; else delete b.snug; } })} />`}</td>
         </tr>`)}</tbody>
       </table>
     </div>

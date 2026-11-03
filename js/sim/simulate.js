@@ -18,7 +18,7 @@
 //   - builders finish in a staging yard and supports are picked back up (10.9.1)
 import { buildModel, bridgeToSite, dist2d, memberPoint } from '../model/geometry.js';
 import { activePlan, ZONE_TYPES } from '../model/schema.js';
-import { planUnits, stagingSpots, stepLabel, jointLabel } from '../model/plan.js';
+import { assemblyConnections, planUnits, stagingSpots, stepLabel, jointLabel } from '../model/plan.js';
 import { SiteGrid } from './grid.js';
 import { computeStability } from './stability.js';
 
@@ -36,6 +36,7 @@ export const SEGMENT_KINDS = {
   wait: { label: 'Waiting', color: '#f1f5f9' },
   hold: { label: 'Holding a piece', color: '#f97316' },
   align: { label: 'Aligning', color: '#fde047' },
+  insert: { label: 'Inserting bolts (nut later)', color: '#fbbf24' },
   fasten: { label: 'Fastening', color: '#ca8a04' },
   assemble: { label: 'Assembling (staging yard)', color: '#a855f7' },
   support: { label: 'Placing / removing support', color: '#14b8a6' },
@@ -66,6 +67,9 @@ class Sim {
     this.segments = [];
     this.holds = [];
     this.boltsDone = new Set(); // bolts put in so far (a bolt through 3+ members goes in once)
+    this.snugLeft = new Map(); // inserted bolts still waiting for their nut: boltId -> {bolt, joint}
+    this.boltEvents = []; // one per bolt going in or being tightened, for the animation
+    this.stagedReady = new Set(); // assembly connections whose members are staged touching
     this.credited = new Set(); // "boltId|connectionId" pairs already counted toward stability
     this.boltById = new Map(this.model.bolts.map((b) => [b.id, b]));
     this.jointById = new Map(this.model.contacts.map((c) => [c.id, c]));
@@ -99,6 +103,7 @@ class Sim {
     // Units
     const { units } = planUnits(this.model, plan);
     const spots = stagingSpots(project, this.model);
+    for (const { joints } of assemblyConnections(project, this.model, plan, spots)) for (const j of joints) if (j.touching) this.stagedReady.add(j.joint.id);
     this.units = new Map();
     for (const u of units) {
       this.units.set(u.key, {
@@ -146,7 +151,7 @@ class Sim {
       return {
         id: b.id, name: b.name, role: b.role || 'any', color: b.color, start: pos, pos, freeAt: 0, holding: null, holdSince: 0,
         mask, work: this.grid.maskAnd(mask, this.workZones), stage: this.grid.maskAnd(mask, this.stageZones),
-        gear: [], hardware: false, boltTime: this.T.boltTimeHand, tasks: 0,
+        gear: [], hardware: false, boltTime: this.T.boltTimeHand, tasks: 0, boltCount: b.boltCount ?? null, boltsUsed: 0,
       };
     });
     this.builderById = new Map(this.builders.map((b) => [b.id, b]));
@@ -412,6 +417,7 @@ class Sim {
       if (s.kind === 'build') this.doBuild(s);
       else if (s.kind === 'install') this.doInstall(s);
       else if (s.kind === 'support') this.doSupport(s);
+      else if (s.kind === 'fasten') this.fastenInserted(s.scope || 'all', s.builder);
       const segs = this.segments.slice(before);
       this.stepTimes[i] = segs.length ? { start: Math.min(...segs.map((x) => x.t0)), end: Math.max(...segs.map((x) => x.t1)) } : null;
     }
@@ -526,7 +532,7 @@ class Sim {
       this.waitUntil(a, arrivals[i].t);
       const inner = (u.internal || []).filter((j) => (j.a === id && joined.has(j.b)) || (j.b === id && joined.has(j.a)));
       if (!inner.length) this.warn(`${this.model.memberById.get(id).name} doesn't touch the rest of ${u.name}.`);
-      const dur = this.joinTime(a, inner, joined, id);
+      const dur = this.joinTime(a, inner, joined, id, spot);
       this.seg(a, 'assemble', a.freeAt, a.freeAt + dur, { label: `Bolt ${this.model.memberById.get(id).name} into ${u.name}`, unitKey: u.key });
       joined.add(id);
     }
@@ -556,7 +562,7 @@ class Sim {
     for (const id of u.memberIds.slice(1)) {
       const inner = (u.internal || []).filter((j) => (j.a === id && joined.has(j.b)) || (j.b === id && joined.has(j.a)));
       if (!inner.length) this.warn(`${this.model.memberById.get(id).name} doesn't touch the rest of ${u.name}.`);
-      const dur = this.joinTime(a, inner, joined, id);
+      const dur = this.joinTime(a, inner, joined, id, spot);
       this.seg(a, 'assemble', a.freeAt, a.freeAt + dur, { label: `Bolt ${this.model.memberById.get(id).name} into ${u.name}`, unitKey: u.key });
       joined.add(id);
     }
@@ -711,10 +717,22 @@ class Sim {
         this.waitUntil(f, placeAt, 'wait', { label: `Wait for ${u.name}` });
         if (rec.alignStart == null) rec.alignStart = f.freeAt;
         this.seg(f, 'align', f.freeAt, f.freeAt + this.alignTimeOf(j, false) * mult, { label: 'Align ' + label, unitKey: u.key, nodeId: j.id, holding: solo });
-        const bolts = this.fastenJoint(j);
-        // (0 when its bolts went in with an earlier connection through the same stack, or wait for a
-        // later member)
-        if (bolts > 0) this.seg(f, 'fasten', f.freeAt, f.freeAt + bolts * this.boltTimeOf(j, f, false) * mult, { label: `Fasten ${bolts} bolt${bolts === 1 ? '' : 's'}: ${label}`, unitKey: u.key, nodeId: j.id, holding: solo, bolts });
+        // (None when its bolts went in with an earlier connection through the same stack, or wait
+        // for a later member.)
+        const put = this.fastenJoint(j);
+        if (put.length) {
+          const t0 = f.freeAt;
+          let at = t0;
+          for (const b of put) {
+            // A bolt marked to hold without its nut is only pushed in now; the nut comes later.
+            const dt = (b.snug ? this.T.insertTime : this.boltTimeOf(j, f, false)) * mult;
+            this.boltEvent(b, f, at, at + dt, b.snug ? 'insert' : 'fasten');
+            if (b.snug) this.snugLeft.set(b.id, { bolt: b, joint: j });
+            at += dt;
+          }
+          const snug = put.filter((b) => b.snug).length, n = put.length;
+          this.seg(f, snug === n ? 'insert' : 'fasten', t0, at, { label: `${snug === n ? 'Insert' : 'Fasten'} ${n} bolt${n === 1 ? '' : 's'}: ${label}`, unitKey: u.key, nodeId: j.id, holding: solo, bolts: n });
+        }
         this.updateStability(f.freeAt);
       }
       rec.workEnd = f.freeAt;
@@ -753,18 +771,47 @@ class Sim {
   newBolts(joints, joined) {
     const out = new Map();
     for (const j of joints) {
-      let n = 0;
+      const list = [];
       for (const id of j.boltIds || []) {
         if (this.boltsDone.has(id)) continue;
         const b = this.boltById.get(id);
         if (!b || !this.boltReady(b, joined)) continue;
         this.boltsDone.add(id);
-        n++;
+        list.push(b);
         for (const jid of b.jointIds) this.credit(b.id, jid);
       }
-      out.set(j.id, n);
+      out.set(j.id, list);
     }
     return out;
+  }
+
+  // One bolt being put in or tightened, for the animation and the bolt counts.
+  boltEvent(bolt, builder, t0, t1, kind, at = null) {
+    this.boltEvents.push({ boltId: bolt.id, builderId: builder.id, t0, t1, kind, from: { x: builder.pos.x, y: builder.pos.y }, at });
+    if (kind !== 'tighten') builder.boltsUsed++;
+  }
+
+  // A builder comes back and puts the nuts on inserted bolts (all of them, or those on one member).
+  fastenInserted(scope, explicit) {
+    const todo = [...this.snugLeft.values()].filter(({ bolt }) => scope === 'all' || bolt.memberIds.includes(scope));
+    if (!todo.length) { this.warn('There are no inserted bolts to fasten at this point.'); return; }
+    todo.sort((p, q) => p.bolt.pos[0] - q.bolt.pos[0]);
+    for (const { bolt, joint } of todo) {
+      const where = bridgeToSite(this.site, bolt.pos[0], bolt.pos[1]);
+      const c = this.pick(FASTEN_ROLES, explicit, (b) => {
+        const s = this.standFor(b, [where], 'work');
+        return s && { to: s.stand };
+      }, 0, null, 'fasten an inserted bolt');
+      if (!c) { this.error(`Nobody is free to come back and fasten the bolt at ${jointLabel(this.model, joint)}.`); continue; }
+      const f = c.b;
+      f.tasks++;
+      const label = jointLabel(this.model, joint);
+      if (!this.go(f, c.d.to, 'walk', { label: 'Back to ' + label })) continue;
+      const dt = this.boltTimeOf(joint, f, false);
+      this.boltEvent(bolt, f, f.freeAt, f.freeAt + dt, 'tighten');
+      this.seg(f, 'fasten', f.freeAt, f.freeAt + dt, { label: 'Fasten the nut: ' + label, unitKey: this.unitOfMember.get(bolt.a)?.key, nodeId: joint.id, bolts: 1 });
+      this.snugLeft.delete(bolt.id);
+    }
   }
 
   // Count a bolt that's in toward one of its connections, once both sides are in the bridge.
@@ -789,29 +836,42 @@ class Sim {
   // the staging-yard times for assemblies and the builder's tool time in the bridge.
   alignTimeOf(j, staging) {
     if (j.alignTime != null) return j.alignTime;
+    if (staging && this.stagedReady.has(j.id)) return this.T.stagedAlignTime ?? 1;
     return staging && this.T.assemblyAlignTime > 0 ? this.T.assemblyAlignTime : this.T.alignTime;
   }
   boltTimeOf(j, builder, staging) {
     if (j.boltTime != null) return j.boltTime;
+    if (staging && this.stagedReady.has(j.id) && this.T.stagedBoltTime > 0) return this.T.stagedBoltTime;
     return staging && this.T.assemblyBoltTime > 0 ? this.T.assemblyBoltTime : builder.boltTime;
   }
 
-  // Time to bolt one more member into an assembly in the staging yard.
-  joinTime(a, inner, joined, id) {
-    const now = new Set([...joined, id]);
-    const put = this.newBolts(inner, now);
-    if (this.T.assemblyJoinTime > 0 && !inner.some((j) => j.alignTime != null || j.boltTime != null)) return this.T.assemblyJoinTime;
-    return inner.reduce((s, j) => s + this.alignTimeOf(j, true) + put.get(j.id) * this.boltTimeOf(j, a, true), 0);
+  // Time to bolt one more member into an assembly in the staging yard. (A bolt marked to hold
+  // without its nut still gets its nut here: it's right there on the ground.)
+  joinTime(a, inner, joined, id, spot) {
+    const put = this.newBolts(inner, new Set([...joined, id]));
+    const custom = inner.some((j) => j.alignTime != null || j.boltTime != null || this.stagedReady.has(j.id));
+    const flat = this.T.assemblyJoinTime > 0 && !custom;
+    const nBolts = inner.reduce((n, j) => n + put.get(j.id).length, 0);
+    let at = a.freeAt;
+    for (const j of inner) {
+      if (!flat) at += this.alignTimeOf(j, true);
+      for (const b of put.get(j.id)) {
+        const dt = flat ? this.T.assemblyJoinTime / Math.max(1, nBolts) : this.boltTimeOf(j, a, true);
+        this.boltEvent(b, a, at, at + dt, 'fasten', spot);
+        at += dt;
+      }
+    }
+    return flat ? this.T.assemblyJoinTime : at - a.freeAt;
   }
 
-  // Returns how many bolts have to be put in for this connection.
+  // Returns the bolts that have to be put in for this connection.
   fastenJoint(j) {
     const ua = this.unitOfMember.get(j.a), ub = this.unitOfMember.get(j.b);
     for (const x of [ua, ub]) x.fastened[j.id] = true;
-    const n = this.newBolts([j], this.installedMembers()).get(j.id);
+    const put = this.newBolts([j], this.installedMembers()).get(j.id);
     // Bolts that went in earlier (with another connection through the same stack) hold this one too.
     for (const id of j.boltIds || []) if (this.boltsDone.has(id)) this.credit(id, j.id);
-    return n;
+    return put;
   }
 
   doSupport(step) {
@@ -883,6 +943,14 @@ class Sim {
   }
 
   finish() {
+    if (!this.aborted && this.snugLeft.size) {
+      this.stepIndex = null;
+      this.warn(`${this.snugLeft.size} inserted bolt${this.snugLeft.size === 1 ? '' : 's'} had no "come back and fasten" step, so ${this.snugLeft.size === 1 ? "it's" : "they're"} fastened at the end.`);
+      this.fastenInserted('all', 'auto');
+    }
+    for (const b of this.builders) {
+      if (b.boltCount != null && b.boltsUsed > b.boltCount) this.warn(`${b.name} starts with ${b.boltCount} bolt${b.boltCount === 1 ? '' : 's'} but this plan has them put in ${b.boltsUsed}.`);
+    }
     // 10.9.1: everyone ends in a staging yard.
     if (!this.aborted && this.rules.returnToStaging !== false && this.stageZones.length) {
       for (const b of this.builders) {
@@ -953,7 +1021,8 @@ class Sim {
       supportEvents: this.supportEvents,
       stepTimes: this.stepTimes,
       handoffs: [...this.units.values()].filter((u) => u.handedOff).length,
-      builders: this.builders.map((b) => ({ id: b.id, name: b.name, color: b.color, start: b.start, busy: busy.get(b.id) || 0 })),
+      builders: this.builders.map((b) => ({ id: b.id, name: b.name, color: b.color, start: b.start, busy: busy.get(b.id) || 0, boltCount: b.boltCount, boltsUsed: b.boltsUsed })),
+      boltEvents: this.boltEvents,
       units: [...this.units.values()].map((u) => ({ key: u.key, name: u.name, type: u.type, memberIds: u.memberIds, installedAt: u.installedAt ?? null, stableAt: u.stableAt ?? null })),
       unitOfMember: new Map([...this.unitOfMember].map(([m, u]) => [m, u.key])),
       nodePos: this.nodePos,

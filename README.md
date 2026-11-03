@@ -36,7 +36,7 @@ member**. Bridges are usually two trusses joined by laterals, so you mark up a f
 | **Top view · laterals** | A plan view. The trusses appear on it automatically; you only place the laterals between them. |
 | **Isometric screenshots** | One or more for reference, shown next to the 3D view built from your markup. If they don't match, a box is placed wrong. |
 | **Member list** | Every member's size, weight, connections and bolts. |
-| **Connections** | Every place two members touch, each with its own align time and time per bolt if the defaults don't fit (leave empty for the default). Truss B copies use truss A's times. |
+| **Connections** | Every place two members touch, each with its own align time and time per bolt if the defaults don't fit (leave empty for the default), and whether it holds on bolts that are only inserted. Truss B copies use truss A's times. |
 
 Before anything else, tab 1 asks **how far apart your footing supports are** (where the bridge
 stands on the two footings, e.g. pier centers; 22'-0" by default). Your supports are centered on
@@ -69,6 +69,12 @@ Each view then has a checklist on the right that walks you through it:
    - **Lateral heights:** in the top view, select a lateral and set its height in the toolbar
      (type it, use ▲/▼ or PageUp/PageDown, or pick a truss member's level) any time after
      placing it.
+   - **Boxes are 3D.** All three sizes together must fit the size box, whichever way they run. To
+     make a member that goes across the bridge, draw a small box on the side view (say 6 × 4),
+     then select it in the top view and drag its square handles across: it can reach 42 in
+     because the other two sizes leave that much. A 30 × 4 box could only go 6 across, and a
+     30 × 6 only 4. A member that reaches the other truss is one piece: it gets no mirror copy,
+     and it connects to both trusses like a lateral.
 4. **Place bolts (B):** wherever two boxes touch, the app shows a green line (edges snapped
    together) or a green area (boxes overlapping, e.g. a diagonal lapped onto a chord's gusset).
    Click anywhere on it to put a bolt there; bolts snap to ¼" steps along the edge. Orange means
@@ -78,7 +84,10 @@ Each view then has a checklist on the right that walks you through it:
    is fastened once. Select it to choose **when it goes in**: as soon as two of the members are
    joined, once all of them are in place, or when a particular member is placed. Until then it
    doesn't hold anything, so a piece may have to be held longer. A selected bolt also shows the
-   time fields of each connection it's on. A connection with **two or more bolts is rigid** (it
+   time fields of each connection it's on. Tick **Holds with the bolt just inserted** where the
+   bridge can rest on a bolt before its nut is on: it's pushed in quickly (Crew → Timing), the
+   bridge counts it as connected, and it shows as only partly connected until a builder comes
+   back to fasten it (a "Come back and fasten" step in tab 5, or at the very end otherwise). A connection with **two or more bolts is rigid** (it
    can cantilever); the threshold is in Bridge settings.
 5. **Check footing supports (F):** members whose bottom sits on a footing are found
    automatically; click a member to mark or unmark it by hand.
@@ -121,6 +130,9 @@ fetch a tool, so give each side its own.
   fastens their own piece one-handed, reach, and **hand-off distance** (how far apart two builders
   can stand and still pass a piece across the river).
 
+- **Bolts carried:** how many bolts each builder takes at the start (empty = as many as they
+  need). The Simulate tab counts them down and warns if someone runs out.
+
 ### 5 · Build sequence
 The plan is an ordered list of steps:
 - **Install** a member or assembly (pick it up, carry it, hand it across the river if needed,
@@ -129,6 +141,8 @@ The plan is an ordered list of steps:
   connect; nothing is carried to make one). Drag these steps earlier so assemblies are made
   while other work goes on.
 - **Place / remove a support** under a member.
+- **Come back and fasten** bolts that were only inserted: all of them so far, or those on one
+  member.
 
 Drag steps (or use ↑ ↓) to reorder. Each step can name its carrier and fastener, or leave them
 on *Auto* (whoever can get there first). *Carrier fastens (solo)* has the holder bolt their own
@@ -146,7 +160,20 @@ construction cost side by side.
 The build time and construction cost update on every change. Problems are listed under the 3D
 view; click one to jump to its step.
 
-### 6 · Simulate
+### 6 · Staging
+Plan where every member lies. Drag members from the list onto the yard, drag them around (they
+snap together; Shift places freely), and turn them with R. Members you haven't placed stay stacked
+automatically in the members area. For **assemblies**, place the members touching where they bolt
+(or press **Lay out** to put them together the way they're built): a green dot marks each touching
+connection, and it uses the shorter "staged touching" times. Any connection can have its own align
+and per-bolt time here.
+
+### 7 · Simulate
+Bolts are animated: each one travels from the builder putting it in to its spot and is fastened
+there. Across the bridge, green dots are fastened, amber rings are only inserted (and their members
+get an amber outline, since they're only partly connected), and small gray rings aren't in yet. The
+toolbar keeps a running count, and each builder shows how many bolts they have left.
+
 Play back the build on the site plan and the 3D view, scrub the timeline, and read:
 - the **Gantt chart** of every builder (walking, carrying, handing off, holding, aligning,
   fastening, ...)
@@ -196,6 +223,9 @@ bolted to both trusses, the one builder holding the lateral holds both sides up,
 holding the truss pieces let go (the holding table shows "then held up through L-1"). Holders let
 go whenever everything stays up without them, with the builder holding the newest piece keeping
 hold. If every builder ends up holding something, the plan stops and tells you why.
+
+A bolt that's only inserted counts as connected for all of this: you've said the bridge can rest
+on it there.
 
 Not modelled (yet): a single truss tipping sideways, deflection and member strength, clearances
 and stringer checks (9.3), builders bumping into each other, and accident time penalties. These

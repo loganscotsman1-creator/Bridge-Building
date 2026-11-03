@@ -10,8 +10,8 @@ import { uid } from '../model/ids.js';
 import { boxLimits } from '../model/schema.js';
 import { clampBox, duplicateMember, newBox, removeBolt, removeMember } from '../model/edit.js';
 import {
-  boxAxes, boxCorners, calibFromPoints, defaultCalib, distToSegment2, footingPoints, imageToView, isSimple, memberPoly,
-  pointInPoly, pointOnContact, polyArea, polyCentroid, polyEdges, polyFits, siteToBridge, viewToImage,
+  boxAxes, boxCorners, calibFromPoints, defaultCalib, distToSegment2, footingPoints, imageToView, fits3d, inPlaneLimits, isSimple, maxThickness, memberPoly,
+  pointInPoly, pointOnContact, polyArea, polyCentroid, polyEdges, siteToBridge, viewToImage,
 } from '../model/geometry.js';
 import { imageFileToData, pickFile } from '../model/storage.js';
 import { applySnap, rotatePoly, snapAngle, snapBox, snapPoint, snapPoly, snapSize } from './snap.js';
@@ -99,14 +99,18 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
   const [hoverContact, setHoverContact] = useState(null);
   const [draft, setDraft] = useState(null); // box being drawn
   const [badShape, setBadShape] = useState(null); // corners the user tried that don't fit
-  const [lastShape, setLastShape] = useState({ angle: 0, depth: lim.depth, thick: lim.thick });
+  const [lastShape, setLastShape] = useState({ angle: 0, len: lim.len, depth: lim.depth, thick: lim.thick });
   const [level, setLevel] = useState(null);
   const dragRef = useRef(null);
   const spaceRef = useRef(false);
 
   const stored = (id) => d.members.find((x) => x.id === id);
   const editable = (m) => m.plane === plane && !!stored(m.id);
-  const viewMembers = isTop ? model.members : model.members.filter((m) => m.plane === plane);
+  // Side views also show members from the other truss that were extended across to this one.
+  const planeY = plane === 'A' ? 0 : d.trussSpacing;
+  const viewMembers = isTop ? model.members : model.members.filter((m) => m.plane === plane || (m.yRange && m.yRange[0] <= planeY + 1e-6 && m.yRange[1] >= planeY - 1e-6));
+  // In the top view a truss member can be extended across the bridge.
+  const extendable = (m) => isTop && m.plane !== 'L' && !!stored(m.id);
   const ghosts = viewKey === 'sideB' ? model.members.filter((m) => m.plane === 'A') : [];
   const outline = (m) => (isTop && m.plane !== 'L' ? m.footprint : m.poly);
   const contacts = model.contacts.filter((c) => c.plane === plane);
@@ -165,7 +169,7 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
     for (const m of viewMembers) {
       if (!filter(m)) continue;
       if (!pointInPoly(p, outline(m), 3 / k)) continue;
-      const area = m.plane === 'L' || !isTop ? Math.abs(polyArea(m.poly)) : 1e9;
+      const area = m.plane === 'L' || !isTop ? Math.abs(polyArea(m.poly)) : 1e6 + Math.abs(polyArea(m.footprint));
       if (!best || area < best.area) best = { m, area };
     }
     return best && best.m;
@@ -214,10 +218,16 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
     hs.push({ kind: 'rotate', p: [front.p[0] + front.n[0] * (18 / k), front.p[1] + front.n[1] * (18 / k)] });
     return hs;
   }
+  // Top view: the two ends of a truss member, across the bridge.
+  const extentHandles = (m) => {
+    const xs = m.footprint.map((p) => p[0]);
+    const x = (Math.min(...xs) + Math.max(...xs)) / 2;
+    return [{ kind: 'extent', sign: -1, p: [x, m.yRange[0] - 9 / k] }, { kind: 'extent', sign: 1, p: [x, m.yRange[1] + 9 / k] }];
+  };
   const handleAt = (m, sx, sy) => {
-    if (!m || !editable(m)) return null;
+    if (!m || !(editable(m) || extendable(m))) return null;
     let best = null;
-    for (const h of handles(m)) {
+    for (const h of extendable(m) ? extentHandles(m) : handles(m)) {
       const s = S(h.p);
       const dd = Math.hypot(s.x - sx, s.y - sy);
       if (dd < 9 && (!best || dd < best.d)) best = { h, d: dd };
@@ -250,7 +260,7 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
   };
 
   // A reshaped box is accepted only if it's still a proper (convex) shape inside the size box.
-  const shapeOk = (poly) => isSimple(poly) && polyFits(poly, lim) && Math.abs(polyArea(poly)) > 0.05;
+  const shapeOk = (poly, thick) => isSimple(poly) && fits3d(poly, thick, lim) && Math.abs(polyArea(poly)) > 0.05;
 
   // Double-click a corner node to remove it (a shape keeps at least 3).
   const removeNode = (m, i) => {
@@ -258,7 +268,7 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
     const poly = memberPoly(raw);
     if (poly.length <= 3) return;
     const next = poly.filter((_, j) => j !== i);
-    if (shapeOk(next)) setBox(raw.id, { corners: next });
+    if (shapeOk(next, raw.thick)) setBox(raw.id, { corners: next });
   };
   const onDoubleClick = (e) => {
     if (mode !== 'box' || !selMember) return;
@@ -355,16 +365,17 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
     let box, lines = [];
     if (dist * k < 6) {
       // A click: stamp a full-length box centered here at the last angle used.
-      box = { ...base, u: dr.start.u, v: dr.start.v, angle: lastShape.angle, len: lim.len };
+      box = { ...base, u: dr.start.u, v: dr.start.v, angle: lastShape.angle, len: lastShape.len };
     } else {
       let ang = (Math.atan2(dv, du) * 180) / Math.PI;
       // Square up to neighbours' angles or 15° steps (exactly vertical, horizontal, 45°…).
       if (snap) ang = snapAngle(ang, memberAngles(null), 4);
       const a = (ang * Math.PI) / 180;
-      let len = Math.min(lim.len, dist);
+      const maxLen = Math.max(inPlaneLimits(lastShape.thick, lim).len, lastShape.len);
+      let len = Math.min(maxLen, dist);
       const tmp = { ...base, u: dr.start.u + Math.cos(a) * len / 2, v: dr.start.v + Math.sin(a) * len / 2, angle: ang, len };
-      if (snap) len = Math.min(lim.len, snapSize(tmp, 'len', 1, len, snapTargets(null), tolW));
-      box = { ...base, u: dr.start.u + Math.cos(a) * len / 2, v: dr.start.v + Math.sin(a) * len / 2, angle: ang, len, tooLong: dist > lim.len + 1e-6 };
+      if (snap) len = Math.min(maxLen, snapSize(tmp, 'len', 1, len, snapTargets(null), tolW));
+      box = { ...base, u: dr.start.u + Math.cos(a) * len / 2, v: dr.start.v + Math.sin(a) * len / 2, angle: ang, len, tooLong: dist > maxLen + 1e-6 };
     }
     if (snap) {
       const s = snapBox(box, snapTargets(null), tolW);
@@ -407,6 +418,10 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
       if (h) {
         const raw = stored(selMember.id);
         const orig = { ...raw, poly: memberPoly(raw) };
+        if (h.kind === 'extent') {
+          dragRef.current = { kind: 'extent', sign: h.sign, id: raw.id, orig, y0: selMember.yRange[0], y1: selMember.yRange[1], base: selMember.plane === 'A' ? 0 : d.trussSpacing, max: maxThickness(orig.poly, lim), key: 'drag-' + uid() };
+          return;
+        }
         if (h.kind === 'insert') {
           // A new corner in the middle of this edge, dragged like any other corner.
           orig.poly.splice(h.i + 1, 0, h.p);
@@ -540,8 +555,22 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
       const sp = snap ? snapPoint([w.u, w.v], targets, 8 / k) : { p: [w.u, w.v], line: null };
       const poly = o.poly.map((p, i) => (i === drag.i ? sp.p : p));
       setGuides(sp.line ? [sp.line] : []);
-      if (shapeOk(poly)) { setBadShape(null); setBox(o.id, { corners: poly }, drag.key); }
+      if (shapeOk(poly, o.thick)) { setBadShape(null); setBox(o.id, { corners: poly }, drag.key); }
       else setBadShape(poly);
+    } else if (drag.kind === 'extent') {
+      // Pull one end across the bridge, the other end staying put; it snaps to whatever's there.
+      const fixed = drag.sign > 0 ? drag.y0 : drag.y1;
+      let end = w.v;
+      if (snap) {
+        let bestD = 8 / k;
+        for (const m of viewMembers) {
+          if (m.id === o.id) continue;
+          for (const [, y] of outline(m)) if (Math.abs(y - w.v) < bestD) { bestD = Math.abs(y - w.v); end = y; }
+        }
+      }
+      const thick = Math.max(0.125, Math.min(drag.max, (end - fixed) * drag.sign));
+      const mid = fixed + drag.sign * thick / 2;
+      setBox(o.id, { thick: Math.round(thick * 1000) / 1000, off: Math.round((mid - drag.base) * 1000) / 1000 }, drag.key);
     } else if (drag.kind === 'edge' && !o.corners) {
       // Push/pull a rectangle's edge: the opposite edge stays put; never bigger than the size box.
       const { kind, sign } = RECT_EDGE[drag.i];
@@ -550,7 +579,9 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
       const half = (kind === 'len' ? o.len : o.depth) / 2;
       const fixed = [o.u - ax[0] * half * sign, o.v - ax[1] * half * sign];
       let size = resizeProj(o, kind, sign, w) - (drag.grab || 0);
-      const max = kind === 'len' ? lim.len : lim.depth;
+      // The size box is 3D: the longer side takes the longer limit the out-of-view size leaves.
+      const pl = inPlaneLimits(o.thick, lim);
+      const max = (kind === 'len' ? o.depth : o.len) <= pl.depth ? pl.len : pl.depth;
       size = Math.max(kind === 'len' ? 0.5 : 0.25, Math.min(max, size));
       if (snap) size = Math.min(max, snapSize(o, kind, sign, size, targets, tolW));
       const c = [fixed[0] + ax[0] * size / 2 * sign, fixed[1] + ax[1] * size / 2 * sign];
@@ -568,7 +599,7 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
         const along = s.dx * n[0] + s.dy * n[1];
         if (s.lines.length && Math.abs(along) > 1e-9) { t += along; poly = o.poly.map((p, i) => (i === drag.i || i === j ? [p[0] + n[0] * t, p[1] + n[1] * t] : p)); setGuides(s.lines); }
       }
-      if (shapeOk(poly)) { setBadShape(null); setBox(o.id, { corners: poly }, drag.key); }
+      if (shapeOk(poly, o.thick)) { setBadShape(null); setBox(o.id, { corners: poly }, drag.key); }
       else setBadShape(poly);
     }
   };
@@ -641,8 +672,9 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
     const on = isSel('member', m.id);
     memberEls.push(html`<polygon key=${m.id} points=${pts(outline(m))} fill=${color} fill-opacity=${truss ? 0.12 : on ? 0.35 : 0.2}
       stroke=${on ? '#f59e0b' : color} stroke-width=${on ? 3 : truss ? 1 : 1.6} stroke-dasharray=${m.mirrorOf ? '5 3' : null} />`);
-    if (!truss && k * m.len > 60) {
-      const c = S(polyCentroid(m.poly));
+    // (In the top view a truss member only gets a name once it's been extended across.)
+    if (truss ? k * m.thick > 40 : k * m.len > 60) {
+      const c = S(polyCentroid(outline(m)));
       memberEls.push(html`<text key=${'t' + m.id} x=${c.x} y=${c.y + 4} font-size="11" text-anchor="middle" fill=${color} font-weight="700" class="halo" pointer-events="none">${m.name}</text>`);
     }
     if (m.bearing && !isTop) {
@@ -667,7 +699,7 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
   const boltEls = model.bolts.filter((b) => b.plane === plane).map((b) => {
     const s = toScreen(b.u, b.v);
     const on = isSel('bolt', b.id);
-    return html`<circle key=${b.id} cx=${s.x} cy=${s.y} r=${on ? 5.5 : 4} fill=${!b.jointId ? '#dc2626' : on ? '#facc15' : '#111827'} stroke="#fff" stroke-width="1.2"><title>${b.jointId ? 'Bolt through ' + b.memberIds.map((id) => model.memberById.get(id)?.name || '?').join(', ') : 'Bolt not on a connection'}</title></circle>${b.memberIds.length > 2 && html`<text x=${s.x + 6} y=${s.y - 5} font-size="10" font-weight="700" fill="#111827" class="halo" pointer-events="none">×${b.memberIds.length}</text>`}`;
+    return html`<circle key=${b.id} cx=${s.x} cy=${s.y} r=${on ? 5.5 : 4} fill=${!b.jointId ? '#dc2626' : on ? '#facc15' : b.snug ? '#f59e0b' : '#111827'} stroke="#fff" stroke-width="1.2"><title>${b.jointId ? (b.snug ? 'Holds when just inserted. ' : '') + 'Bolt through ' + b.memberIds.map((id) => model.memberById.get(id)?.name || '?').join(', ') : 'Bolt not on a connection'}</title></circle>${b.memberIds.length > 2 && html`<text x=${s.x + 6} y=${s.y - 5} font-size="10" font-weight="700" fill="#111827" class="halo" pointer-events="none">×${b.memberIds.length}</text>`}`;
   });
 
   let handleEls = null;
@@ -688,8 +720,16 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
   const badEl = badShape && html`<polygon points=${pts(badShape)} fill="#dc2626" fill-opacity="0.12" stroke="#dc2626" stroke-width="2" stroke-dasharray="5 3" pointer-events="none" />`;
 
   let draftEl = null;
+  if (mode === 'box' && selMember && extendable(selMember)) {
+    const on = extentHandles(selMember);
+    handleEls = html`<g>
+      ${on.map((h, i) => { const s = S(h.p); return html`<rect key=${i} x=${s.x - 5} y=${s.y - 5} width="10" height="10" fill="#fff" stroke="#f59e0b" stroke-width="2"><title>Drag to extend this member across the bridge</title></rect>`; })}
+      ${(() => { const c = S(selMember.footprint.reduce((q, p) => [q[0] + p[0] / 4, q[1] + p[1] / 4], [0, 0])); return html`<text x=${c.x} y=${c.y - 10} font-size="11" text-anchor="middle" fill="#92400e" class="halo" pointer-events="none">${selMember.len.toFixed(2)} × ${selMember.depth.toFixed(2)} × ${selMember.thick.toFixed(2)} in (max ${maxThickness(selMember.poly, lim)} across)</text>`; })()}
+    </g>`;
+  }
+
   if (mode === 'box' && (draft || (cursor && !selMember))) {
-    const box = draft ? draftBox(draft).box : { u: cursor.u, v: cursor.v, angle: lastShape.angle, len: lim.len, depth: lastShape.depth };
+    const box = draft ? draftBox(draft).box : { u: cursor.u, v: cursor.v, angle: lastShape.angle, len: lastShape.len, depth: lastShape.depth };
     const poly = boxCorners(box);
     draftEl = html`<g pointer-events="none" opacity=${draft ? 1 : 0.45}>
       <polygon points=${pts(poly)} fill="#f59e0b" fill-opacity="0.12" stroke=${box.tooLong ? '#dc2626' : '#f59e0b'} stroke-width="2" stroke-dasharray="6 4" />
@@ -710,7 +750,9 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
   const origin = toScreen(0, 0);
   const axisV = isTop ? 'y' : 'z';
   const hints = {
-    box: selMember && editable(selMember)
+    box: selMember && extendable(selMember)
+      ? `Drag a square handle to extend ${selMember.name} across the bridge. Boxes are 3D: it can go up to ${maxThickness(selMember.poly, lim)} in here because of its size in the side view (all three sizes must fit ${lim.len} × ${lim.depth} × ${lim.thick} in). Reaching the other truss makes it one piece with no mirror copy.`
+      : selMember && editable(selMember)
       ? 'Drag the box to move it (it snaps to neighbouring edges; hold Shift to place freely). Square handles push/pull an edge, round corner nodes reshape it, a "+" node on an edge adds a corner there (double-click a corner to remove it), the outlined circle rotates it. Click empty space to deselect. Arrow keys nudge, R turns 90°, Ctrl+D copies, Delete removes.' + (selLateral ? ' PageUp / PageDown raise or lower this lateral.' : '') + ' While dragging, hold Space or the right mouse button to pan, or drag to the canvas edge.'
       : `Drag along a member in the screenshot to draw a box over it, or click to stamp a full ${lim.len} × ${lim.depth} in box. Click a box to select and edit it. Everything inside one box is one welded member. Pan with the right mouse button or Space+drag (also mid-drag); scroll to zoom.`,
     calibrate: calibMethod === 'footings'
@@ -730,6 +772,8 @@ export function Annotator({ project, model, viewKey, sel, setSel, mode, setMode 
     </div>
     <div class="toolbar sub">
       ${mode === 'box' && html`<span class="muted">New boxes:</span>
+        <label class="check" title="Length when you click to stamp a box">length <input type="number" class="tiny" min="0.5" max=${lim.len} step="0.5" value=${lastShape.len}
+          onInput=${(e) => { const v = parseFloat(e.target.value); if (v > 0) setLastShape({ ...lastShape, len: Math.min(lim.len, v) }); }} /> in</label>
         <label class="check">depth <input type="number" class="tiny" min="0.25" max=${lim.depth} step="0.25" value=${lastShape.depth}
           onInput=${(e) => { const v = parseFloat(e.target.value); if (v > 0) setLastShape({ ...lastShape, depth: Math.min(lim.depth, v) }); }} /> in</label>
         <label class="check" title="Size out of the view (thickness)">thick <input type="number" class="tiny" min="0.125" max=${lim.thick} step="0.125" value=${lastShape.thick}

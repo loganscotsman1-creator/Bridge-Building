@@ -11,8 +11,11 @@ const TIMING_FIELDS = [
   ['pickupTime', 'Pick up, set down or hand off a piece', 's', ''],
   ['alignTime', 'Align one bolted connection', 's', 'Line up holes before the bolt goes in'],
   ['boltTimeHand', 'One bolt by hand', 's', 'Used when the fastener has no fastening tool'],
+  ['insertTime', 'Insert a bolt without its nut', 's', 'For connections marked to hold on an inserted bolt. The nut takes the normal time per bolt later.'],
   ['assemblyAlignTime', 'Align a connection in the staging yard', 's', 'When making assemblies. 0 = same as above'],
   ['assemblyBoltTime', 'One bolt in the staging yard', 's', "When making assemblies. 0 = the fastening tool's time"],
+  ['stagedAlignTime', 'Align when staged touching', 's', 'Assembly connections whose members are placed touching in the Staging tab'],
+  ['stagedBoltTime', 'One bolt when staged touching', 's', '0 = the staging-yard bolt time'],
   ['assemblyJoinTime', 'Add a member to an assembly (flat)', 's', 'Replaces the two above with one time per member. 0 = align + bolt times'],
   ['gearUpTime', 'Grab one tool / the nuts & bolts', 's', 'At the start, after the clock begins'],
   ['soloMultiplier', 'Slowdown when fastening while holding', '×', 'A carrier fastening their own piece one-handed'],
@@ -66,6 +69,9 @@ export function CrewTab({ project }) {
           <div class="field col"><span class="lbl">Grabs at the start</span>
             <div class="chips">
               <${Check} label="Nuts & bolts" checked=${b.hardware} onChange=${(v) => setB(b.id, (x) => { x.hardware = v; })} />
+              ${b.hardware && html`<${NumField} label="Bolts carried" optional placeholder="as needed" min=${0} step="1" value=${b.boltCount ?? null}
+                title="How many bolts they take at the start. Leave empty for as many as they need. The Simulate tab shows this counting down."
+                onChange=${(v) => setB(b.id, (x) => { x.boltCount = v == null ? null : Math.round(v); })} />`}
               ${project.tools.map((t) => html`<${Check} label=${t.name} checked=${b.loadout.includes(t.id)}
                 onChange=${(v) => setB(b.id, (x) => { x.loadout = v ? [...x.loadout, t.id] : x.loadout.filter((id) => id !== t.id); })} />`)}
             </div>

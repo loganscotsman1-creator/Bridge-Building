@@ -5,6 +5,7 @@ import { MIRROR_SUFFIX as B } from './ids.js';
 import { buildModel, calibFromPoints } from './geometry.js';
 import { autoOrderSteps } from './plan.js';
 import { autoBolts } from './edit.js';
+import { layOutAssembly } from './plan.js';
 import { site2027 } from './rules2027.js';
 
 export function exampleSite() {
@@ -76,6 +77,8 @@ export function createExampleProject() {
     { id: 'as-endB', name: 'B west end', memberIds: ['m-P1' + B, 'm-TC1' + B, 'm-BC1' + B], areaZoneId: null },
   ];
   const model = buildModel(p);
+  // Stage the two assemblies touching where they bolt, so they go together quickly.
+  for (const a of plan.assemblies) layOutAssembly(p, model, a);
   const ordered = autoOrderSteps(model, plan);
   plan.steps = [
     { id: 's-j1', kind: 'support', action: 'place', toolId: 't-jack', memberId: 'm-BC1', builder: 'auto' },

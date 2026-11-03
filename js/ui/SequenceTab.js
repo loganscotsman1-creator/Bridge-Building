@@ -9,7 +9,7 @@ import { fmt, fmtCost, simulate } from '../sim/simulate.js';
 import { IsoView } from './IsoView.js';
 import { Hint, Section, SelectField } from './common.js';
 
-const KIND_ICON = { install: '⬆', build: '⚒', support: '▲' };
+const KIND_ICON = { install: '⬆', build: '⚒', support: '▲', fasten: '🔧' };
 // One color per assembly, used in the 3D view and the step list.
 export const ASM_COLORS = ['#9333ea', '#0891b2', '#db2777', '#65a30d', '#ea580c', '#4f46e5', '#0d9488', '#b91c1c', '#ca8a04', '#7c3aed'];
 
@@ -198,7 +198,8 @@ export function SequenceTab({ project, model, sim }) {
           setPlan((pl) => {
             const places = pl.steps.filter((s) => s.kind === 'support' && s.action === 'place');
             const removes = pl.steps.filter((s) => s.kind === 'support' && s.action === 'remove');
-            pl.steps = [...places, ...autoOrderSteps(model, pl), ...removes];
+            const fastens = pl.steps.filter((s) => s.kind === 'fasten');
+            pl.steps = [...places, ...autoOrderSteps(model, pl), ...removes, ...fastens];
           });
         }}>Auto order</button>
         <span class="spacer"></span>
@@ -236,7 +237,7 @@ export function SequenceTab({ project, model, sim }) {
                     ${builderOpts().map(([v, l]) => html`<option value=${v} selected=${v === s.carrier}>${v === 'auto' ? 'Carrier: auto' : l}</option>`)}</select>
                   <select title="Who aligns and fastens it" value=${s.fastener} onChange=${(e) => setPlan((pl) => { pl.steps[i].fastener = e.target.value; })}>
                     ${builderOpts([['carrier', 'Carrier fastens (solo)']]).map(([v, l]) => html`<option value=${v} selected=${v === s.fastener}>${v === 'auto' ? 'Fastener: auto' : l}</option>`)}</select>`}
-                ${(s.kind === 'build' || s.kind === 'support') && html`
+                ${(s.kind === 'build' || s.kind === 'support' || s.kind === 'fasten') && html`
                   <select value=${s.builder} onChange=${(e) => setPlan((pl) => { pl.steps[i].builder = e.target.value; })}>
                     ${builderOpts().map(([v, l]) => html`<option value=${v} selected=${v === s.builder}>${v === 'auto' ? 'Builder: auto' : l}</option>`)}</select>`}
                 <button class="small" disabled=${i === 0} onClick=${() => move(i, i - 1)} title="Move up">↑</button>
@@ -302,9 +303,24 @@ export function SequenceTab({ project, model, sim }) {
         </div>`)}
       <//>
       <${AddSupport} project=${project} model=${model} selIndex=${selIndex} setPlan=${setPlan} />
+      <${AddFasten} model=${model} selIndex=${selIndex} setPlan=${setPlan} />
       </div>
     </aside>
   </div>`;
+}
+
+function AddFasten({ model, selIndex, setPlan }) {
+  const [scope, setScope] = useState('all');
+  const withSnug = new Set(model.bolts.filter((b) => b.snug).flatMap((b) => b.memberIds));
+  const members = model.members.filter((m) => withSnug.has(m.id));
+  return html`<${Section} title="Come back and fasten">
+    ${!members.length ? html`<${Hint}>Bolts can be marked to hold when just inserted (select a bolt in tab 1, or see the Connections list). They go in fast when a piece goes up, then a builder comes back for the nuts.<//>` : html`
+      <${SelectField} label="Inserted bolts" value=${scope} options=${[['all', 'All so far'], ...members.map((m) => [m.id, 'On ' + m.name])]} onChange=${setScope} />
+      <button class="primary" onClick=${() => setPlan((pl) => {
+        pl.steps.splice(selIndex >= 0 ? selIndex + 1 : pl.steps.length, 0, { id: uid('s'), kind: 'fasten', scope, builder: 'auto' });
+      })}>Add step ${selIndex >= 0 ? 'after step ' + (selIndex + 1) : 'at the end'}</button>
+      <${Hint}>Any inserted bolts with no step here get fastened at the very end.<//>`}
+  <//>`;
 }
 
 function AddSupport({ project, model, selIndex, setPlan }) {

@@ -16,9 +16,10 @@ export const boltMembers = (b) => [b.a, b.b, ...(b.more || [])];
 // The truss A connection a mirrored truss B connection was copied from (or the id itself).
 export function mirrorSourceJointId(id) {
   const m = /^j:(.*)\|(.*):B$/.exec(id);
-  if (!m || !m[1].endsWith(MIRROR_SUFFIX) || !m[2].endsWith(MIRROR_SUFFIX)) return id;
-  const a = m[1].slice(0, -MIRROR_SUFFIX.length), b = m[2].slice(0, -MIRROR_SUFFIX.length);
-  return 'j:' + pairKey(a, b) + ':A';
+  // (One side may be a member that spans both trusses, which has no copy.)
+  if (!m || !(m[1].endsWith(MIRROR_SUFFIX) || m[2].endsWith(MIRROR_SUFFIX))) return id;
+  const strip = (x) => (x.endsWith(MIRROR_SUFFIX) ? x.slice(0, -MIRROR_SUFFIX.length) : x);
+  return 'j:' + pairKey(strip(m[1]), strip(m[2])) + ':A';
 }
 
 // ---------- 2D helpers (points are [u, v]) ----------
@@ -259,6 +260,26 @@ export function polyFits(poly, lim) {
   return false;
 }
 
+// The size box is three-dimensional, so what's allowed in the view depends on the size out of it
+// (and the other way round). With a 42 × 6 × 4 box: out-of-view size up to 4 leaves 42 × 6 in the
+// view, up to 6 leaves 42 × 4, and up to 42 leaves 6 × 4.
+export function inPlaneLimits(thick, lim) {
+  if (thick <= lim.thick + 1e-6) return { len: lim.len, depth: lim.depth };
+  if (thick <= lim.depth + 1e-6) return { len: lim.len, depth: lim.thick };
+  return { len: lim.depth, depth: lim.thick };
+}
+
+// How far a shape can extend out of its view and still fit the size box.
+export function maxThickness(poly, lim) {
+  if (polyFits(poly, { len: lim.depth, depth: lim.thick })) return lim.len;
+  if (polyFits(poly, { len: lim.len, depth: lim.thick })) return lim.depth;
+  return lim.thick;
+}
+
+export function fits3d(poly, thick, lim) {
+  return thick <= lim.len + 1e-6 && polyFits(poly, inPlaneLimits(thick, lim));
+}
+
 export function isConvex(poly) {
   let sign = 0;
   for (let i = 0; i < poly.length; i++) {
@@ -293,6 +314,12 @@ export function footingPoints(project, span = project.design.footingSpan) {
 }
 
 // ---------- model ----------
+// Does a side-view member reach across both truss lines?
+function spansTrusses(m, S) {
+  const y = m.off || 0, h = m.thick / 2;
+  return S > 0 && y - h <= 1e-6 && y + h >= S - 1e-6;
+}
+
 function mirrorName(name) {
   if (/^A[-_ ]/.test(name)) return 'B' + name.slice(1);
   return name + ' (B)';
@@ -307,10 +334,15 @@ export function buildModel(project) {
   const S = d.trussSpacing;
   const lim = boxLimits(project);
   const raw = [];
+  const mirrored = new Set();
   for (const m of d.members) {
     if (d.mirrorB && m.plane === 'B') continue;
     raw.push(m);
-    if (d.mirrorB && m.plane === 'A') raw.push({ ...m, id: m.id + MIRROR_SUFFIX, name: mirrorName(m.name), plane: 'B', mirrorOf: m.id });
+    // A member extended across to the other truss is one piece, so it gets no mirror copy.
+    if (d.mirrorB && m.plane === 'A' && !spansTrusses(m, S)) {
+      mirrored.add(m.id);
+      raw.push({ ...m, id: m.id + MIRROR_SUFFIX, name: mirrorName(m.name), plane: 'B', mirrorOf: m.id, off: -(m.off || 0) });
+    }
   }
 
   const footings = footingRanges(project);
@@ -320,7 +352,7 @@ export function buildModel(project) {
     const poly = memberPoly(src);
     const rect = src.corners ? rectOfPoly(poly) : null;
     const m = rect ? { ...src, ...rect } : src;
-    const planeY = m.plane === 'A' ? 0 : m.plane === 'B' ? S : null;
+    const planeY = m.plane === 'A' ? (m.off || 0) : m.plane === 'B' ? S + (m.off || 0) : null;
     const to3 = m.plane === 'L' ? ([u, v]) => [u, v, m.z || 0] : ([u, v]) => [u, planeY, v];
     const corners3 = poly.map(to3);
     const xs = poly.map((p) => p[0]);
@@ -341,12 +373,13 @@ export function buildModel(project) {
     const { d: dir } = boxAxes(m);
     const ends = [to3([m.u - dir[0] * m.len / 2, m.v - dir[1] * m.len / 2]), to3([m.u + dir[0] * m.len / 2, m.v + dir[1] * m.len / 2])];
     const dims = [m.len, m.depth, m.thick];
-    const fits = polyFits(poly, lim) && m.thick <= lim.thick + 1e-6;
+    const fits = fits3d(poly, m.thick, lim);
+    const [long, wide] = [...dims].sort((p, q) => q - p); // its size whichever way it runs
     const lbPerFt = m.lbPerFt ?? d.lbPerFt;
     // Stands on a footing: set by hand, or (if never set) its lowest point is at ground level over one.
     const autoBearing = m.plane !== 'L' && Math.abs(low[2]) <= 0.5 && footings.some(([x0, x1]) => bearingPoint[0] >= x0 - 0.5 && bearingPoint[0] <= x1 + 0.5);
     const bearing = m.bearing == null ? autoBearing : !!m.bearing;
-    return { ...m, bearing, autoBearing: m.bearing == null, poly, corners3, footprint, zRange, centroid, ends, bearingPoint, length: m.len, weight: (m.len / 12) * lbPerFt, box: { dims, fits } };
+    return { ...m, bearing, autoBearing: m.bearing == null, poly, corners3, footprint, zRange, yRange: m.plane === 'L' ? null : [planeY - m.thick / 2, planeY + m.thick / 2], centroid, ends, bearingPoint, length: m.len, long, wide, weight: (long / 12) * lbPerFt, box: { dims, fits } };
   });
   const memberById = new Map(members.map((m) => [m.id, m]));
 
@@ -357,12 +390,18 @@ export function buildModel(project) {
   const add = (a, b, plane, c, pos3) => contacts.push({ id: 'j:' + pairKey(a.id, b.id) + ':' + plane, key: pairKey(a.id, b.id), a: a.id, b: b.id, plane, ...c, pos: pos3 });
   for (const plane of ['A', 'B']) {
     const list = byPlane[plane];
-    for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
-      const c = contact2d(list[i].poly, list[j].poly);
-      if (!c) continue;
-      const mid = c.kind === 'edge' ? [(c.seg[0][0] + c.seg[1][0]) / 2, (c.seg[0][1] + c.seg[1][1]) / 2] : polyCentroid(c.poly);
-      add(list[i], list[j], plane, c, [mid[0], plane === 'A' ? 0 : S, mid[1]]);
-    }
+    for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) sideContact(list[i], list[j], plane);
+  }
+  // Side-view members of different trusses touch only if one was extended across to the other.
+  for (const a of byPlane.A) for (const b of byPlane.B) sideContact(a, b, null);
+  function sideContact(a, b, plane) {
+    const y0 = Math.max(a.yRange[0], b.yRange[0]), y1 = Math.min(a.yRange[1], b.yRange[1]);
+    if (y1 < y0 - EPS_EDGE) return; // apart across the bridge
+    const c = contact2d(a.poly, b.poly);
+    if (!c) return;
+    const mid = c.kind === 'edge' ? [(c.seg[0][0] + c.seg[1][0]) / 2, (c.seg[0][1] + c.seg[1][1]) / 2] : polyCentroid(c.poly);
+    const y = (y0 + y1) / 2;
+    add(a, b, plane || (Math.abs(y) <= Math.abs(y - S) ? 'A' : 'B'), c, [mid[0], y, mid[1]]);
   }
   const lats = byPlane.L;
   for (let i = 0; i < lats.length; i++) {
@@ -414,15 +453,16 @@ export function buildModel(project) {
     if (!contactByKey.has(c.key)) contactByKey.set(c.key, []);
     contactByKey.get(c.key).push(c);
   }
+  const copyOf = (id) => (mirrored.has(id) ? id + MIRROR_SUFFIX : id);
   const rawBolts = [];
   for (const b of d.bolts) {
     const ids = boltMembers(b);
     if (d.mirrorB && (b.plane === 'B' || ids.some((id) => d.members.find((m) => m.id === id)?.plane === 'B'))) continue;
     rawBolts.push(b);
-    if (d.mirrorB && b.plane === 'A') {
-      const mb = { ...b, id: b.id + MIRROR_SUFFIX, plane: 'B', a: b.a + MIRROR_SUFFIX, b: b.b + MIRROR_SUFFIX };
-      if (b.more) mb.more = b.more.map((id) => id + MIRROR_SUFFIX);
-      if (b.when && b.when !== 'first' && b.when !== 'all') mb.when = b.when + MIRROR_SUFFIX;
+    if (d.mirrorB && b.plane === 'A' && ids.some((id) => mirrored.has(id))) {
+      const mb = { ...b, id: b.id + MIRROR_SUFFIX, plane: 'B', a: copyOf(b.a), b: copyOf(b.b) };
+      if (b.more) mb.more = b.more.map(copyOf);
+      if (b.when && b.when !== 'first' && b.when !== 'all') mb.when = copyOf(b.when);
       rawBolts.push(mb);
     }
   }
@@ -440,7 +480,7 @@ export function buildModel(project) {
       }
     }
     const joint = joints[0] || null;
-    const pos = b.plane === 'L' ? [b.u, b.v, joint ? joint.pos[2] : 0] : [b.u, b.plane === 'A' ? 0 : S, b.v];
+    const pos = b.plane === 'L' ? [b.u, b.v, joint ? joint.pos[2] : 0] : [b.u, joint ? joint.pos[1] : b.plane === 'A' ? 0 : S, b.v];
     return { ...b, memberIds: ids, jointId: joint ? joint.id : null, jointIds: joints.map((c) => c.id), pos };
   });
   // Time overrides for each connection; truss B copies use truss A's.

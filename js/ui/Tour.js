@@ -3,7 +3,7 @@
 // replays it.
 import { html, useEffect, useLayoutEffect, useState } from '../lib/preact.js';
 
-const DONE_KEY = 'bss.tourDone.v3'; // bump when the tour changes enough that everyone should see it again
+const DONE_KEY = 'bss.tourDone.v4'; // bump when the tour changes enough that everyone should see it again
 
 export const TOUR = [
   {
@@ -14,7 +14,7 @@ export const TOUR = [
   {
     target: 'tabs',
     title: 'Work left to right',
-    body: 'Each tab is one part of the setup. Most teams fill in tabs 1–4 once, then spend their time in 5 (Build sequence) and 6 (Simulate) trying different orders.',
+    body: 'Each tab is one part of the setup. Most teams fill in tabs 1–4 once, then spend their time in 5 (Build sequence), 6 (Staging) and 7 (Simulate) trying different orders.',
   },
   {
     tab: 'design', target: 'canvas',
@@ -30,6 +30,11 @@ export const TOUR = [
     tab: 'design', target: 'modes',
     title: 'One tool for boxes',
     body: 'In Member boxes, drag on empty space to draw a box (it snaps edge-to-edge as you go), grab a box to move it, push/pull its square edge handles, drag its corner nodes to reshape it or a "+" node on an edge to add a corner (it must still fit the size box), or use the round handle to rotate it. Each tool has a keyboard shortcut, and Ctrl+Z undoes anything.',
+  },
+  {
+    tab: 'design', target: 'modes',
+    title: 'Boxes are 3D',
+    body: 'All three sizes of a box must fit the size box. So a small box in the side view can be extended across the bridge: select it in the top view and drag its square handles, up to 42 in if it\'s no more than 6 × 4 in the side view. Reaching the other truss makes it one piece, like a lateral.',
   },
   {
     tab: 'site', target: 'site-canvas',
@@ -64,7 +69,7 @@ export const TOUR = [
   {
     tab: 'sequence', target: 'assemblies',
     title: 'Assemblies and supports',
-    body: 'To make an assembly, click 2–3 pieces in the 3D view and press "Make assembly". It\'s bolted together right where its members are staged and carried in as one piece; each assembly gets its own color. You can also add steps that place or remove temporary supports.',
+    body: 'To make an assembly, click 2–3 pieces in the 3D view and press "Make assembly". It\'s bolted together right where its members are staged and carried in as one piece; each assembly gets its own color. You can also add steps that place or remove temporary supports, or that send someone back to fasten bolts that were only inserted.',
   },
   {
     tab: 'sequence', target: 'total',
@@ -72,9 +77,19 @@ export const TOUR = [
     body: 'Build time and construction cost update after every change, and rule problems (such as a piece that doesn\'t start on a footing, or everyone stuck holding) are listed under the 3D view. Duplicate a plan to compare variations.',
   },
   {
+    tab: 'staging', target: 'staging-list',
+    title: '6 · Staging',
+    body: 'Drag members from this list onto the yard to plan where each one lies. Until you do, they\'re stacked automatically.',
+  },
+  {
+    tab: 'staging', target: 'staging-assemblies',
+    title: 'Faster assemblies',
+    body: 'Place an assembly\'s members touching where they bolt, or press Lay out. Each touching connection gets a green dot and needs less lining up, and you can set its time here.',
+  },
+  {
     tab: 'simulate', target: 'play',
-    title: '6 · Watch it play out',
-    body: 'Play the build on the site plan and the 3D view, or drag the slider to any moment.',
+    title: '7 · Watch it play out',
+    body: 'Play the build on the site plan and the 3D view, or drag the slider to any moment. Bolts fly from the builder putting them in and turn green once fastened. Ones that are only inserted stay as amber rings until someone comes back.',
   },
   {
     tab: 'simulate', target: 'gantt',

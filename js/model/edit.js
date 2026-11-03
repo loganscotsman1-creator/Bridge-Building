@@ -3,7 +3,7 @@
 // inside updateProject(p => ...).
 import { MIRROR_SUFFIX, uid } from './ids.js';
 import { boxLimits } from './schema.js';
-import { boltMembers, polyCentroid, rectOfPoly } from './geometry.js';
+import { boltMembers, inPlaneLimits, polyCentroid, rectOfPoly } from './geometry.js';
 
 const baseId = (id) => (id.endsWith(MIRROR_SUFFIX) ? id.slice(0, -MIRROR_SUFFIX.length) : id);
 
@@ -72,9 +72,13 @@ export function squareUp(project, m) {
 // Keep a box within the rule limits (only ever shrinks).
 export function clampBox(project, m) {
   const lim = boxLimits(project);
-  m.len = Math.min(lim.len, Math.max(0.5, m.len));
-  m.depth = Math.min(lim.depth, Math.max(0.25, m.depth));
-  m.thick = Math.min(lim.thick, Math.max(0.125, m.thick));
+  m.thick = Math.min(lim.len, Math.max(0.125, m.thick));
+  // What the view allows depends on the size out of it. (The longer of the two sides takes the
+  // longer limit, so a box can be stood on end.)
+  const pl = inPlaneLimits(m.thick, lim);
+  const lenLong = m.len >= m.depth;
+  m.len = Math.min(lenLong ? pl.len : pl.depth, Math.max(0.5, m.len));
+  m.depth = Math.min(lenLong ? pl.depth : pl.len, Math.max(0.25, m.depth));
   return m;
 }
 
@@ -85,11 +89,11 @@ export function materializeMirror(project, model) {
   for (const m of model.members) {
     if (!m.mirrorOf || d.members.some((x) => x.id === m.id)) continue;
     const src = d.members.find((x) => x.id === m.mirrorOf);
-    d.members.push({ ...src, id: m.id, name: m.name, plane: 'B' });
+    d.members.push({ ...src, id: m.id, name: m.name, plane: 'B', off: -(src.off || 0) });
   }
   for (const b of model.bolts) {
     if (b.plane === 'B' && b.id.endsWith(MIRROR_SUFFIX) && !d.bolts.some((x) => x.id === b.id)) {
-      d.bolts.push({ id: b.id, plane: 'B', a: b.a, b: b.b, ...(b.more ? { more: b.more } : {}), ...(b.when ? { when: b.when } : {}), u: b.u, v: b.v });
+      d.bolts.push({ id: b.id, plane: 'B', a: b.a, b: b.b, ...(b.more ? { more: b.more } : {}), ...(b.when ? { when: b.when } : {}), ...(b.snug ? { snug: true } : {}), u: b.u, v: b.v });
     }
   }
   // Truss B connections keep the times they had from truss A.

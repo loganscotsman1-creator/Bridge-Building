@@ -1,4 +1,4 @@
-// App shell: header with file actions, the six tabs, and the simulation shared by the last two.
+// App shell: header with file actions, the tabs, and the simulation shared by the last two.
 import { html, useEffect, useMemo, useState } from '../lib/preact.js';
 import { canRedo, canUndo, redo, setProject, undo, updateProject, useProject } from '../model/store.js';
 import { emptyProject, normalizeProject, activePlan } from '../model/schema.js';
@@ -12,6 +12,7 @@ import { SiteTab } from './SiteTab.js';
 import { ToolsTab } from './ToolsTab.js';
 import { CrewTab } from './CrewTab.js';
 import { SequenceTab } from './SequenceTab.js';
+import { StagingTab } from './StagingTab.js';
 import { SimulateTab } from './SimulateTab.js';
 import { Tour, tourSeen } from './Tour.js';
 
@@ -21,7 +22,8 @@ const TABS = [
   ['tools', '3 · Tools'],
   ['crew', '4 · Crew & timing'],
   ['sequence', '5 · Build sequence'],
-  ['simulate', '6 · Simulate'],
+  ['staging', '6 · Staging'],
+  ['simulate', '7 · Simulate'],
 ];
 
 export function App() {
@@ -45,7 +47,7 @@ export function App() {
   }, []);
 
   const model = useMemo(() => buildModel(project), [project.design]);
-  const needsSim = tab === 'sequence' || tab === 'simulate';
+  const needsSim = tab === 'sequence' || tab === 'staging' || tab === 'simulate';
   const sim = useMemo(() => (needsSim ? simulate(project, activePlan(project)) : null), [project, needsSim]);
 
   const openFile = async () => {
@@ -95,6 +97,7 @@ export function App() {
       ${tab === 'tools' && html`<${ToolsTab} project=${project} />`}
       ${tab === 'crew' && html`<${CrewTab} project=${project} />`}
       ${tab === 'sequence' && html`<${SequenceTab} project=${project} model=${model} sim=${sim} />`}
+      ${tab === 'staging' && html`<${StagingTab} project=${project} model=${model} sim=${sim} />`}
       ${tab === 'simulate' && html`<${SimulateTab} project=${project} model=${model} sim=${sim} />`}
     </main>
     ${touring && html`<${Tour} setTab=${setTab} onClose=${() => setTouring(false)} />`}

@@ -28,10 +28,12 @@ function shade(hex, f) {
  *   replaces the member's name on the 3D label, `outline` draws it with a heavy edge)
  * supports: [{key, memberId}] support tools to draw under members
  * labels: show each member's name on the view (with a button to hide them)
+ * bolts: [{key, pos: [x, y, z], r (px), fill, stroke, width, title}] markers to draw on top
  */
-export function IsoView({ model, styleOf, onPick, supports = [], className = '', label, labels = true }) {
+export function IsoView({ model, styleOf, onPick, supports = [], className = '', label, labels = true, bolts = null }) {
   const [view, setView] = useState({ az: -32, el: 24 });
   const [showLabels, setShowLabels] = useState(labels);
+  const [showBolts, setShowBolts] = useState(true);
   const [zoom, setZoom] = useState({ s: 1, ox: 0, oy: 0 }); // scale, and pan offset in drawing units
   const [px, setPx] = useState({ w: 400, h: 300 });
   const dragRef = useRef(null);
@@ -155,10 +157,12 @@ export function IsoView({ model, styleOf, onPick, supports = [], className = '',
         class="iso-tag" fill=${st.labelColor || '#0f172a'} opacity=${(st.opacity ?? 1) < 0.6 ? 0.55 : 1} stroke-width=${fs * 0.35} pointer-events="none">${text}</text>`)}
       ${model.members.filter((m) => m.bearing).map((m) => { const p = proj(m.bearingPoint); return html`<path key=${'brg' + m.id} d=${`M${p.X} ${p.Y} l-3 5 h6 z`} fill="#f59e0b" />`; })}
       ${supports.map((s) => { const m = model.memberById.get(s.memberId || String(s.nodeId || '').replace(/^sup:/, '')); if (!m) return null; const p = proj(m.bearingPoint); return html`<rect key=${'sup' + s.key} x=${p.X - 2.5} y=${p.Y} width="5" height="9" fill="#14b8a6" opacity="0.85" />`; })}
+      ${bolts && showBolts && bolts.map((b) => { const p = proj(b.pos); return html`<circle key=${'bo' + b.key} cx=${p.X} cy=${p.Y} r=${b.r * upp} fill=${b.fill} stroke=${b.stroke || 'none'} stroke-width=${(b.width || 0) * upp} pointer-events="none"><title>${b.title}</title></circle>`; })}
     </svg>
     ${hidden > 0 && html`<div class="iso-hint">${hidden} name${hidden === 1 ? '' : 's'} hidden where crowded · scroll to zoom in</div>`}
     <div class="iso-controls">
       <button class=${showLabels ? 'on' : ''} title="Show or hide piece names" onClick=${() => setShowLabels(!showLabels)}>Names</button>
+      ${bolts && html`<button class=${showBolts ? 'on' : ''} title="Show or hide the bolts" onClick=${() => setShowBolts(!showBolts)}>Bolts</button>`}
       ${zoom.s > 1 && html`<button title="Zoom back out" onClick=${() => setZoom({ s: 1, ox: 0, oy: 0 })}>Fit</button>`}
       <button title="Side view" onClick=${() => setView({ az: 0, el: 0 })}>Side</button>
       <button title="Top view" onClick=${() => setView({ az: 0, el: 89 })}>Top</button>

@@ -264,3 +264,21 @@ button.link:hover:not(:disabled) { background: none; color: var(--ink); }
   .sim-plan { height: 55vh; }
   .project-name { width: 100%; }
 }
+
+/* Staging tab */
+.stage-list { list-style: none; margin: 6px 0 0; padding: 0; max-height: 300px; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; }
+.stage-list li { display: flex; align-items: center; gap: 6px; padding: 4px 8px; font-size: 13px; cursor: grab; border-bottom: 1px solid var(--line); user-select: none; touch-action: none; background: #fff; }
+.stage-list li:last-child { border-bottom: 0; }
+.stage-list li:hover { background: var(--accent-soft); }
+.stage-list li.sel { background: #fef3c7; }
+.stage-list li.placed .nm { color: var(--muted); }
+.stage-list .nm { flex: 1; font-weight: 600; }
+.stage-list .grip { color: var(--muted); }
+.small { font-size: 12px; }
+
+/* Bolts in the animation */
+.bolt-count { font-size: 13px; font-weight: 600; white-space: nowrap; }
+.bolt-count b { color: #b45309; }
+.sim-legend .bolt-key i.round { width: 10px; height: 10px; border-radius: 50%; }
+.sim-legend .bolt-key i.ring { background: #fff; border-width: 2px; border-style: solid; }
+.bolts-left { font-size: 12px; font-weight: 600; color: #0f172a; background: #e2e8f0; border-radius: 8px; padding: 0 6px; }

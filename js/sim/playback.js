@@ -50,7 +50,7 @@ export function stateAt(result, t) {
   const builderPos = new Map(builders.map((b) => [b.id, b]));
 
   const working = new Set();
-  for (const s of result.segments) if ((s.kind === 'align' || s.kind === 'fasten') && s.t0 <= t && t < s.t1 && s.unitKey) working.add(s.unitKey);
+  for (const s of result.segments) if ((s.kind === 'align' || s.kind === 'fasten' || s.kind === 'insert') && s.t0 <= t && t < s.t1 && s.unitKey) working.add(s.unitKey);
 
   const members = new Map();
   for (const [id, list] of result.tracks) {
@@ -73,5 +73,20 @@ export function stateAt(result, t) {
     if (ev.action === 'place') supports.set(ev.key, ev);
     else supports.delete(ev.key);
   }
-  return { t, builders, members, supports: [...supports.values()] };
+  // Bolts: where each one is in its life, and how many each builder has used so far.
+  const bolts = new Map();
+  const used = new Map();
+  for (const e of result.boltEvents || []) {
+    if (e.t0 > t) continue;
+    if (e.kind !== 'tighten') used.set(e.builderId, (used.get(e.builderId) || 0) + 1);
+    if (t >= e.t1) { bolts.set(e.boltId, { state: e.kind === 'insert' ? 'inserted' : 'fastened', at: e.at }); continue; }
+    // A new bolt travels from the builder's hand for the first half, then gets fastened in place.
+    const f = (t - e.t0) / Math.max(1e-6, e.t1 - e.t0);
+    if (e.kind !== 'tighten' && f < 0.5) bolts.set(e.boltId, { state: 'moving', f: f * 2, from: e.from, at: e.at, builderId: e.builderId });
+    else bolts.set(e.boltId, { state: 'working', at: e.at, builderId: e.builderId });
+  }
+  let fastened = 0, inserted = 0;
+  for (const b of bolts.values()) { if (b.state === 'fastened') fastened++; else if (b.state === 'inserted') inserted++; }
+  for (const b of builders) b.boltsUsedNow = used.get(b.id) || 0;
+  return { t, builders, members, supports: [...supports.values()], bolts, boltCounts: { fastened, inserted } };
 }

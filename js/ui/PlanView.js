@@ -4,10 +4,12 @@ import { html, useMemo, useRef } from '../lib/preact.js';
 import { updateProject } from '../model/store.js';
 import { uid } from '../model/ids.js';
 import { ZONE_TYPES } from '../model/schema.js';
-import { bridgeToSite, pointInPoly, pointSegment } from '../model/geometry.js';
+import { stagedPoly } from '../model/plan.js';
+import { bridgeToSite, pointInPoly } from '../model/geometry.js';
 import { useCamera, gridLines } from './camera.js';
 
 const STATUS_COLORS = { held: '#f97316', working: '#eab308', stable: '#475569', unstable: '#dc2626' };
+export const BOLT_COLORS = { fastened: '#16a34a', inserted: '#f59e0b', working: '#eab308', moving: '#2563eb', todo: '#94a3b8' };
 
 export function PlanView({ project, model, spots, state = null, sel, setSel, editable = false }) {
   const site = project.site;
@@ -62,9 +64,7 @@ export function PlanView({ project, model, spots, state = null, sel, setSel, edi
     for (const m of model.members) {
       const s = spots.get(m.id);
       if (!s) continue;
-      const half = m.len / 2;
-      const r = pointSegment({ x: sx, y: sy }, S({ x: s.x - half, y: s.y }), S({ x: s.x + half, y: s.y }));
-      if (r.d < Math.max(4, (m.depth * k) / 2)) { start('piece', m.id, { x: s.x, y: s.y }); return; }
+      if (pointInPoly([wp.x, wp.y], stagedPoly(m, s), 3 / k)) { start('piece', m.id, { x: s.x, y: s.y, rot: s.rot }); return; }
     }
     // Bridge footprint
     for (const m of model.members) {
@@ -95,7 +95,7 @@ export function PlanView({ project, model, spots, state = null, sel, setSel, edi
       } else if (d.type === 'bridge') { s.bridge.x = d.orig.x + dx; s.bridge.y = d.orig.y + dy; }
       else if (d.type === 'builder') { const b = p.builders.find((x) => x.id === d.id); b.start = { x: d.orig.x + dx, y: d.orig.y + dy }; }
       else if (d.type === 'tool') { const t = p.tools.find((x) => x.id === d.id); t.start = { x: d.orig.x + dx, y: d.orig.y + dy }; }
-      else if (d.type === 'piece') s.staging[d.id] = { x: d.orig.x + dx, y: d.orig.y + dy };
+      else if (d.type === 'piece') s.staging[d.id] = { x: d.orig.x + dx, y: d.orig.y + dy, rot: d.orig.rot };
     }, { key: d.key });
   };
 
@@ -160,13 +160,43 @@ export function PlanView({ project, model, spots, state = null, sel, setSel, edi
       dir = ms.loc === 'carried' ? ms.dir : 0;
     } else p = spots.get(m.id);
     if (!p) continue;
-    const half = m.len / 2;
-    const c = Math.cos(dir), s = Math.sin(dir);
-    const A = S({ x: p.x - half * c, y: p.y - half * s }), B = S({ x: p.x + half * c, y: p.y + half * s });
     const selP = isSel('piece', m.id);
-    els.push(html`<g><line x1=${A.x} y1=${A.y} x2=${B.x} y2=${B.y} stroke=${selP ? '#facc15' : m.color || '#334155'} stroke-width=${Math.max(2, m.depth * k)} />
-      ${k > 3 && !(state && p.loc === 'carried') && html`<text x=${(A.x + B.x) / 2} y=${A.y - 3} font-size="9" text-anchor="middle" fill="#475569">${m.name}</text>`}
+    if (state && p.loc === 'carried') {
+      const half = m.long / 2;
+      const c = Math.cos(dir), s = Math.sin(dir);
+      const A = S({ x: p.x - half * c, y: p.y - half * s }), B = S({ x: p.x + half * c, y: p.y + half * s });
+      els.push(html`<g><line x1=${A.x} y1=${A.y} x2=${B.x} y2=${B.y} stroke=${m.color || '#334155'} stroke-width=${Math.max(2, m.wide * k)} /><title>${m.name}</title></g>`);
+      continue;
+    }
+    // On the ground it keeps the spot and turn it was staged at (assemblies are made in place).
+    const spot = spots.get(m.id);
+    const here = state && p.loc === 'ground' && site.rules?.assemblyIn === 'assembly' ? { ...spot, x: p.x, y: p.y } : spot;
+    const poly = stagedPoly(m, here);
+    const pts = poly.map(([x, y]) => { const q = S({ x, y }); return q.x + ',' + q.y; }).join(' ');
+    const cen = S({ x: here.x, y: here.y });
+    els.push(html`<g><polygon points=${pts} fill=${selP ? '#facc15' : m.color || '#334155'} fill-opacity=${selP ? 0.8 : 0.6} stroke=${selP ? '#ca8a04' : '#1e293b'} stroke-width="0.8" />
+      ${k > 3 && html`<text x=${cen.x} y=${cen.y + 3} font-size="9" text-anchor="middle" fill="#0f172a" class="halo">${m.name}</text>`}
       <title>${m.name}</title></g>`);
+  }
+
+  // Bolts: where each is fastened or only inserted, and the ones on their way in right now.
+  if (state) {
+    for (const b of model.bolts) {
+      const st = state.bolts.get(b.id);
+      const onBridge = b.memberIds.some((id) => state.members.get(id)?.loc === 'bridge');
+      const target = st?.at || bridgeToSite(site, b.pos[0], b.pos[1]);
+      if (st?.state === 'moving') {
+        const q = S({ x: st.from.x + (target.x - st.from.x) * st.f, y: st.from.y + (target.y - st.from.y) * st.f });
+        els.push(html`<circle cx=${q.x} cy=${q.y} r="4" fill=${BOLT_COLORS.moving} stroke="#fff" stroke-width="1"><title>Bolt on its way</title></circle>`);
+      } else if (st?.state === 'working') {
+        const q = S(target);
+        els.push(html`<circle cx=${q.x} cy=${q.y} r="5" fill=${BOLT_COLORS.working} stroke="#111827" stroke-width="1"><title>Being fastened</title></circle>`);
+      } else if (onBridge && st) {
+        const q = S(bridgeToSite(site, b.pos[0], b.pos[1]));
+        const ins = st.state === 'inserted';
+        els.push(html`<circle cx=${q.x} cy=${q.y} r=${ins ? 3.5 : 2.5} fill=${ins ? '#fff' : BOLT_COLORS.fastened} stroke=${ins ? BOLT_COLORS.inserted : '#fff'} stroke-width=${ins ? 2 : 0.5}><title>${ins ? 'Inserted, nut not on yet' : 'Fastened'}</title></circle>`);
+      }
+    }
   }
 
   if (!state) {
@@ -189,6 +219,7 @@ export function PlanView({ project, model, spots, state = null, sel, setSel, edi
       <circle cx=${s.x} cy=${s.y} r=${r} fill=${b.color} stroke=${isSel('builder', b.id) ? '#facc15' : '#fff'} stroke-width="2.5" />
       <text x=${s.x} y=${s.y + 4} font-size="11" text-anchor="middle" fill="#fff" font-weight="700">${i + 1}</text>
       ${state && b.kind !== 'idle' && html`<text x=${s.x + r + 3} y=${s.y - r} font-size="10" fill="#111827" class="halo">${b.label}</text>`}
+      ${state && (b.boltCount != null || b.boltsUsedNow > 0) && html`<text x=${s.x + r + 3} y=${s.y + r + 2} font-size="10" font-weight="700" fill=${b.boltCount != null && b.boltCount - b.boltsUsedNow < 0 ? '#dc2626' : '#0f172a'} class="halo">${b.boltCount != null ? b.boltCount - b.boltsUsedNow + ' bolts' : b.boltsUsedNow + ' used'}</text>`}
       <title>${b.name}</title>
     </g>`);
   });

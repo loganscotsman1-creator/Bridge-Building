@@ -1,14 +1,15 @@
 // Browser test runner: open tests/index.html (through a local server) and read the results.
-import { buildModel, calibFromPoints, contact2d, boxCorners, footingPoints, imageToView, isConvex, isSimple, pointInPoly, pointOnContact, polyArea, polyFits, rectOfPoly, viewToImage } from '../js/model/geometry.js';
+import { fits3d, inPlaneLimits, maxThickness, buildModel, calibFromPoints, contact2d, boxCorners, footingPoints, imageToView, isConvex, isSimple, pointInPoly, pointOnContact, polyArea, polyFits, rectOfPoly, viewToImage } from '../js/model/geometry.js';
 import { computeStability } from '../js/sim/stability.js';
 import { SiteGrid } from '../js/sim/grid.js';
 import { simulate } from '../js/sim/simulate.js';
 import { createExampleProject } from '../js/model/example.js';
 import { emptyProject, normalizeProject } from '../js/model/schema.js';
 import { site2027, RULES_2027 } from '../js/model/rules2027.js';
-import { autoBolts, newBox, removeMember } from '../js/model/edit.js';
+import { autoBolts, clampBox, newBox, removeMember } from '../js/model/edit.js';
 import { snapBox, snapPoint, snapSize } from '../js/ui/snap.js';
-import { membersArea, stagingSpots } from '../js/model/plan.js';
+import { assemblyConnections, layOutAssembly, membersArea, stagedPoly, stagingSpots } from '../js/model/plan.js';
+import { stateAt } from '../js/sim/playback.js';
 
 const results = [];
 async function test(name, fn) {
@@ -417,6 +418,119 @@ await test('one bolt through three overlapping members holds all three connectio
   assert(p.design.bolts.length === 1 && !p.design.bolts[0].more, JSON.stringify(p.design.bolts));
   removeMember(p, 'Q');
   assert(p.design.bolts.length === 0, 'bolt through one member should go');
+});
+
+await test('boxes are 3D: the out-of-view size depends on the other two', () => {
+  const lim = { len: 42, depth: 6, thick: 4 };
+  const rect = (l, d) => [[0, 0], [l, 0], [l, d], [0, d]];
+  assert(maxThickness(rect(6, 4), lim) === 42, '6 x 4 can run 42 across');
+  assert(maxThickness(rect(30, 4), lim) === 6, '30 x 4 leaves 6');
+  assert(maxThickness(rect(30, 6), lim) === 4, '30 x 6 leaves 4');
+  assert(fits3d(rect(6, 4), 42, lim) && !fits3d(rect(7, 4), 42, lim), '7 x 4 x 42 does not fit');
+  assert(inPlaneLimits(42, lim).len === 6 && inPlaneLimits(5, lim).depth === 4, 'limits in the view shrink');
+  const p = emptyProject();
+  const m = { ...newBox(p, 'A', 0, 0), thick: 42 };
+  clampBox(p, m);
+  assert(m.len === 6 && m.depth === 4, `clamped to ${m.len} x ${m.depth}`);
+});
+
+await test('a member extended across the bridge connects both trusses and has no mirror copy', () => {
+  const p = emptyProject();
+  p.design.footingSpan = 200;
+  p.design.trussSpacing = 38;
+  p.design.members = [
+    { ...newBox(p, 'A', 20, 10, 0), id: 'C', name: 'C', len: 40, depth: 4, thick: 2 },
+    { ...newBox(p, 'A', 20, 14, 0), id: 'X', name: 'X', len: 6, depth: 4, thick: 40, off: 19 },
+  ];
+  const model = buildModel(p);
+  assert(model.memberById.has('C~B') && !model.memberById.has('X~B'), 'only the chord is mirrored');
+  const x = model.memberById.get('X');
+  assert(x.box.fits && near(x.yRange[0], -1) && near(x.yRange[1], 39), JSON.stringify(x.yRange));
+  assert(near(x.long, 40) && near(x.weight, (40 / 12) * p.design.lbPerFt), 'weight follows its longest size');
+  const pair = (a, b) => model.contacts.find((c) => (c.a === a && c.b === b) || (c.a === b && c.b === a));
+  assert(pair('C', 'X')?.plane === 'A', 'touches truss A in its side view');
+  assert(pair('C~B', 'X')?.plane === 'B', 'touches truss B in its side view');
+  // A bolt on truss A is copied to truss B, where the same cross member is.
+  const seg = pair('C', 'X').seg;
+  p.design.bolts = [{ id: 'b', plane: 'A', a: 'C', b: 'X', u: (seg[0][0] + seg[1][0]) / 2, v: seg[0][1] }];
+  const m2 = buildModel(p);
+  assert(m2.bolts.length === 2 && m2.bolts.every((b) => b.jointId), JSON.stringify(m2.bolts.map((b) => b.jointId)));
+  assert(near(m2.bolts[1].pos[1], 38, 1.5), 'copy sits at truss B: ' + m2.bolts[1].pos[1]);
+  // Too big a box isn't accepted: 6 x 5 in the side view can't also be 40 across.
+  p.design.members[1].depth = 5;
+  assert(!buildModel(p).memberById.get('X').box.fits, 'over the 3D limit');
+});
+
+await test('every bolt gets an event, and builders count down what they carry', () => {
+  const p = normalizeProject(createExampleProject());
+  const r = simulate(p);
+  const put = r.boltEvents.filter((e) => e.kind !== 'tighten');
+  assert(put.length === r.model.bolts.filter((b) => b.jointId).length, `${put.length} events, ${r.model.bolts.length} bolts`);
+  assert(new Set(put.map((e) => e.boltId)).size === put.length, 'each bolt goes in once');
+  const end = stateAt(r, r.endTime);
+  assert(end.boltCounts.fastened === put.length && end.boltCounts.inserted === 0, JSON.stringify(end.boltCounts));
+  const mid = stateAt(r, put[Math.floor(put.length / 2)].t0 + (put[Math.floor(put.length / 2)].t1 - put[Math.floor(put.length / 2)].t0) * 0.25);
+  assert([...mid.bolts.values()].some((b) => b.state === 'moving'), 'a bolt is on its way');
+  const q = structuredClone(p);
+  q.builders[1].boltCount = 1;
+  assert(simulate(q).warnings.some((w) => /starts with 1 bolt/.test(w.msg)), 'warns when someone runs out');
+});
+
+await test('a bolt can hold when just inserted, until someone comes back to fasten it', () => {
+  const base = normalizeProject(createExampleProject());
+  const r0 = simulate(base);
+  const p = structuredClone(base);
+  for (const b of p.design.bolts) if (b.plane === 'A') b.snug = true;
+  const r1 = simulate(p);
+  assert(!r1.errors.length, r1.errors[0]?.msg);
+  const ins = r1.boltEvents.filter((e) => e.kind === 'insert'), tight = r1.boltEvents.filter((e) => e.kind === 'tighten');
+  assert(ins.length > 0 && tight.length === ins.length, `${ins.length} inserted, ${tight.length} tightened`);
+  assert(tight.every((e) => e.t0 >= ins.find((i) => i.boltId === e.boltId).t1 - 1e-6), 'nuts go on after the bolts');
+  assert(r1.warnings.some((w) => /fastened at the end/.test(w.msg)), 'says it fastened them at the end');
+  // Partway through, some bolts are only inserted.
+  const during = stateAt(r1, ins[ins.length - 1].t1 + 0.01);
+  assert(during.boltCounts.inserted > 0, 'partly connected shows');
+  assert(stateAt(r1, r1.endTime).boltCounts.inserted === 0, 'all fastened at the end');
+  assert(r1.endTime !== r0.endTime, 'timing changes');
+  // A step in the plan does it sooner, for one member.
+  const q = structuredClone(p);
+  const memberId = q.design.bolts.find((b) => b.snug).a;
+  const i = q.plans[0].steps.findIndex((s) => s.kind === 'install' && s.unit.id === 'm-V3');
+  q.plans[0].steps.splice(i + 1, 0, { id: 'sf', kind: 'fasten', scope: 'all', builder: 'auto' });
+  const r2 = simulate(q);
+  const stepTight = r2.segments.filter((s) => s.step === i + 1 && s.kind === 'fasten');
+  assert(i >= 0 && stepTight.length > 0, 'the step fastens: ' + memberId);
+});
+
+await test('assembly members staged touching go together faster, with their own times', () => {
+  const p = normalizeProject(createExampleProject());
+  const model = buildModel(p);
+  const plan = p.plans[0];
+  const conns = assemblyConnections(p, model, plan);
+  assert(conns.every((c) => c.joints.length && c.joints.every((j) => j.touching)), 'laid out touching');
+  const area = membersArea(p.site);
+  const spots = stagingSpots(p, model);
+  for (const id of plan.assemblies.flatMap((a) => a.memberIds)) {
+    for (const [x, y] of stagedPoly(model.memberById.get(id), spots.get(id))) assert(x >= area.x - 1e-6 && x <= area.x + area.w + 1e-6 && y >= area.y - 1e-6 && y <= area.y + area.h + 1e-6, id + ' stays in the area');
+  }
+  const time = (r) => r.segments.filter((s) => s.kind === 'assemble').reduce((t, s) => t + s.t1 - s.t0, 0);
+  const near0 = simulate(p);
+  // Sent back to the automatic stack, they count as not touching.
+  const q = structuredClone(p);
+  q.site.staging = {};
+  assert(assemblyConnections(q, buildModel(q), q.plans[0]).every((c) => c.joints.every((j) => !j.touching)), 'auto-stacked pieces never count');
+  assert(time(simulate(q)) > time(near0) + 1, `${time(simulate(q))} vs ${time(near0)}`);
+  // One connection's own time wins over the touching default.
+  const j = conns[0].joints[0].joint;
+  const o = structuredClone(p);
+  o.design.connections = { [j.timeKey]: { alignTime: 50 } };
+  assert(time(simulate(o)) > time(near0) + 40, 'override used');
+  // Moving one away breaks it.
+  const away = structuredClone(p);
+  away.site.staging[j.a] = { ...away.site.staging[j.a], x: area.x + 2, y: area.y + area.h - 2 };
+  const still = assemblyConnections(away, buildModel(away), away.plans[0])[0].joints.find((x) => x.joint.id === j.id);
+  assert(!still.touching, 'no longer touching');
+  assert(layOutAssembly(away, buildModel(away), away.plans[0].assemblies[0]) !== undefined, 'lays out again');
 });
 
 await test('old (version 1) project files still open', () => {
