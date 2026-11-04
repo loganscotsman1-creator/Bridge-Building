@@ -10,6 +10,7 @@ import { autoBolts, clampBox, newBox, removeMember } from '../js/model/edit.js';
 import { snapBox, snapPoint, snapSize } from '../js/ui/snap.js';
 import { assemblyConnections, defaultView, layOutAssembly, membersArea, stagedPoly, stagingSpots, viewSizes } from '../js/model/plan.js';
 import { stateAt } from '../js/sim/playback.js';
+import { TOURS, dueTour } from '../js/ui/Tour.js';
 import { applyAssembly, connectionChoices, dissolveAssembly, dropSlot, insertAtSlot, onStagingSide, pieceChoices, planChecks, removeTask, taskBlocks, taskGroup } from '../js/model/timeline.js';
 
 const results = [];
@@ -847,6 +848,18 @@ await test('a piece nobody supports is reported where it falls', () => {
   const c = planChecks(p, model, pl, r);
   assert(c.falls === 1 && c.todo[0].kind === 'support' && c.todo[0].preset.member === m.id, JSON.stringify(c.todo[0]));
   assert(c.marks.get('a').some((x) => x.bad), 'marked on the bar');
+});
+
+await test('the tutorial: the intro first, each tab once, and again only when it changes', () => {
+  assert(dueTour('design', {}) === 'intro', 'intro first, whichever tab is open');
+  const seen = { intro: TOURS.intro.v };
+  assert(dueTour('design', seen) === 'design');
+  seen.design = TOURS.design.v;
+  assert(dueTour('design', seen) === null, 'not twice');
+  assert(dueTour('crew', seen) === 'crew', 'another tab still has its tips');
+  seen.design = TOURS.design.v - 1;
+  assert(dueTour('design', seen) === 'design', 'shown again after an update');
+  for (const [id, t] of Object.entries(TOURS)) assert(t.steps.length >= 1 && t.steps.length <= 3, id + ' stays brief');
 });
 
 await test('old (version 1) project files still open', () => {

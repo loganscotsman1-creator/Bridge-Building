@@ -19,9 +19,10 @@ you can send to teammates.
 
 Work through the tabs left to right. The app opens with an example bridge on the 2027 site so you
 can try each step before entering your own (**New** starts empty, **Example** reloads the sample).
-A short click-through tutorial runs on your first visit; skip it, or replay it any time with the
-**Tutorial** button in the header. (Its steps live in [`js/ui/Tour.js`](js/ui/Tour.js); edit the
-text there when the app changes.)
+A brief intro runs on your first visit, then a few tips appear the first time you open each tab.
+**No more tips** turns them off, and the **Tutorial** button in the header shows the current tab's
+tips again. (They live in [`js/ui/Tour.js`](js/ui/Tour.js). When part of the program changes, edit
+its tips and raise that tour's `v` number, and everyone sees just that tour once more.)
 
 ### 1 · Members & bolts (from your screenshots)
 Your bridge is already designed in another program; this tab turns screenshots of it into the

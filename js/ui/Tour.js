@@ -1,147 +1,175 @@
-// A short click-through tutorial. Each step can switch tabs and highlight one part of the screen
-// (found by its data-tour attribute). Shown once on a first visit; the header's Tutorial button
-// replays it.
+// The tutorial: a brief intro to the whole program on a first visit, then a few tips the first time
+// each tab is opened. Each step can highlight one part of the screen (found by its data-tour
+// attribute). The header's Tutorial button shows the current tab's tips again.
 import { html, useEffect, useLayoutEffect, useState } from '../lib/preact.js';
 
-const DONE_KEY = 'bss.tourDone.v7'; // bump when the tour changes enough that everyone should see it again
+const SEEN_KEY = 'bss.toursSeen';
 
-export const TOUR = [
-  {
-    tab: 'design',
-    title: 'Welcome to the Build Sequencer',
-    body: 'This tool helps your team plan how to build the bridge on competition day. Mark up screenshots of your bridge, set up your crew, then try build orders and watch them play out on this year\'s official site layout. An example bridge is loaded so you can follow along.',
+// `v`: raise a tour's number when its part of the program changes, and everyone sees that tour once
+// more (and only that one).
+export const TOURS = {
+  intro: {
+    v: 1, title: 'Welcome',
+    steps: [
+      {
+        title: 'Welcome to the Build Sequencer',
+        body: 'Plan how your team builds the bridge on competition day: mark up your bridge, set up your crew, then try build orders and watch them play out on this year\'s official site. An example bridge is loaded so you can try everything.',
+      },
+      {
+        target: 'tabs',
+        title: 'Work left to right',
+        body: 'Each tab is one part of the setup. Most teams fill in tabs 1–4 once, then spend their time in 5, 6 and 7 trying different orders. A few tips appear the first time you open each tab.',
+      },
+      {
+        target: 'file',
+        title: 'Save and share',
+        body: 'Your work autosaves in this browser. Save file downloads the project for a teammate, and Open… loads one. The Tutorial button shows a tab\'s tips again.',
+      },
+    ],
   },
-  {
-    target: 'tabs',
-    title: 'Work left to right',
-    body: 'Each tab is one part of the setup. Most teams fill in tabs 1–4 once, then spend their time in 5 (Build sequence), 6 (Staging) and 7 (Simulate) trying different orders.',
+  design: {
+    v: 1, title: 'Members & bolts',
+    steps: [
+      {
+        target: 'checklist',
+        title: 'Follow the checklist',
+        body: 'Drop in a side-view screenshot from your CAD program and click the two footing supports to scale it. Then put a box over each member and bolts where boxes touch. Each step goes green when it\'s done.',
+      },
+      {
+        target: 'modes',
+        title: 'Drawing boxes',
+        body: 'Drag on empty space to draw a box, and drag its handles to resize, reshape or rotate it. Boxes are 3D: in the top view, a small box can be extended across the bridge to make a lateral. Ctrl+Z undoes anything.',
+      },
+    ],
   },
-  {
-    tab: 'design', target: 'canvas',
-    title: '1 · Your bridge, from screenshots',
-    body: 'First you\'re asked how far apart your footing supports are. Then drop in a side-view screenshot from your CAD program (or paste it with Ctrl+V) and click the two footing supports on it: the screenshot is scaled so they land that far apart, on the site\'s footings.',
+  site: {
+    v: 1, title: 'Site & zones',
+    steps: [
+      {
+        target: 'site-canvas',
+        title: 'The site',
+        body: 'The 2027 official layout is already set up. Adjust it for local conditions, and drag the bridge, builders and tools to where they start.',
+      },
+      {
+        target: 'site-library',
+        title: 'Next year\'s rules',
+        body: 'The layout and the year\'s rule numbers are saved together. Save one to your browser, download it for a teammate, or load one from the shared library.',
+      },
+    ],
   },
-  {
-    tab: 'design', target: 'checklist',
-    title: 'Follow the checklist',
-    body: 'Place a box outline over each member (every box fits the rule\'s 3\'-6" × 6" × 4" size box, and everything inside one is one welded member), put bolts where boxes touch, and check which members stand on a footing (found automatically). Each step goes green when it\'s done. Then do the top view for the laterals.',
+  tools: {
+    v: 1, title: 'Tools',
+    steps: [
+      {
+        target: 'tools',
+        title: 'Your tools',
+        body: 'Add fastening tools with the time to fasten a nut, temporary supports like jack stands, and how many of each you have. A tool can list the pieces it\'s assembled from.',
+      },
+    ],
   },
-  {
-    tab: 'design', target: 'modes',
-    title: 'One tool for boxes',
-    body: 'In Member boxes, drag on empty space to draw a box (it snaps edge-to-edge as you go), grab a box to move it, push/pull its square edge handles, drag its corner nodes to reshape it or a "+" node on an edge to add a corner (it must still fit the size box), or use the round handle to rotate it. Each tool has a keyboard shortcut, and Ctrl+Z undoes anything.',
+  crew: {
+    v: 1, title: 'Crew & timing',
+    steps: [
+      {
+        target: 'crew',
+        title: 'Your builders',
+        body: 'One card per builder: which side of the river they work from, and what they grab when the clock starts. What they do is set in tab 5.',
+      },
+      {
+        target: 'timing',
+        title: 'Timing',
+        body: 'How fast people move and how long each job takes. Time your practice builds and put the real numbers here.',
+      },
+    ],
   },
-  {
-    tab: 'design', target: 'modes',
-    title: 'Boxes are 3D',
-    body: 'All three sizes of a box must fit the size box. So a small box in the side view can be extended across the bridge: select it in the top view and drag its square handles, up to 42 in if it\'s no more than 6 × 4 in the side view. Reaching the other truss makes it one piece, like a lateral.',
+  sequence: {
+    v: 1, title: 'Build sequence',
+    steps: [
+      {
+        target: 'seq-palette',
+        title: 'Drag tasks onto a builder',
+        body: 'Drag a task onto a builder\'s row, and a pop-up asks which piece it\'s for. Drop on the lower half of a bar to do both at once. Make an assembly works the same way: click the pieces that go together.',
+      },
+      {
+        target: 'seq-timeline',
+        title: 'Adjust the timeline',
+        body: 'Each builder works left to right, starting each step as soon as they can. Drag a bar to reorder it or give it to someone else, and drag the end of a support bar to change how long they hold on.',
+      },
+      {
+        target: 'seq-checks',
+        title: 'Nothing gets missed',
+        body: 'These counts and the marks on the bars show what\'s still missing, and hovering over a bar says why it\'s flagged. Still to do, on the right, lists it all and can be dragged straight onto a builder.',
+      },
+    ],
   },
-  {
-    tab: 'site', target: 'site-canvas',
-    title: '2 · The site',
-    body: 'The 2027 official layout is already set up: staging yards, construction zones, footings, riverbank, river and transportation zone. Adjust it for local conditions, and drag the bridge, builders, tools and members to where they start.',
+  staging: {
+    v: 1, title: 'Staging',
+    steps: [
+      {
+        target: 'staging-list',
+        title: 'Lay out the yard',
+        body: 'Drag members from this list onto the yard. Press V to switch between side, top and front views, and R to turn one. Until you place them, they\'re stacked automatically.',
+      },
+      {
+        target: 'staging-assemblies',
+        title: 'Faster assemblies',
+        body: 'Place an assembly\'s members touching where they bolt, or press Lay out. Those connections need less lining up, and you can set their times here.',
+      },
+    ],
   },
-  {
-    tab: 'site', target: 'site-library',
-    title: 'Next year\'s rules',
-    body: 'The layout and the year\'s rule numbers (box size, builders, assembly size, time limit, cost formula) are saved together. Save one to your browser, download it for a teammate, or load one from the team\'s shared library.',
+  simulate: {
+    v: 1, title: 'Simulate',
+    steps: [
+      {
+        target: 'play',
+        title: 'Watch it play out',
+        body: 'Play the build, or drag the slider to any moment. Bolts fly from the builder placing them and turn green once fastened; ones only inserted stay as amber rings.',
+      },
+      {
+        target: 'gantt',
+        title: 'Who is doing what',
+        body: 'One row per builder over time. Click anywhere to jump there. Below it, the tables show how long each piece had to be held, and why.',
+      },
+    ],
   },
-  {
-    tab: 'tools', target: 'tools',
-    title: '3 · Tools',
-    body: 'Add fastening tools (with the time to fasten a nut), temporary supports like jack stands, and how many of each you have. A tool can list the pieces it\'s assembled from.',
-  },
-  {
-    tab: 'crew', target: 'crew',
-    title: '4 · Crew',
-    body: 'One card per builder (up to 6): which side of the river they work from, and which tools and nuts & bolts they grab when the clock starts. What they do is set step by step in tab 5.',
-  },
-  {
-    tab: 'crew', target: 'timing',
-    title: 'Timing',
-    body: 'How fast people walk and carry, how long aligning a connection and fastening a bolt take, how far someone can reach and how far apart two builders can hand off a piece. Time your practice builds and put the real numbers here.',
-  },
-  {
-    tab: 'sequence', target: 'seq-timeline',
-    title: '5 · Build sequence',
-    body: 'The plan is built on this timeline, with one row per builder. They do their steps left to right, starting each as soon as they can. Auto-build plan fills in a working plan to edit from, and New starts an empty one.',
-  },
-  {
-    tab: 'sequence', target: 'seq-palette',
-    title: 'Drag tasks onto a builder',
-    body: 'Drag a task onto a builder\'s row. A pop-up asks which piece: the staging yard for a builder on its side of the river, or what\'s ready for them on the bridge. Bolts and nuts ask which two pieces they go between. Drop on the lower half of a bar to do both at once.',
-  },
-  {
-    tab: 'sequence', target: 'seq-checks',
-    title: 'Nothing gets missed',
-    body: 'These tallies, the marks on the bars and the flags along the top of the timeline update as you go: pieces not placed, bolts and nuts with no step, and pieces nobody is holding up. A striped bar is one that can\'t start, and hovering over any bar says why.',
-  },
-  {
-    tab: 'sequence', target: 'seq-todo',
-    title: 'Still to do',
-    body: 'Everything the plan is still missing. Drag a line onto a builder\'s row to add that step as it is, with no pop-up.',
-  },
-  {
-    tab: 'sequence', target: 'seq-timeline',
-    title: 'Adjust it on the timeline',
-    body: 'Drag a bar to another builder or an earlier or later spot. Drag the right end of a support bar to change how long someone holds on. To swap who\'s supporting, drop a second Support on another builder: the first lets go once they\'ve taken over.',
-  },
-  {
-    tab: 'sequence', target: 'seq-palette',
-    title: 'Making assemblies',
-    body: 'Drag Make an assembly onto a builder and click the pieces in the staging yard that go together. That builder bolts them up, then they\'re run in as one piece; each assembly gets its own color.',
-  },
-  {
-    tab: 'sequence', target: 'total',
-    title: 'Instant feedback',
-    body: 'Build time and construction cost update after every change, and rule problems are listed under the timeline. Duplicate a plan to compare variations.',
-  },
-  {
-    tab: 'staging', target: 'staging-list',
-    title: '6 · Staging',
-    body: 'Drag members from this list onto the yard to plan where each one lies, and press V to switch between its side, top and front views as you place it. Until you do, they\'re stacked automatically.',
-  },
-  {
-    tab: 'staging', target: 'staging-assemblies',
-    title: 'Faster assemblies',
-    body: 'Place an assembly\'s members touching where they bolt, or press Lay out. Each touching connection gets a green dot and needs less lining up, and you can set its time here.',
-  },
-  {
-    tab: 'simulate', target: 'play',
-    title: '7 · Watch it play out',
-    body: 'Play the build on the site plan and the 3D view, or drag the slider to any moment. Bolts fly from the builder putting them in and turn green once fastened. Ones that are only inserted stay as amber rings until someone comes back.',
-  },
-  {
-    tab: 'simulate', target: 'gantt',
-    title: 'Who is doing what',
-    body: 'One row per builder over time. Orange is holding a piece, yellow is aligning and fastening; things done at the same time sit in the lower half of the lane. Click anywhere to jump there. Below it, the holding-time table shows how long each piece had to be held, and why.',
-  },
-  {
-    target: 'file',
-    title: 'Save and share',
-    body: 'Your work autosaves in this browser. "Save file" downloads the whole project for a teammate, "Open…" loads one, and "Example" brings back this sample. Replay this tutorial any time with the Tutorial button.',
-  },
-];
+};
 
-export function tourSeen() {
-  try { return !!localStorage.getItem(DONE_KEY); } catch { return true; }
+// Which tour is due, given what's been seen ({tour id: version}): the intro comes first, then the
+// tips for the tab that's open.
+export function dueTour(tab, seen) {
+  const due = (id) => TOURS[id] && (seen[id] ?? 0) < TOURS[id].v;
+  if (due('intro')) return 'intro';
+  return due(tab) ? tab : null;
 }
 
-function markSeen() {
-  try { localStorage.setItem(DONE_KEY, '1'); } catch { /* private mode */ }
+export function toursSeen() {
+  try {
+    return JSON.parse(localStorage.getItem(SEEN_KEY)) || {};
+  } catch {
+    // Storage that can't be read is treated as seen, so the tips don't appear on every visit.
+    return Object.fromEntries(Object.entries(TOURS).map(([id, t]) => [id, t.v]));
+  }
 }
 
-export function Tour({ setTab, onClose }) {
+function markSeen(ids) {
+  const seen = toursSeen();
+  for (const id of ids) seen[id] = TOURS[id].v;
+  try { localStorage.setItem(SEEN_KEY, JSON.stringify(seen)); } catch { /* private mode */ }
+}
+
+export function Tour({ id, replay = false, onClose, onOverview }) {
+  const tour = TOURS[id];
   const [i, setI] = useState(0);
   const [rect, setRect] = useState(null);
-  const step = TOUR[i];
-  const last = i === TOUR.length - 1;
+  const step = tour.steps[i];
+  const last = i === tour.steps.length - 1;
+  const isIntro = id === 'intro';
 
-  const close = () => { markSeen(); onClose(); };
+  const close = () => { markSeen([id]); onClose(); };
+  const noMore = () => { markSeen(Object.keys(TOURS)); onClose(); };
 
-  // Switch tab, then find the highlighted element once the tab has rendered.
+  // Find the highlighted element once it has rendered.
   useLayoutEffect(() => {
-    if (step.tab) setTab(step.tab);
     setRect(null);
     if (!step.target) return;
     let tries = 0, timer;
@@ -195,20 +223,21 @@ export function Tour({ setTab, onClose }) {
     style = { top: '50%', left: '50%', width: cardW + 'px', transform: 'translate(-50%, -50%)' };
   }
 
-  return html`<div class="tour" role="dialog" aria-modal="true" aria-label="Tutorial">
+  return html`<div class="tour" role="dialog" aria-modal="true" aria-label=${isIntro ? 'Tutorial' : tour.title + ' tips'}>
     ${rect
       ? html`<div class="tour-hole" style=${{ left: rect.x - 6 + 'px', top: rect.y - 6 + 'px', width: rect.w + 12 + 'px', height: rect.h + 12 + 'px' }}></div>`
       : html`<div class="tour-shade"></div>`}
     <div class="tour-card" style=${style}>
-      <div class="tour-count">${i + 1} of ${TOUR.length}</div>
+      <div class="tour-count">${tour.title}${tour.steps.length > 1 ? ` · ${i + 1} of ${tour.steps.length}` : ''}</div>
       <h3>${step.title}</h3>
       <p>${step.body}</p>
-      <div class="tour-dots">${TOUR.map((_, k) => html`<i class=${k === i ? 'on' : ''} onClick=${() => setI(k)}></i>`)}</div>
       <div class="row">
-        <button class="link" onClick=${close}>Skip tutorial</button>
+        ${replay
+          ? !isIntro && html`<button class="link" onClick=${onOverview}>See the intro</button>`
+          : html`<button class="link" title="Don't show any more tips. The Tutorial button still shows them." onClick=${noMore}>No more tips</button>`}
         <span class="spacer"></span>
         ${i > 0 && html`<button onClick=${() => setI(i - 1)}>Back</button>`}
-        <button class="primary" onClick=${() => (last ? close() : setI(i + 1))}>${last ? 'Finish' : i === 0 ? 'Show me around' : 'Next'}</button>
+        <button class="primary" onClick=${() => (last ? close() : setI(i + 1))}>${!last ? 'Next' : isIntro ? 'Get started' : 'Got it'}</button>
       </div>
     </div>
   </div>`;

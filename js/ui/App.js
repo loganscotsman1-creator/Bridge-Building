@@ -14,7 +14,7 @@ import { CrewTab } from './CrewTab.js';
 import { SequenceTab } from './SequenceTab.js';
 import { StagingTab } from './StagingTab.js';
 import { SimulateTab } from './SimulateTab.js';
-import { Tour, tourSeen } from './Tour.js';
+import { Tour, dueTour, toursSeen } from './Tour.js';
 
 const TABS = [
   ['design', '1 · Members & bolts'],
@@ -32,7 +32,13 @@ export function App() {
     try { return localStorage.getItem('bss.tab') || 'design'; } catch { return 'design'; }
   });
   const [saveOk, setSaveOk] = useState(true);
-  const [touring, setTouring] = useState(() => !tourSeen());
+  const [touring, setTouring] = useState(null); // the tour showing: {id, replay}
+  // The intro on a first visit, then a tab's tips the first time it's opened (or after it changes).
+  useEffect(() => {
+    if (touring) return;
+    const id = dueTour(tab, toursSeen());
+    if (id) setTouring({ id });
+  }, [tab, touring]);
   useEffect(() => onAutosaveStatus(setSaveOk), []);
   useEffect(() => { try { localStorage.setItem('bss.tab', tab); } catch { /* private mode */ } }, [tab]);
 
@@ -91,7 +97,7 @@ export function App() {
         <button disabled=${!canUndo()} onClick=${undo} title="Undo (Ctrl+Z)">↶</button>
         <button disabled=${!canRedo()} onClick=${redo} title="Redo (Ctrl+Shift+Z)">↷</button>
         <span class="sep"></span>
-        <button onClick=${() => setTouring(true)} title="A short walk-through of the program">Tutorial</button>
+        <button onClick=${() => setTouring({ id: tab, replay: true })} title="Show this tab's tips again">Tutorial</button>
       </div>
       <div class="status">
         ${!saveOk && html`<span class="bad" title="Your browser's storage is full (usually big images). Use Save file to keep your work.">⚠ Autosave failed, use Save file</span>`}
@@ -112,6 +118,6 @@ export function App() {
       ${tab === 'staging' && html`<${StagingTab} project=${project} model=${model} sim=${sim} />`}
       ${tab === 'simulate' && html`<${SimulateTab} project=${project} model=${model} sim=${sim} />`}
     </main>
-    ${touring && html`<${Tour} setTab=${setTab} onClose=${() => setTouring(false)} />`}
+    ${touring && html`<${Tour} key=${touring.id} id=${touring.id} replay=${!!touring.replay} onClose=${() => setTouring(null)} onOverview=${() => setTouring({ id: 'intro', replay: true })} />`}
   </div>`;
 }
