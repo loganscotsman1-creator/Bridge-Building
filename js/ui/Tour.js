@@ -3,7 +3,7 @@
 // replays it.
 import { html, useEffect, useLayoutEffect, useState } from '../lib/preact.js';
 
-const DONE_KEY = 'bss.tourDone.v5'; // bump when the tour changes enough that everyone should see it again
+const DONE_KEY = 'bss.tourDone.v6'; // bump when the tour changes enough that everyone should see it again
 
 export const TOUR = [
   {
@@ -89,7 +89,7 @@ export const TOUR = [
   {
     tab: 'staging', target: 'staging-list',
     title: '6 · Staging',
-    body: 'Drag members from this list onto the yard to plan where each one lies. Until you do, they\'re stacked automatically.',
+    body: 'Drag members from this list onto the yard to plan where each one lies, and press V to switch between its side, top and front views as you place it. Until you do, they\'re stacked automatically.',
   },
   {
     tab: 'staging', target: 'staging-assemblies',

@@ -1,12 +1,12 @@
 // Staging tab: plan where every member lies in the yard. Pull members from the list onto the plan,
-// turn them, and for assemblies place the pieces touching where they bolt, which makes those
+// turn them, switch which way up they sit (side, top or front view), and for assemblies place the pieces touching where they bolt, which makes those
 // connections faster to make.
 import { html, useEffect, useMemo, useRef, useState } from '../lib/preact.js';
 import { updateProject } from '../model/store.js';
 import { uid } from '../model/ids.js';
 import { activePlan, ZONE_TYPES } from '../model/schema.js';
-import { pointInPoly, polyCentroid } from '../model/geometry.js';
-import { assemblyConnections, flatRot, layOutAssembly, membersArea, stagedPoly, stagingSpots } from '../model/plan.js';
+import { pointInPoly, polyArea, polyCentroid } from '../model/geometry.js';
+import { STAGED_VIEWS, assemblyConnections, defaultView, flatRot, layOutAssembly, membersArea, stagedPoly, stagingSpots, viewSizes } from '../model/plan.js';
 import { jointLabel } from '../model/plan.js';
 import { fmt } from '../sim/simulate.js';
 import { useCamera, gridLines } from './camera.js';
@@ -45,7 +45,13 @@ export function StagingTab({ project, model, sim }) {
   const unplace = (id) => { updateProject((p) => { delete p.site.staging[id]; }); setSel(null); };
   const turn = (id, by) => {
     const s = spots.get(id);
-    place(id, { x: s.x, y: s.y, rot: ((s.rot ?? 0) + by + 360) % 360 });
+    place(id, { ...keepOf(s), rot: ((s.rot ?? 0) + by + 360) % 360 });
+  };
+  // Switch which way up a member sits, keeping any turn the user gave it.
+  const viewOf = (id) => spots.get(id)?.view || defaultView(model.memberById.get(id));
+  const setView = (id, view) => {
+    const m = model.memberById.get(id), s = spots.get(id);
+    place(id, { ...keepOf(s), rot: ((s.rot ?? 0) - flatRot(m, viewOf(id)) + flatRot(m, view) + 360) % 360, view });
   };
 
   // Snap a shape onto the edges of the other placed members.
@@ -61,18 +67,27 @@ export function StagingTab({ project, model, sim }) {
   // --- dragging a member out of the list ---
   const pullSpot = (p) => {
     const r = cam.svgRef.current.getBoundingClientRect();
-    if (p.x < r.left || p.x > r.right || p.y < r.top || p.y > r.bottom) return null;
+    if (!cam.ready || p.x < r.left || p.x > r.right || p.y < r.top || p.y > r.bottom) return null;
     const w = toWorld(p.x - r.left, p.y - r.top);
     const m = model.memberById.get(p.id);
-    return snapped(m, { x: w.u, y: w.v, rot: flatRot(m) }, p.shift);
+    const view = p.view || defaultView(m);
+    return snapped(m, { x: w.u, y: w.v, rot: flatRot(m, view), view }, p.shift);
   };
   const pullRef = useRef(null);
   pullRef.current = pullSpot;
+  const viewRef = useRef(null);
+  viewRef.current = pulling?.view;
   useEffect(() => {
     if (!pulling) return;
     const move = (e) => setPulling((p) => p && { ...p, x: e.clientX, y: e.clientY, shift: e.shiftKey });
+    // V changes which way up it'll sit, before it's even dropped.
+    const key = (e) => {
+      if (e.key.toLowerCase() !== 'v') return;
+      setPulling((p) => p && { ...p, view: nextView(p.view || defaultView(model.memberById.get(p.id))) });
+    };
+    window.addEventListener('keydown', key);
     const up = (e) => {
-      const p = { id: pulling.id, x: e.clientX, y: e.clientY, shift: e.shiftKey };
+      const p = { id: pulling.id, x: e.clientX, y: e.clientY, shift: e.shiftKey, view: viewRef.current };
       const hit = pullRef.current(p);
       if (hit) { place(p.id, roundSpot(hit.spot)); setSel(p.id); }
       setPulling(null);
@@ -80,15 +95,16 @@ export function StagingTab({ project, model, sim }) {
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
-    return () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+    return () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('keydown', key); };
   }, [!!pulling]);
   const ghost = pulling ? pullSpot(pulling) : null;
 
   useEffect(() => {
     const onKey = (e) => {
-      if (isTyping(e) || !sel) return;
+      if (isTyping(e) || !sel || pulling) return; // (while dragging one in, keys are for that one)
       const key = e.key.toLowerCase();
       if (key === 'r') turn(sel, e.shiftKey ? -15 : 90);
+      else if (key === 'v') setView(sel, nextView(viewOf(sel)));
       else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); unplace(sel); }
       else if (e.key === 'Escape') setSel(null);
     };
@@ -101,8 +117,9 @@ export function StagingTab({ project, model, sim }) {
     let best = null;
     for (const m of placed) {
       const q = polyOf(m);
-      if (!pointInPoly([w.u, w.v], q, 2 / k)) continue;
-      if (!best || m.long * m.wide < best.long * best.wide) best = m;
+      // (A generous margin: a member standing on end is only a small square.)
+      if (!pointInPoly([w.u, w.v], q, 6 / k)) continue;
+      if (!best || Math.abs(polyArea(q)) < Math.abs(polyArea(polyOf(best)))) best = m;
     }
     return best;
   };
@@ -114,7 +131,7 @@ export function StagingTab({ project, model, sim }) {
     if (m) {
       setSel(m.id);
       const s = spots.get(m.id);
-      dragRef.current = { id: m.id, orig: { x: s.x, y: s.y, rot: s.rot }, start: w, key: 'stage-' + uid() };
+      dragRef.current = { id: m.id, orig: keepOf(s), start: w, key: 'stage-' + uid() };
       return;
     }
     if (e.button === 0) setSel(null);
@@ -140,7 +157,7 @@ export function StagingTab({ project, model, sim }) {
   return html`<div class="tab-layout">
     <div class="main">
       <div class="toolbar">
-        <span class="muted">Drag members from the list onto the yard. Drag to move (they snap together; Shift places freely), R turns 90°, Shift+R turns 15°, Delete sends one back to the list. Scroll to zoom, drag empty space to pan.</span>
+        <span class="muted">Drag members from the list onto the yard. Drag to move (they snap together; Shift places freely), V switches between its side, top and front views, R turns 90°, Shift+R turns 15°, Delete sends one back to the list. Scroll to zoom, drag empty space to pan.</span>
         <span class="spacer"></span>
         <button onClick=${() => cam.fit(bounds)}>Members area</button>
         <button onClick=${() => cam.fit({ minU: 0, maxU: site.width, minV: 0, maxV: site.depth })}>Whole site</button>
@@ -161,9 +178,11 @@ export function StagingTab({ project, model, sim }) {
             const color = asmOf.get(m.id)?.color || '#475569';
             const c = spots.get(m.id);
             const s = toScreen(c.x, c.y);
-            const fits = m.long * k > m.name.length * 6;
+            // A member standing on end is too small to hold its name, but needs one the most.
+            const standing = viewOf(m.id) === 'front';
+            const fits = standing || viewSizes(m, viewOf(m.id)).long * k > m.name.length * 6;
             return html`<g key=${m.id}><polygon points=${q.map(S).join(' ')} fill=${color} fill-opacity=${on ? 0.55 : 0.3} stroke=${on ? '#f59e0b' : color} stroke-width=${on ? 2.5 : 1.2} />
-              ${fits && html`<text x=${s.x} y=${s.y + 4} font-size="11" font-weight="600" text-anchor="middle" fill="#0f172a" class="halo" pointer-events="none">${m.name}</text>`}
+              ${fits && html`<text x=${s.x} y=${standing ? s.y - viewSizes(m, 'front').long * k / 2 - 4 : s.y + 4} font-size="11" font-weight="600" text-anchor="middle" fill="#0f172a" class="halo" pointer-events="none">${m.name}</text>`}
               <title>${m.name}</title></g>`;
           })}
           ${conns.flatMap(({ joints }) => joints.filter((j) => j.touching).map((j) => {
@@ -190,6 +209,7 @@ export function StagingTab({ project, model, sim }) {
             <span class="grip">⋮⋮</span>
             ${a && html`<span class="dot" style=${{ background: a.color }}></span>`}
             <span class="nm">${m.name}</span>
+            ${on && viewOf(m.id) !== 'side' && html`<span class="view-tag">${STAGED_VIEWS[viewOf(m.id)].label}</span>`}
             <span class="muted small">${m.long.toFixed(0)} × ${m.wide.toFixed(0)} in</span>
             <span class=${on ? 'ok small' : 'muted small'}>${on ? '✔' : ''}</span></li>`;
         })}</ul>
@@ -201,7 +221,12 @@ export function StagingTab({ project, model, sim }) {
           <button onClick=${() => turn(sel, 90)}>⟳ 90°</button>
           <button onClick=${() => unplace(sel)}>Back to the list</button>
         </div>
-        <${NumField} label="Turned" unit="°" value=${spots.get(sel)?.rot ?? 0} onChange=${(v) => { const s = spots.get(sel); place(sel, { x: s.x, y: s.y, rot: v }, 'rot' + sel); }} />
+        <div class="view-picks" data-tour="staging-views">
+          ${Object.entries(STAGED_VIEWS).map(([v, { label, hint }]) => html`<button key=${v} class=${viewOf(sel) === v ? 'on' : ''} title=${hint} onClick=${() => setView(sel, v)}>
+            <${ViewThumb} member=${selMember} view=${v} />${label}</button>`)}
+        </div>
+        ${(() => { const z = viewSizes(selMember, viewOf(sel)); return html`<${Hint}>${STAGED_VIEWS[viewOf(sel)].hint}: covers ${fmtIn(z.long)} × ${fmtIn(z.wide)} in on the ground, ${fmtIn(z.tall)} in tall.<//>`; })()}
+        <${NumField} label="Turned" unit="°" value=${spots.get(sel)?.rot ?? 0} onChange=${(v) => { place(sel, { ...keepOf(spots.get(sel)), rot: v }, 'rot' + sel); }} />
         ${asmOf.get(sel) && html`<${Hint}>Part of ${asmOf.get(sel).a.name}.<//>`}
       <//>`}
       <div data-tour="staging-assemblies">
@@ -236,4 +261,18 @@ export function StagingTab({ project, model, sim }) {
   </div>`;
 }
 
-const roundSpot = (s) => ({ x: Math.round(s.x * 100) / 100, y: Math.round(s.y * 100) / 100, rot: s.rot });
+const roundSpot = (s) => ({ ...keepOf(s), x: Math.round(s.x * 100) / 100, y: Math.round(s.y * 100) / 100 });
+// What's saved for a spot (not, say, that it was stacked automatically).
+const keepOf = (s) => ({ x: s.x, y: s.y, rot: s.rot, ...(s.view ? { view: s.view } : {}) });
+const VIEW_ORDER = Object.keys(STAGED_VIEWS);
+const nextView = (v) => VIEW_ORDER[(VIEW_ORDER.indexOf(v) + 1) % VIEW_ORDER.length];
+const fmtIn = (x) => String(Math.round(x * 100) / 100);
+
+// A little picture of a member in one view, all to the same scale, on the view's button.
+function ViewThumb({ member, view }) {
+  const poly = stagedPoly(member, { x: 0, y: 0, rot: flatRot(member, view), view });
+  const size = Math.max(member.long, 1) * 1.1;
+  return html`<svg class="view-thumb" viewBox=${`${-size / 2} ${-size * 0.2} ${size} ${size * 0.4}`} preserveAspectRatio="xMidYMid meet">
+    <polygon points=${poly.map((p) => p.join(',')).join(' ')} fill="currentColor" stroke="currentColor" stroke-width=${size * 0.012} vector-effect="non-scaling-stroke" />
+  </svg>`;
+}

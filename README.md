@@ -183,7 +183,15 @@ view; click one to jump to its step.
 
 ### 6 · Staging
 Plan where every member lies. Drag members from the list onto the yard, drag them around (they
-snap together; Shift places freely), and turn them with R. Members you haven't placed stay stacked
+snap together; Shift places freely), and turn them with R. A member can sit any way up: rather than
+a full 3D shape, it switches between three simple views as seen from above, with the buttons on the
+selected member or the V key (also while dragging it in):
+- **Side:** lying flat, showing its outline from tab 1.
+- **Top:** lying on its edge, covering its length × its size across the bridge.
+- **Front:** standing on end, covering just its depth × its size across the bridge.
+
+The view only changes what the member covers on the ground and whether assembly pieces touch. It
+doesn't change the time to pick it up. Members you haven't placed stay stacked
 automatically in the members area. For **assemblies**, place the members touching where they bolt
 (or press **Lay out** to put them together the way they're built): a green dot marks each touching
 connection, and it uses the shorter "staged touching" times. Any connection can have its own align

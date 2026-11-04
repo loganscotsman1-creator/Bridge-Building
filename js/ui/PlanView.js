@@ -64,7 +64,7 @@ export function PlanView({ project, model, spots, state = null, sel, setSel, edi
     for (const m of model.members) {
       const s = spots.get(m.id);
       if (!s) continue;
-      if (pointInPoly([wp.x, wp.y], stagedPoly(m, s), 3 / k)) { start('piece', m.id, { x: s.x, y: s.y, rot: s.rot }); return; }
+      if (pointInPoly([wp.x, wp.y], stagedPoly(m, s), 3 / k)) { start('piece', m.id, { x: s.x, y: s.y, rot: s.rot, view: s.view }); return; }
     }
     // Bridge footprint
     for (const m of model.members) {
@@ -95,7 +95,7 @@ export function PlanView({ project, model, spots, state = null, sel, setSel, edi
       } else if (d.type === 'bridge') { s.bridge.x = d.orig.x + dx; s.bridge.y = d.orig.y + dy; }
       else if (d.type === 'builder') { const b = p.builders.find((x) => x.id === d.id); b.start = { x: d.orig.x + dx, y: d.orig.y + dy }; }
       else if (d.type === 'tool') { const t = p.tools.find((x) => x.id === d.id); t.start = { x: d.orig.x + dx, y: d.orig.y + dy }; }
-      else if (d.type === 'piece') s.staging[d.id] = { x: d.orig.x + dx, y: d.orig.y + dy, rot: d.orig.rot };
+      else if (d.type === 'piece') s.staging[d.id] = { x: d.orig.x + dx, y: d.orig.y + dy, rot: d.orig.rot, ...(d.orig.view ? { view: d.orig.view } : {}) };
     }, { key: d.key });
   };
 

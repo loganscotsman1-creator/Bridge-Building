@@ -8,7 +8,7 @@ import { emptyProject, normalizeProject } from '../js/model/schema.js';
 import { site2027, RULES_2027 } from '../js/model/rules2027.js';
 import { autoBolts, clampBox, newBox, removeMember } from '../js/model/edit.js';
 import { snapBox, snapPoint, snapSize } from '../js/ui/snap.js';
-import { assemblyConnections, layOutAssembly, membersArea, stagedPoly, stagingSpots } from '../js/model/plan.js';
+import { assemblyConnections, defaultView, layOutAssembly, membersArea, stagedPoly, stagingSpots, viewSizes } from '../js/model/plan.js';
 import { stateAt } from '../js/sim/playback.js';
 
 const results = [];
@@ -665,6 +665,51 @@ await test('a plan that can never finish says who is stuck on what', () => {
   q.plans[0].tasks = [nut]; // its bolt never goes in
   const r = simulate(q);
   assert(r.errors.some((e) => /stuck waiting for its bolt/.test(e.msg)), r.errors.map((e) => e.msg).join(' | '));
+});
+
+await test('staged members can sit in their side, top or front view', () => {
+  const p = emptyProject();
+  p.design.footingSpan = 200;
+  p.design.members = [
+    { ...newBox(p, 'A', 100, 50, 30), id: 'M', name: 'M', len: 40, depth: 6, thick: 3 },
+    { ...newBox(p, 'A', 20, 14, 0), id: 'X', name: 'X', len: 6, depth: 4, thick: 40, off: 19 },
+  ];
+  const model = buildModel(p);
+  const m = model.memberById.get('M'), x = model.memberById.get('X');
+  const box = (q) => [Math.max(...q.map((a) => a[0])) - Math.min(...q.map((a) => a[0])), Math.max(...q.map((a) => a[1])) - Math.min(...q.map((a) => a[1]))];
+  const lay = (member, view) => {
+    p.site.staging[member.id] = { x: 600, y: 40, view };
+    return box(stagedPoly(member, stagingSpots(p, model).get(member.id)));
+  };
+  // Each view lines its long side up with the yard, whatever angle it has on the bridge.
+  let b = lay(m, 'side');
+  assert(near(b[0], 40, 1e-6) && near(b[1], 6, 1e-6), 'side ' + b);
+  b = lay(m, 'top');
+  assert(near(b[0], 40, 1e-6) && near(b[1], 3, 1e-6), 'top ' + b);
+  b = lay(m, 'front');
+  assert(near(b[0], 6, 1e-6) && near(b[1], 3, 1e-6), 'front ' + b);
+  assert(viewSizes(m, 'front').tall === 40 && viewSizes(m, 'top').tall === 6 && viewSizes(m, 'side').tall === 3, 'heights');
+  // A member running across the bridge starts with its long side on the ground.
+  assert(defaultView(x) === 'top' && defaultView(m) === 'side', 'default views');
+  delete p.site.staging.X;
+  const spots = stagingSpots(p, model);
+  b = box(stagedPoly(x, spots.get('X')));
+  assert(near(b[0], 40, 1e-6) && near(b[1], 6, 1e-6), 'cross member ' + b);
+  b = lay(x, 'side');
+  assert(near(b[0], 6, 1e-6) && near(b[1], 4, 1e-6), 'its outline when flat ' + b);
+});
+
+await test('a staged view decides whether assembly pieces touch', () => {
+  const p = normalizeProject(createExampleProject());
+  const plan = p.plans[0];
+  const model = buildModel(p);
+  const first = assemblyConnections(p, model, plan)[0];
+  assert(first.joints.every((j) => j.touching), 'laid out touching');
+  const id = first.joints[0].joint.a;
+  // Stood on end where it lay, a long piece shrinks to its middle and stops reaching the others.
+  p.site.staging[id] = { ...p.site.staging[id], view: 'front', rot: 0 };
+  const after = assemblyConnections(p, buildModel(p), plan)[0];
+  assert(after.joints.some((j) => !j.touching), 'no longer touching');
 });
 
 await test('old (version 1) project files still open', () => {

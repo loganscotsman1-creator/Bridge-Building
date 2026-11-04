@@ -62,31 +62,48 @@ export function stagingSpots(project, model) {
     const col = i % cols, row = Math.floor(i / cols);
     spots.set(m.id, { x: x0 + col * colStep, y: y0 + row * rowStep, rot: flatRot(m), auto: true });
   });
-  for (const m of model.members) if (site.staging[m.id]) spots.set(m.id, { rot: flatRot(m), ...site.staging[m.id] });
+  for (const m of model.members) {
+    const saved = site.staging[m.id];
+    if (saved) spots.set(m.id, { rot: flatRot(m, saved.view || defaultView(m)), ...saved });
+  }
   return spots;
 }
 
-// A member lies flat in the yard. Most show their outline from the side or top view; one that's
-// longest out of its view lies as a plain long × wide rectangle.
+// How a member sits in the yard, as seen from above. Rather than turn a true 3D shape, it's one of
+// three simple views: its outline lying flat (side), lying on its edge (top), or standing on its
+// end (front). `sizes` gives what it covers on the ground, and how tall it stands.
+export const STAGED_VIEWS = {
+  side: { label: 'Side', hint: 'Lying flat' },
+  top: { label: 'Top', hint: 'On its edge' },
+  front: { label: 'Front', hint: 'Standing on end' },
+};
 const liesAsBar = (m) => m.thick > Math.max(m.len, m.depth);
-// The rotation that lines its long side up with the yard.
-export const flatRot = (m) => (liesAsBar(m) ? 0 : m.angle || 0);
+// A member that's longest out of its view starts out with that long side on the ground.
+export const defaultView = (m) => (liesAsBar(m) ? 'top' : 'side');
+export function viewSizes(m, view) {
+  const pair = view === 'front' ? [m.depth, m.thick] : view === 'top' ? [m.len, m.thick] : [m.len, m.depth];
+  return { long: Math.max(...pair), wide: Math.min(...pair), tall: view === 'front' ? m.len : view === 'top' ? m.depth : m.thick };
+}
+// The rotation that lines its long side up with the yard. (An outline is drawn as it was placed on
+// the bridge, so it may be at an angle; the plain rectangles aren't.)
+export const flatRot = (m, view = defaultView(m)) => (view === 'side' ? m.angle || 0 : 0);
 
-// Where a point of the member's outline lies, before rotating, relative to the member's center.
+// Where a point of the member's outline lies when flat, relative to its center.
 function flatPoint(m, p) {
-  if (liesAsBar(m)) return [0, 0];
   const c = polyCentroid(m.poly);
   return [p[0] - c[0], -(p[1] - c[1])];
 }
 
-// The member's outline on the site at a staging spot {x, y, rot (degrees)}.
+// The member's outline on the site at a staging spot {x, y, rot (degrees), view}.
 export function stagedPoly(m, spot) {
+  const view = spot.view || defaultView(m);
   let base;
-  if (liesAsBar(m)) {
-    const hl = m.long / 2, hw = m.wide / 2;
-    base = [[-hl, -hw], [hl, -hw], [hl, hw], [-hl, hw]];
-  } else base = m.poly.map((p) => flatPoint(m, p));
-  const a = ((spot.rot ?? flatRot(m)) * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a);
+  if (view === 'side') base = m.poly.map((p) => flatPoint(m, p));
+  else {
+    const { long, wide } = viewSizes(m, view);
+    base = [[-long / 2, -wide / 2], [long / 2, -wide / 2], [long / 2, wide / 2], [-long / 2, wide / 2]];
+  }
+  const a = ((spot.rot ?? flatRot(m, view)) * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a);
   return base.map(([x, y]) => [spot.x + x * c - y * s, spot.y + x * s + y * c]);
 }
 
@@ -131,7 +148,8 @@ export function layOutAssembly(project, model, assembly) {
       if (!ids.includes(c.a) || !ids.includes(c.b) || pos.has(c.a) === pos.has(c.b)) continue;
       const [from, to] = pos.has(c.a) ? [c.a, c.b] : [c.b, c.a];
       const mf = model.memberById.get(from), mt = model.memberById.get(to);
-      const pf = flatPoint(mf, pointOn(mf, c)), pt = flatPoint(mt, pointOn(mt, c));
+      const at = (m, p) => (liesAsBar(m) ? [0, 0] : flatPoint(m, p));
+      const pf = at(mf, pointOn(mf, c)), pt = at(mt, pointOn(mt, c));
       const o = pos.get(from);
       pos.set(to, [o[0] + pf[0] - pt[0], o[1] + pf[1] - pt[1]]);
       grew = true;
@@ -146,7 +164,7 @@ export function layOutAssembly(project, model, assembly) {
   const w = Math.max(...xs) - Math.min(...xs), h = Math.max(...ys) - Math.min(...ys);
   const area = membersArea(site);
   const taken = model.members.filter((m) => site.staging[m.id] && !ids.includes(m.id)).map((m) => {
-    const q = stagedPoly(m, { rot: flatRot(m), ...site.staging[m.id] });
+    const q = stagedPoly(m, { rot: flatRot(m, site.staging[m.id].view || defaultView(m)), ...site.staging[m.id] });
     return [Math.min(...q.map((p) => p[0])), Math.min(...q.map((p) => p[1])), Math.max(...q.map((p) => p[0])), Math.max(...q.map((p) => p[1]))];
   });
   const free = (x, y) => !taken.some((b) => x < b[2] + 1 && x + w > b[0] - 1 && y < b[3] + 1 && y + h > b[1] - 1);
