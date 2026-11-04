@@ -261,7 +261,9 @@ connections move together as one body. A body is **stable** when it is held at t
 points by things that are already fixed (footings, supports, or stable pieces, through fastened
 bolts), or at one point by a rigid connection. Two bodies pinned together, each already held
 somewhere else and not in a straight line, lock that connection in place, which is how a
-triangulated truss becomes rigid. A piece that isn't stable and that nobody is supporting would fall, and the plan says so. A held piece counts as fixed, so it can hold up whatever is bolted to it: once a lateral is
+triangulated truss becomes rigid. A **member or assembly on a footing stands by itself**, whatever
+its shape, and so does anything bolted to it that stays over the footing. Once a piece bolted to it
+hangs out past the footing, someone needs to support them until the usual rules are met. A piece that isn't stable and that nobody is supporting would fall, and the plan says so. A held piece counts as fixed, so it can hold up whatever is bolted to it: once a lateral is
 bolted to both trusses, the one builder holding the lateral holds both sides up, and the builders
 holding the truss pieces let go (the holding table shows "then held up through L-1"). Supports set to last until the piece stands let go whenever everything stays up without them, with
 the builder holding the newest piece keeping hold. Timed supports keep to their time.

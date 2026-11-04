@@ -83,7 +83,7 @@ export const TOURS = {
     ],
   },
   sequence: {
-    v: 1, title: 'Build sequence',
+    v: 2, title: 'Build sequence',
     steps: [
       {
         target: 'seq-palette',
@@ -93,7 +93,7 @@ export const TOURS = {
       {
         target: 'seq-timeline',
         title: 'Adjust the timeline',
-        body: 'Each builder works left to right, starting each step as soon as they can. Drag a bar to reorder it or give it to someone else, and drag the end of a support bar to change how long they hold on.',
+        body: 'Each builder works left to right, starting each step as soon as they can. Drag a bar to reorder it or give it to someone else, and drag the end of a support bar to change how long they hold on. A piece on a footing stands by itself until something bolted to it hangs past the footing.',
       },
       {
         target: 'seq-checks',

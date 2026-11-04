@@ -16,7 +16,7 @@
 //     where their members are staged
 //   - each constructed portion starts on a footing (10.3.11)
 //   - builders finish in a staging yard and supports are picked back up (10.9.1)
-import { buildModel, bridgeToSite, dist2d, memberPoint } from '../model/geometry.js';
+import { buildModel, bridgeToSite, dist2d, footingRanges, memberPoint } from '../model/geometry.js';
 import { activePlan, ZONE_TYPES } from '../model/schema.js';
 import { assemblyConnections, autoOrderSteps, planUnits, stagingSpots, stepLabel, jointLabel, taskLabel, taskUnitKey } from '../model/plan.js';
 import { uid } from '../model/ids.js';
@@ -121,8 +121,13 @@ class Sim {
       ua.joints.push(j);
       ub.joints.push(j);
     }
+    const footings = footingRanges(project);
     for (const u of this.units.values()) {
       u.nodeIds = [...u.joints.map((j) => j.id), ...u.memberIds.flatMap((m) => ['brg:' + m, 'sup:' + m])];
+      const ms = u.memberIds.map((id) => this.model.memberById.get(id)).filter(Boolean);
+      u.footed = ms.some((m) => m.bearing);
+      const xs = ms.flatMap((m) => m.corners3.map((c) => c[0]));
+      u.overFooting = xs.length > 0 && footings.some(([x0, x1]) => Math.min(...xs) >= x0 - 0.5 && Math.max(...xs) <= x1 + 0.5);
     }
     for (const m of this.model.members) {
       const s = spots.get(m.id);
@@ -347,7 +352,7 @@ class Sim {
     const supportNodes = new Set(this.bearings);
     for (const [n, c] of this.supported) if (c > 0) supportNodes.add(n);
     const solve = (held) => computeStability({
-      units: installed.map((u) => ({ key: u.key, nodeIds: u.nodeIds, attached: u.attached })),
+      units: installed.map((u) => ({ key: u.key, nodeIds: u.nodeIds, attached: u.attached, footed: u.footed, overFooting: u.overFooting })),
       supportNodes,
       nodePos: this.nodePos,
       rigidBoltCount: this.project.design.rigidBoltCount,
@@ -1398,7 +1403,7 @@ export class TaskSim extends Sim {
     const supportNodes = new Set(this.bearings);
     for (const [n, c] of this.supported) if (c > 0) supportNodes.add(n);
     const solve = (held) => computeStability({
-      units: installed.map((u) => ({ key: u.key, nodeIds: u.nodeIds, attached: u.attached })),
+      units: installed.map((u) => ({ key: u.key, nodeIds: u.nodeIds, attached: u.attached, footed: u.footed, overFooting: u.overFooting })),
       supportNodes,
       nodePos: this.nodePos,
       rigidBoltCount: this.project.design.rigidBoltCount,

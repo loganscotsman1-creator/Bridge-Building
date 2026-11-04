@@ -13,6 +13,12 @@
 // A joint counts as a moment connection when the body has at least `rigidBoltCount` fastened bolts
 // there.
 //
+// A piece resting on a footing (`footed`) stands by itself, whatever its shape, and so does anything
+// bolted to it that stays over the footing (`overFooting`). Once something bolted to them hangs out
+// past the footing, they're no longer self-supporting: the usual rules above decide.
+// (Standing this way doesn't make a piece a fixed point for others, so a cantilever off a footing
+// never counts as held up, however well it's braced.)
+//
 // Pieces a builder is holding can be passed in as `held`: a hand holds a piece firmly (like a
 // moment connection), so a held piece counts as fixed and can hold up whatever is bolted to it,
 // e.g. one builder holding a lateral that's bolted to both trusses holds both sides up.
@@ -28,7 +34,7 @@ const JOINT = '#joint';
 
 /**
  * @param {object} args
- * @param {{key: string, nodeIds: string[], attached: Record<string, number>}[]} args.units
+ * @param {{key: string, nodeIds: string[], attached: Record<string, number>, footed?: boolean, overFooting?: boolean}[]} args.units
  *        attached[nodeId] = number of fastened bolts this unit has at that node
  * @param {Set<string>} args.supportNodes bearing nodes and nodes with a support tool
  * @param {Map<string, {x:number,y:number,z:number}>} args.nodePos
@@ -71,7 +77,37 @@ export function computeStability({ units, supportNodes, nodePos, rigidBoltCount,
   const res = solveBodies({ units: bodies, supportNodes, nodePos, rigidBoltCount, held: heldBodies });
   const stable = new Set();
   for (const b of bodies) if (res.stable.has(b.key)) for (const k of b.members || [b.key]) stable.add(k);
+  for (const k of selfStanding(units, stable, supportNodes)) stable.add(k);
   return { stable, fixedNodes: res.fixedNodes };
+}
+
+// Pieces standing on a footing by themselves: each group of pieces bolted together (and not already
+// stable) that has one on a footing and nothing hanging out past it.
+function selfStanding(units, stable, supportNodes) {
+  const left = units.filter((u) => !stable.has(u.key));
+  const atNode = new Map();
+  for (const u of left) {
+    for (const [n, c] of Object.entries(u.attached)) {
+      if (c <= 0 || supportNodes.has(n)) continue;
+      if (!atNode.has(n)) atNode.set(n, []);
+      atNode.get(n).push(u);
+    }
+  }
+  const seen = new Set();
+  const out = [];
+  for (const start of left) {
+    if (seen.has(start.key)) continue;
+    const group = [start];
+    seen.add(start.key);
+    for (let i = 0; i < group.length; i++) {
+      for (const [n, c] of Object.entries(group[i].attached)) {
+        if (c <= 0) continue;
+        for (const v of atNode.get(n) || []) if (!seen.has(v.key)) { seen.add(v.key); group.push(v); }
+      }
+    }
+    if (group.some((u) => u.footed) && group.every((u) => u.footed || u.overFooting)) out.push(...group.map((u) => u.key));
+  }
+  return out;
 }
 
 function solveBodies({ units, supportNodes, nodePos, rigidBoltCount, held }) {

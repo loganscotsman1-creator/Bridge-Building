@@ -238,6 +238,60 @@ await test('stability: one builder holding a lateral holds up both trusses throu
   assert(held.has('A') && held.has('B'), 'holding the lateral holds both sides');
 });
 
+await test('stability: a piece on a footing stands by itself until something hangs out past it', () => {
+  const nodePos = new Map([['f', { x: 0, y: 0, z: 0 }], ['j', { x: 3, y: 0, z: 10 }], ['k', { x: 40, y: 0, z: 10 }], ['g', { x: 240, y: 0, z: 0 }]]);
+  const pier = (bolts = 0) => ({ key: 'P', nodeIds: ['f', 'j'], attached: bolts ? { j: bolts } : {}, footed: true });
+  const over = (bolts = 1) => ({ key: 'V', nodeIds: ['j'], attached: { j: bolts }, overFooting: true });
+  const hang = (bolts = 1) => ({ key: 'X', nodeIds: ['j', 'k'], attached: { j: bolts }, overFooting: false });
+  const run = (units, held) => computeStability({ units, supportNodes: new Set(['f', 'g']), nodePos, rigidBoltCount: 2, held }).stable;
+  assert(run([pier()]).has('P'), 'alone on its footing');
+  let s = run([pier(1), over(1)]);
+  assert(s.has('P') && s.has('V'), 'with a piece that stays over the footing');
+  // Placed but not bolted yet: the hanging piece needs holding, the pier doesn't.
+  s = run([pier(), { ...hang(), attached: {} }]);
+  assert(s.has('P') && !s.has('X'), 'not attached yet');
+  for (const bolts of [1, 2]) {
+    s = run([pier(bolts), hang(bolts)]);
+    assert(!s.has('P') && !s.has('X'), bolts + ' bolts: hanging past the footing, it all needs support');
+    s = run([pier(bolts), hang(bolts)], new Set(['X']));
+    assert(s.has('P') && s.has('X'), bolts + ' bolts: holding the hanging piece holds it up');
+  }
+  // A braced cantilever off a footing still counts as hanging out.
+  const brace = { key: 'Y', nodeIds: ['j', 'k'], attached: { j: 1, k: 1 }, overFooting: false };
+  s = run([pier(1), { ...hang(1), attached: { j: 1, k: 1 } }, brace]);
+  assert(!s.has('X') && !s.has('Y'), 'braced, but only one footing');
+  // Reaching the other footing, the usual rules hold it up.
+  const span = { key: 'S', nodeIds: ['f', 'g'], attached: {}, footed: true, overFooting: false };
+  assert(run([span]).has('S'), 'footing to footing');
+});
+
+const sideOfX = (m) => Math.max(...m.corners3.map((c) => c[0]));
+await test('a plan: pieces on a footing need no support, the next piece out does', () => {
+  const p = taskProject();
+  const pl = p.plans[0];
+  pl.assemblies = [];
+  const model = buildModel(p);
+  const near = p.builders.find((b) => onStagingSide(p.site, b));
+  const pier = model.members.filter((m) => m.bearing).sort((a, b) => (sideOfX(b) - sideOfX(a)))[0]; // (on the builder's side of the river)
+  const c = model.contacts.find((x) => x.bolts > 0 && (x.a === pier.id || x.b === pier.id) && !model.memberById.get(x.a === pier.id ? x.b : x.a).bearing);
+  const out = c.a === pier.id ? c.b : c.a;
+  const place = (id, member) => ({ id, kind: 'receive', builder: near.id, unit: { type: 'member', id: member } });
+  pl.tasks = [place('p', pier.id)];
+  let r = simulate(p);
+  assert(!r.falls.length, 'the pier stands: ' + r.errors.map((e) => e.msg).join(' | '));
+  assert(!r.errors.some((e) => e.msg.includes(pier.name + ' ')), r.errors.map((e) => e.msg).join(' | '));
+  pl.tasks.push(place('o', out));
+  r = simulate(p);
+  assert(r.falls.some((f) => f.unitKey === 'm:' + out), 'the piece hanging out would fall');
+  assert(!r.falls.some((f) => f.unitKey === 'm:' + pier.id), 'not bolted yet, so the pier still stands');
+  pl.tasks.push(
+    { id: 'b', kind: 'bolt', builder: near.id, member: out, jointId: c.id, boltIds: [...c.boltIds], where: 'bridge' },
+    { id: 'n', kind: 'nut', builder: near.id, member: out, jointId: c.id, boltIds: [...c.boltIds], where: 'bridge' },
+  );
+  r = simulate(p);
+  assert(r.falls.some((f) => f.unitKey === 'm:' + pier.id), 'once bolted, the piece hanging out takes the pier with it');
+});
+
 await test('builders cannot cross the river on the 2027 site', () => {
   const g = new SiteGrid(site2027());
   const m = g.mask(null);

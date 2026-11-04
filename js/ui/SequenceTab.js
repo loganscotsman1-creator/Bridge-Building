@@ -180,6 +180,8 @@ export function SequenceTab({ project, model, sim }) {
   };
 
   // --- putting a task on the timeline ---
+  // A piece on a footing stands by itself, so it doesn't need supporting when it's placed.
+  const onFooting = (u) => !!u && u.memberIds.some((id) => model.memberById.get(id)?.bearing);
   const unitOfMember = (memberId) => (inAssembly.has(memberId) ? { type: 'assembly', id: inAssembly.get(memberId) } : { type: 'member', id: memberId });
   const addTasks = (slot, list) => {
     setPlan((pl) => insertAtSlot(pl.tasks, list, slot, startOf));
@@ -206,7 +208,7 @@ export function SequenceTab({ project, model, sim }) {
       const list = [{ id: uid('k'), kind, builder: slot.builder, ...preset, ...(kind === 'support' ? { until: 'auto' } : {}) }];
       if (kind === 'receive' && thenSupport) {
         const u = units.find((x) => x.key === unitKey(preset.unit));
-        if (u) list.push({ id: uid('k'), kind: 'support', builder: slot.builder, member: u.memberIds[0], until: 'auto' });
+        if (u && !onFooting(u)) list.push({ id: uid('k'), kind: 'support', builder: slot.builder, member: u.memberIds[0], until: 'auto' });
       }
       addTasks(slot, list);
       return;
@@ -218,7 +220,8 @@ export function SequenceTab({ project, model, sim }) {
 
   const pickPiece = (memberId) => {
     const { kind, editId } = pending;
-    if (kind === 'run' || kind === 'receive') commit({ unit: unitOfMember(memberId) }, kind === 'receive' && thenSupport && !editId ? [{ kind: 'support', member: memberId, until: 'auto' }] : []);
+    const footed = onFooting(units.find((x) => x.key === unitKey(unitOfMember(memberId))));
+    if (kind === 'run' || kind === 'receive') commit({ unit: unitOfMember(memberId) }, kind === 'receive' && thenSupport && !editId && !footed ? [{ kind: 'support', member: memberId, until: 'auto' }] : []);
     else if (kind === 'support') commit(editId ? { member: memberId } : { member: memberId, until: 'auto' });
     else if (kind === 'stand') commit({ member: memberId, action: standAction, toolId: standTool || project.tools.find((x) => x.kind === 'support')?.id });
   };
@@ -339,7 +342,7 @@ export function SequenceTab({ project, model, sim }) {
     const shared = { project, model, plan, sim, onClose: close };
     if (kind === 'run' || kind === 'receive' || kind === 'support' || kind === 'stand') {
       const stands = project.tools.filter((x) => x.kind === 'support');
-      const extra = kind === 'receive' && !editing ? html`<${Check} label="Then support it until it stands" checked=${thenSupport} onChange=${setThenSupport} />`
+      const extra = kind === 'receive' && !editing ? html`<${Check} label="Then support it until it stands" title="Not added for a piece on a footing, which stands by itself" checked=${thenSupport} onChange=${setThenSupport} />`
         : kind === 'stand' ? html`<${SelectField} label="Action" value=${standAction} options=${[['place', 'Place it'], ['remove', 'Remove it']]} onChange=${setStandAction} />
           ${stands.length ? html`<${SelectField} label="Tool" value=${standTool || stands[0].id} options=${stands.map((x) => [x.id, x.name])} onChange=${setStandTool} />` : html`<${Hint}>No support tools yet. Add one in the Tools tab.<//>`}` : null;
       return html`<${PiecePopup} ...${shared} kind=${kind} title=${`${who}: ${TASK_KINDS[kind][1]}. Which piece?`} builderId=${slot.builder} t=${at} firstView=${first} onPick=${pickPiece} extra=${extra} />`;
