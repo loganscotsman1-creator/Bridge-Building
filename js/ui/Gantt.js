@@ -11,6 +11,7 @@ export function Gantt({ result, t, setT, onEdit = null, onSelect = null, selecte
   const [w, setW] = useState(900);
   const [drag, setDrag] = useState(null); // {seg, t1}: a bar being resized
   useLayoutEffect(() => {
+    setW(ref.current.clientWidth);
     const ro = new ResizeObserver(() => ref.current && setW(ref.current.clientWidth));
     ro.observe(ref.current);
     return () => ro.disconnect();

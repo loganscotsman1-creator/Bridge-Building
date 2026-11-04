@@ -239,7 +239,7 @@ table.grid tr.bad td { color: var(--bad); }
 .now { border-top: 1px solid var(--line); padding: 6px 10px; display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; max-height: 40%; overflow-y: auto; }
 .now .who { cursor: pointer; padding: 2px 4px; border-radius: 4px; }
 .now .who.sel { background: var(--accent-soft); }
-.gantt { background: #fff; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.gantt { background: #fff; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); overflow: hidden; }
 .gantt svg { display: block; cursor: col-resize; }
 .sim-reports { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 12px; padding: 12px; align-items: start; }
 .sim-reports .panel-section { background: #fff; border: 1px solid var(--line); border-radius: 10px; }
@@ -289,7 +289,8 @@ button.link:hover:not(:disabled) { background: none; color: var(--ink); }
 
 /* Building a plan step by step */
 .seq .main > .seq-body { flex: 1; min-height: 0; }
-.gantt.compact { max-height: 190px; overflow-y: auto; flex: none; }
+/* No scrollbars here: the chart is drawn to the box's measured width, and a scrollbar changing that width makes it flicker. */
+.gantt.compact { flex: none; }
 .g-handle { cursor: ew-resize; }
 .add-kinds { display: flex; flex-direction: column; gap: 3px; }
 .add-kinds button { text-align: left; display: flex; gap: 7px; align-items: center; }
