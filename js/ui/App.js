@@ -5,7 +5,7 @@ import { emptyProject, normalizeProject, activePlan } from '../model/schema.js';
 import { createExampleProject } from '../model/example.js';
 import { buildModel } from '../model/geometry.js';
 import { downloadJSON, onAutosaveStatus, pickFile, readJSONFile, safeFilename } from '../model/storage.js';
-import { simulate, fmt, fmtCost } from '../sim/simulate.js';
+import { planTasks, simulate, fmt, fmtCost } from '../sim/simulate.js';
 import { isTyping } from './common.js';
 import { DesignTab } from './DesignTab.js';
 import { SiteTab } from './SiteTab.js';
@@ -47,6 +47,18 @@ export function App() {
   }, []);
 
   const model = useMemo(() => buildModel(project), [project.design]);
+  // Plans saved before step-by-step planning (and the example) become step lists here.
+  useEffect(() => {
+    const old = (pl) => pl.tasks == null || (!pl.tasks.length && pl.steps?.length);
+    if (!project.plans.some(old)) return;
+    updateProject((p) => {
+      for (const pl of p.plans) {
+        if (!old(pl)) continue;
+        pl.tasks = pl.steps?.length ? planTasks(p, pl, pl.steps) : [];
+        pl.steps = [];
+      }
+    }, { undo: false });
+  }, [project.plans]);
   const needsSim = tab === 'sequence' || tab === 'staging' || tab === 'simulate';
   const sim = useMemo(() => (needsSim ? simulate(project, activePlan(project)) : null), [project, needsSim]);
 

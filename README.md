@@ -87,7 +87,7 @@ Each view then has a checklist on the right that walks you through it:
    time fields of each connection it's on. Tick **Holds with the bolt just inserted** where the
    bridge can rest on a bolt before its nut is on: it's pushed in quickly (Crew → Timing), the
    bridge counts it as connected, and it shows as only partly connected until a builder comes
-   back to fasten it (a "Come back and fasten" step in tab 5, or at the very end otherwise). A connection with **two or more bolts is rigid** (it
+   back to fasten it (its nut step in tab 5). A connection with **two or more bolts is rigid** (it
    can cantilever); the threshold is in Bridge settings.
 5. **Check footing supports (F):** members whose bottom sits on a footing are found
    automatically; click a member to mark or unmark it by hand.
@@ -114,48 +114,69 @@ projects:
 - **Reset to 2027 layout** puts the official layout back.
 
 ### 3 · Tools
-Fastening tools (time per bolt, e.g. an impact driver), temporary supports (time to place and
+A tool can list the **pieces it's assembled from** (each with a time); a builder then needs an
+"assemble a tool" step before it can be used. Fastening tools (time to fasten a nut, e.g. an impact driver), temporary supports (time to place and
 remove, e.g. a jack stand under a member), and anything else. Builders can't cross the river to
 fetch a tool, so give each side its own.
 
 ### 4 · Crew & timing
-- **Builders** (at most 6 in 2027): name, role, and what they grab when the clock starts. Which
-  side of the river a builder starts on is the side they work from.
-  - *Any task* adapts to whatever is needed. *Carrier / holder*, *Fastener* and *Staging-yard
-    assembler* only get those jobs when the program assigns work automatically.
+- **Builders** (at most 6 in 2027): name, which **side of the river** they work from, and what
+  they grab when the clock starts. There are no roles: what each builder does is set step by step
+  in tab 5.
   - *May be in* can limit a builder to certain zones.
-- **Timing:** walking and carrying speed, pick-up / hand-off time, align time per connection,
-  hand-bolt time, **align and per-bolt times in the staging yard** (for making assemblies, when
-  they differ from the bridge), a flat time to add a member to an assembly, gear-up time, the slowdown when a carrier
-  fastens their own piece one-handed, reach, and **hand-off distance** (how far apart two builders
-  can stand and still pass a piece across the river).
-
+- **Timing:** walking and carrying speed, pick-up / hand-off time, align time per connection, time
+  to place a bolt, time to fasten a nut by hand, **align and nut times in the staging yard** (for
+  making assemblies, when they differ from the bridge), gear-up time, the slowdown when
+  multitasking, reach, and **hand-off distance** (how far apart two builders can stand and still
+  pass a piece across the river).
 - **Bolts carried:** how many bolts each builder takes at the start (empty = as many as they
   need). The Simulate tab counts them down and warns if someone runs out.
 
 ### 5 · Build sequence
-The plan is an ordered list of steps:
-- **Install** a member or assembly (pick it up, carry it, hand it across the river if needed,
-  place it, hold it, align, bolt).
-- **Assemble** an assembly of 2–3 members right where they're staged (stage them ready to
-  connect; nothing is carried to make one). Drag these steps earlier so assemblies are made
-  while other work goes on.
-- **Place / remove a support** under a member.
-- **Come back and fasten** bolts that were only inserted: all of them so far, or those on one
-  member.
+The plan is built **step by step**. Each step is one task for one builder:
 
-Drag steps (or use ↑ ↓) to reorder. Each step can name its carrier and fastener, or leave them
-on *Auto* (whoever can get there first). *Carrier fastens (solo)* has the holder bolt their own
-piece.
+- **Run a piece or assembly to the river** to hand off.
+- **Receive a piece or assembly and run it to its place.** With nobody running it to the river,
+  the builder picks it up from where it's staged.
+- **Support the bridge in place**: until it stands without them, or for a set time.
+- **Place a bolt in a member**: at the bridge, in the staging yard (making an assembly), or while
+  that member is being run to its place.
+- **Place and fasten a nut on a bolt**: at the bridge or in the staging yard. Choose a connection
+  and all its bolts, or one bolt.
+- **Assemble a tool** from the pieces listed in the Tools tab.
+- **Pass a tool to another builder.**
+- **Other task**: write in what it is and how long it takes.
+- **Place or remove a support tool** (a jack stand) under a member.
+
+Each builder does their steps in list order, starting each one as soon as they're free and what it
+needs is ready: a receiver waits at the river for the runner, a nut waits for its bolt, a support
+waits for its piece to be placed. So steps by different builders overlap on their own. Drag steps
+(or use ↑ ↓) to reorder them. If a plan can never finish, it tells you who is stuck and on what.
+
+**Multitasking:** tick *At the same time as their previous step* on any step. It starts when the
+builder's previous step starts and shares their time, for example fastening a nut while supporting
+the bridge, or placing a bolt in a member while running it to its place. It takes longer by the
+slowdown in Crew → Timing, the builder doesn't walk for it, and their next normal step waits for
+both.
+
+**The timeline** under the list is adjustable. Drag the right end of a support bar (or an "other
+task" bar) to change how long it lasts. Click a support bar and use **Hand over to someone else** to
+have another builder take over once they've finished another step; the first builder lets go at
+that moment and moves on. Letting go too soon shows up as a piece that would fall. The timeline in
+the Simulate tab can be adjusted the same way.
+
+**Auto-build plan** fills in a working plan to edit from: footings first, west to east, trusses
+before laterals, using whoever can get there soonest (builders with a fastening tool fasten, others
+carry). Plans saved before step-by-step planning are converted this way when opened. Which pieces
+are assemblies, the staging layout and the times all carry through. **Duplicate** copies a plan so
+you can try a variation, and **Compare plans** shows every plan's time and construction cost side
+by side.
 
 **Making assemblies:** click 2–3 pieces in the 3D view (they turn yellow), then **Make
-assembly**. Each assembly gets its own color in the 3D view and the step list, and its steps show
-which members are in it. **Edit** on an assembly card lets you click pieces in or out of it. Every
-piece in the 3D views is labeled with its name (**Names** hides them); scroll to zoom in where
-they're crowded, and drag to rotate. **Auto order**
-starts from the footings and works west to east, trusses before laterals. **Duplicate** copies
-the plan so you can try a variation, and **Compare plans** shows every plan's time and
-construction cost side by side.
+assembly**. Each assembly gets its own color. Its bolts and nuts are steps "in the staging yard",
+and it can't be picked up until every nut is on. **Edit** on an assembly card lets you click pieces
+in or out of it. Every piece in the 3D views is labeled with its name (**Names** hides them); scroll
+to zoom in where they're crowded, and drag to rotate.
 
 The build time and construction cost update on every change. Problems are listed under the 3D
 view; click one to jump to its step.
@@ -217,12 +238,10 @@ connections move together as one body. A body is **stable** when it is held at t
 points by things that are already fixed (footings, supports, or stable pieces, through fastened
 bolts), or at one point by a rigid connection. Two bodies pinned together, each already held
 somewhere else and not in a straight line, lock that connection in place, which is how a
-triangulated truss becomes rigid. Until a piece is stable the builder who placed it keeps holding
-it. A held piece counts as fixed, so it can hold up whatever is bolted to it: once a lateral is
+triangulated truss becomes rigid. A piece that isn't stable and that nobody is supporting would fall, and the plan says so. A held piece counts as fixed, so it can hold up whatever is bolted to it: once a lateral is
 bolted to both trusses, the one builder holding the lateral holds both sides up, and the builders
-holding the truss pieces let go (the holding table shows "then held up through L-1"). Holders let
-go whenever everything stays up without them, with the builder holding the newest piece keeping
-hold. If every builder ends up holding something, the plan stops and tells you why.
+holding the truss pieces let go (the holding table shows "then held up through L-1"). Supports set to last until the piece stands let go whenever everything stays up without them, with
+the builder holding the newest piece keeping hold. Timed supports keep to their time.
 
 A bolt that's only inserted counts as connected for all of this: you've said the bridge can rest
 on it there.

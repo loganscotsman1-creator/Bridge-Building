@@ -2,7 +2,7 @@
 import { fits3d, inPlaneLimits, maxThickness, buildModel, calibFromPoints, contact2d, boxCorners, footingPoints, imageToView, isConvex, isSimple, pointInPoly, pointOnContact, polyArea, polyFits, rectOfPoly, viewToImage } from '../js/model/geometry.js';
 import { computeStability } from '../js/sim/stability.js';
 import { SiteGrid } from '../js/sim/grid.js';
-import { simulate } from '../js/sim/simulate.js';
+import { planTasks, simulate } from '../js/sim/simulate.js';
 import { createExampleProject } from '../js/model/example.js';
 import { emptyProject, normalizeProject } from '../js/model/schema.js';
 import { site2027, RULES_2027 } from '../js/model/rules2027.js';
@@ -531,6 +531,140 @@ await test('assembly members staged touching go together faster, with their own 
   const still = assemblyConnections(away, buildModel(away), away.plans[0])[0].joints.find((x) => x.joint.id === j.id);
   assert(!still.touching, 'no longer touching');
   assert(layOutAssembly(away, buildModel(away), away.plans[0].assemblies[0]) !== undefined, 'lays out again');
+});
+
+// A project whose plan is a step list, as the app uses it.
+function taskProject() {
+  const p = normalizeProject(createExampleProject());
+  const pl = p.plans[0];
+  pl.tasks = planTasks(p, pl, pl.steps);
+  pl.steps = [];
+  return p;
+}
+
+await test('the automatic plan becomes steps that build the bridge with no errors', () => {
+  const p = taskProject();
+  const pl = p.plans[0];
+  assert(pl.tasks.length > 100, 'steps: ' + pl.tasks.length);
+  const r = simulate(p);
+  assert(!r.errors.length, r.errors.map((e) => e.msg).slice(0, 3).join(' | '));
+  assert(!r.aborted && r.endTime > 60, 'end ' + r.endTime);
+  const model = buildModel(p);
+  for (const m of model.members) assert(r.tracks.get(m.id).some((e) => e.kind === 'bridge'), m.name + ' placed');
+  const end = stateAt(r, r.endTime);
+  assert(end.boltCounts.fastened === model.bolts.filter((b) => b.jointId).length, JSON.stringify(end.boltCounts));
+  assert(r.handoffs > 0, 'pieces cross the river');
+  // Nobody does two main things at once, and nothing starts before its piece is placed.
+  for (const b of r.builders) {
+    const segs = r.segments.filter((s) => s.builderId === b.id && !s.along).sort((x, y) => x.t0 - y.t0);
+    for (let i = 1; i < segs.length; i++) assert(segs[i].t0 >= segs[i - 1].t1 - 1e-6, `${b.name}: ${segs[i - 1].label} overlaps ${segs[i].label}`);
+  }
+});
+
+await test('multitasking: a nut fastened while supporting overlaps, and takes the slowdown', () => {
+  const p = taskProject();
+  const pl = p.plans[0];
+  const nut = pl.tasks.find((t) => t.kind === 'nut' && t.where === 'bridge');
+  const bolt = pl.tasks.find((t) => t.kind === 'bolt' && t.jointId === nut.jointId && t.where === 'bridge');
+  const joint = buildModel(p).contacts.find((c) => c.id === nut.jointId);
+  const unit = [...pl.tasks].reverse().find((t) => t.kind === 'support' && (t.member === joint.a || t.member === joint.b)) || pl.tasks.find((t) => t.kind === 'support');
+  // The builder supporting the piece does the bolt and nut themselves, at the same time.
+  const ids = [bolt.id, nut.id];
+  const list = pl.tasks.filter((t) => !ids.includes(t.id));
+  const at = list.indexOf(unit);
+  list.splice(at + 1, 0, { ...bolt, builder: unit.builder, along: true }, { ...nut, builder: unit.builder, along: true });
+  pl.tasks = list;
+  const r = simulate(p);
+  const hold = r.segments.find((s) => s.taskId === unit.id && s.kind === 'hold');
+  const work = r.segments.filter((s) => s.taskId === nut.id && s.kind === 'fasten');
+  assert(hold && work.length, 'both happen');
+  assert(work.every((s) => s.along && s.t0 >= hold.t0 - 1e-6 && s.t1 <= hold.t1 + 1e-6), `nut ${work[0].t0}-${work[0].t1} in hold ${hold.t0}-${hold.t1}`);
+  const holder = p.builders.find((b) => b.id === unit.builder);
+  const base = holder.loadout.length ? p.tools.find((t) => t.id === holder.loadout[0]).boltTime : p.timing.boltTimeHand;
+  assert(near(work[0].t1 - work[0].t0, base * p.timing.soloMultiplier, 1e-6), 'slower while multitasking: ' + (work[0].t1 - work[0].t0));
+});
+
+await test('a bolt can go into a member while it is being run to its place', () => {
+  const p = taskProject();
+  const pl = p.plans[0];
+  const receive = pl.tasks.filter((t) => t.kind === 'receive' && t.unit.type === 'member')[0];
+  const bolt = pl.tasks.find((t) => t.kind === 'bolt' && t.where === 'bridge' && t.member === receive.unit.id) || pl.tasks.find((t) => t.kind === 'bolt' && t.where === 'bridge' && buildModel(p).contacts.find((c) => c.id === t.jointId && (c.a === receive.unit.id || c.b === receive.unit.id)));
+  const moved = { ...bolt, builder: receive.builder, member: receive.unit.id, where: 'hand', along: true };
+  pl.tasks = pl.tasks.filter((t) => t.id !== bolt.id);
+  pl.tasks.splice(pl.tasks.indexOf(receive) + 1, 0, moved);
+  const r = simulate(p);
+  const seg = r.segments.find((s) => s.taskId === bolt.id && s.kind === 'insert');
+  const times = r.taskTimes[receive.id];
+  assert(seg && seg.along, 'placed at the same time');
+  assert(seg.t0 < times.end && seg.t0 >= times.start, `bolt at ${seg.t0}, run ${times.start}-${times.end}`);
+  assert(!r.errors.length, r.errors[0]?.msg);
+});
+
+await test('timed supports end when set, and a swap frees the first builder', () => {
+  const p = taskProject();
+  const pl = p.plans[0];
+  // A support that's really needed (not one resting on a jack stand).
+  const r00 = simulate(p);
+  const needed = r00.segments.find((x) => x.kind === 'hold' && x.t1 - x.t0 > 5);
+  const sup = pl.tasks.find((t) => t.id === needed.taskId);
+  // Too short: the piece falls.
+  const short = structuredClone(p);
+  short.plans[0].tasks.find((t) => t.id === sup.id).until = 0.5;
+  const rs = simulate(short);
+  assert(rs.errors.some((e) => /would fall/.test(e.msg)), 'falls when let go too soon');
+  const seg = rs.segments.find((s) => s.taskId === sup.id && s.kind === 'hold');
+  assert(near(seg.t1 - seg.t0, 0.5, 1e-6), 'lasts as set: ' + (seg.t1 - seg.t0));
+  // Swap: someone else on that side takes over; the first builder then lets go early.
+  const r0 = simulate(p);
+  const first = r0.segments.find((s) => s.taskId === sup.id && s.kind === 'hold');
+  const other = p.builders.find((b) => b.id !== sup.builder && b.start.x < 300 === p.builders.find((x) => x.id === sup.builder).start.x < 300);
+  const swap = structuredClone(p);
+  const tasks = swap.plans[0].tasks;
+  tasks.splice(tasks.findIndex((t) => t.id === sup.id) + 1, 0, { id: 'swap', kind: 'support', builder: other.id, member: sup.member, until: 'auto' });
+  const r1 = simulate(swap);
+  const before = r1.segments.find((s) => s.taskId === sup.id && s.kind === 'hold');
+  const after = r1.segments.find((s) => s.taskId === 'swap' && s.kind === 'hold');
+  // (No bar at all for the first builder means the other was already waiting there.)
+  assert(first && after && (!before || near(before.t1, after.t0, 1e-6)), `the first builder lets go when the other takes over: ${before?.t1} vs ${after?.t0}`);
+});
+
+await test('other tasks, assembling and passing tools take their time and change bolt times', () => {
+  const p = taskProject();
+  const pl = p.plans[0];
+  const tool = p.tools.find((t) => t.id === 't-impact-e');
+  tool.pieces = [{ name: 'Body', time: 3 }, { name: 'Socket', time: 4 }];
+  const east = p.builders.filter((b) => b.start.x > 300);
+  const holder = east.find((b) => b.loadout.includes(tool.id));
+  const other = east.find((b) => b !== holder);
+  pl.tasks.unshift(
+    { id: 'o1', kind: 'other', builder: other.id, text: 'Check the chalk line', duration: 9 },
+    { id: 'o2', kind: 'tool', builder: holder.id, toolId: tool.id },
+    { id: 'o3', kind: 'pass', builder: holder.id, toolId: tool.id, to: other.id },
+  );
+  const r = simulate(p);
+  const o = r.segments.find((s) => s.taskId === 'o1');
+  assert(o && near(o.t1 - o.t0, 9) && o.label === 'Check the chalk line', 'other task');
+  const asm = r.segments.filter((s) => s.taskId === 'o2');
+  assert(near(asm.reduce((a, s) => a + s.t1 - s.t0, 0), 7), 'assembly takes the pieces\' time');
+  assert(r.segments.some((s) => s.taskId === 'o3' && s.kind === 'pickup'), 'tool passed');
+  assert(r.taskTimes.o3.start >= r.taskTimes.o2.end - 1e-6, 'in order');
+  // Across the river it can't be passed.
+  const q = structuredClone(p);
+  q.plans[0].tasks.find((t) => t.id === 'o3').to = p.builders.find((b) => b.start.x < 300).id;
+  assert(simulate(q).errors.some((e) => /can't be passed|close enough/.test(e.msg)), 'too far to pass');
+});
+
+await test('a plan that can never finish says who is stuck on what', () => {
+  const p = taskProject();
+  const pl = p.plans[0];
+  const run = pl.tasks.find((t) => t.kind === 'run');
+  pl.tasks = [run]; // nobody receives it
+  assert(simulate(p).errors.some((e) => /no step has a builder receive/.test(e.msg)), 'no receiver');
+  const q = taskProject();
+  const nut = q.plans[0].tasks.find((t) => t.kind === 'nut');
+  q.plans[0].tasks = [nut]; // its bolt never goes in
+  const r = simulate(q);
+  assert(r.errors.some((e) => /stuck waiting for its bolt/.test(e.msg)), r.errors.map((e) => e.msg).join(' | '));
 });
 
 await test('old (version 1) project files still open', () => {

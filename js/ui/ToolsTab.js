@@ -10,7 +10,7 @@ export function ToolsTab({ project }) {
   const set = (id, fn) => updateProject((p) => fn(p.tools.find((t) => t.id === id)), { key: 'tool' + id });
   const add = (kind) => updateProject((p) => {
     const presets = {
-      fastener: { name: 'Impact driver', boltTime: 4 },
+      fastener: { name: 'Impact driver', boltTime: 2 },
       support: { name: 'Jack stand', placeTime: 6, removeTime: 5 },
       other: { name: 'New tool' },
     };
@@ -23,7 +23,7 @@ export function ToolsTab({ project }) {
   const remove = (id) => updateProject((p) => {
     p.tools = p.tools.filter((t) => t.id !== id);
     for (const b of p.builders) b.loadout = b.loadout.filter((t) => t !== id);
-    for (const pl of p.plans) pl.steps = pl.steps.filter((s) => !(s.kind === 'support' && s.toolId === id));
+    for (const pl of p.plans) if (pl.tasks) pl.tasks = pl.tasks.filter((s) => s.toolId !== id);
   });
 
   return html`<div class="page" data-tour="tools">
@@ -39,11 +39,20 @@ export function ToolsTab({ project }) {
           <button class="danger small" onClick=${() => remove(t.id)}>Delete</button></div>
         <${SelectField} label="Kind" value=${t.kind} options=${Object.entries(TOOL_KINDS)} onChange=${(v) => set(t.id, (x) => { x.kind = v; })} />
         <${NumField} label="How many" value=${t.count} min=${0} step="1" onChange=${(v) => set(t.id, (x) => { x.count = Math.round(v); })} />
-        ${t.kind === 'fastener' && html`<${NumField} label="Time per bolt" unit="s" value=${t.boltTime} min=${0} title="Insert and tighten one bolt with this tool" onChange=${(v) => set(t.id, (x) => { x.boltTime = v; })} />`}
+        ${t.kind === 'fastener' && html`<${NumField} label="Fasten a nut" unit="s" value=${t.boltTime} min=${0} title="Put on and tighten one nut with this tool" onChange=${(v) => set(t.id, (x) => { x.boltTime = v; })} />`}
         ${t.kind === 'support' && html`
           <${NumField} label="Time to place" unit="s" value=${t.placeTime} min=${0} onChange=${(v) => set(t.id, (x) => { x.placeTime = v; })} />
           <${NumField} label="Time to remove" unit="s" value=${t.removeTime} min=${0} onChange=${(v) => set(t.id, (x) => { x.removeTime = v; })} />
-          <${Hint}>A support under a joint counts as one fixed point, like a bearing. Add "place support" steps in the Sequence tab.<//>`}
+          <${Hint}>A support under a joint counts as one fixed point, like a bearing. Add "place or remove a support tool" steps in the Build sequence tab.<//>`}
+        <div class="field col"><span class="lbl">Pieces it's assembled from</span>
+          ${(t.pieces || []).map((piece, i) => html`<div class="row piece" key=${i}>
+            <input type="text" placeholder="Piece" value=${piece.name} onInput=${(e) => set(t.id, (x) => { x.pieces[i].name = e.target.value; })} />
+            <input type="number" class="tiny" min="0" step="any" title="Seconds to add this piece" value=${piece.time} onInput=${(e) => set(t.id, (x) => { x.pieces[i].time = Math.max(0, parseFloat(e.target.value) || 0); })} /> s
+            <button class="small" title="Remove piece" onClick=${() => set(t.id, (x) => { x.pieces.splice(i, 1); })}>✕</button>
+          </div>`)}
+          <button class="small" onClick=${() => set(t.id, (x) => { x.pieces = [...(x.pieces || []), { name: '', time: 5 }]; })}>+ Piece</button>
+          ${(t.pieces || []).length > 0 && html`<${Hint}>A builder has to assemble this in a build step before it can be used.<//>`}
+        </div>
         <label class="field col"><span class="lbl">Notes</span><textarea rows="2" value=${t.notes} onInput=${(e) => set(t.id, (x) => { x.notes = e.target.value; })}></textarea></label>
       </div>`)}
     </div>

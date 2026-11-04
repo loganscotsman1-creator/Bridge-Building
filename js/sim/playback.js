@@ -26,8 +26,11 @@ export function stateAt(result, t) {
   const builders = result.builders.map((b) => {
     const list = byBuilder.get(b.id) || [];
     let pos = { x: b.start.x, y: b.start.y }, kind = 'idle', label = 'Idle', seg = null, dir = 0;
+    // Something done at the same time as the main task doesn't move the builder.
+    let also = null;
     for (const s of list) {
       if (s.t0 > t) break;
+      if (s.along) { if (t <= s.t1) also = s; continue; }
       seg = s;
       if (s.path) {
         const end = s.path[s.path.length - 1];
@@ -44,6 +47,10 @@ export function stateAt(result, t) {
         pos = { x: p.x, y: p.y };
         dir = p.dir;
       }
+    }
+    if (also) {
+      label = kind === 'idle' ? also.label : `${label} + ${also.label}`;
+      if (kind === 'idle') kind = also.kind;
     }
     return { ...b, x: pos.x, y: pos.y, kind, label, dir, seg: seg && t <= seg.t1 ? seg : null };
   });

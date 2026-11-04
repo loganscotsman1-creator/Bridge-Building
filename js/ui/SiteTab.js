@@ -90,7 +90,7 @@ function SelectedPanel({ project, sel, setSel }) {
     </div>${extra}<//>`;
   if (sel.type === 'builder') {
     const b = project.builders.find((x) => x.id === sel.id);
-    return b && pointEditor(b.name + ' starts at', b.start, (pt) => updateProject((p) => { p.builders.find((x) => x.id === sel.id).start = pt; }, { key: 'bs' + sel.id }), html`<${Hint}>Roles, zones and tools are set in the Crew tab.<//>`);
+    return b && pointEditor(b.name + ' starts at', b.start, (pt) => updateProject((p) => { p.builders.find((x) => x.id === sel.id).start = pt; }, { key: 'bs' + sel.id }), html`<${Hint}>Side of the river, zones and tools are set in the Crew tab.<//>`);
   }
   if (sel.type === 'tool') {
     const t = project.tools.find((x) => x.id === sel.id);

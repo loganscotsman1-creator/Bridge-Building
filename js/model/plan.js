@@ -230,6 +230,41 @@ export function stepLabel(step, model, plan, project) {
   return step.kind;
 }
 
+// One step of a plan, in words.
+export const taskUnitKey = (task) => (task.unit ? unitKey(task.unit) : null);
+
+export function taskLabel(task, model, plan, project) {
+  const unitName = () => {
+    if (!task.unit) return '(no piece)';
+    if (task.unit.type === 'assembly') return plan.assemblies.find((a) => a.id === task.unit.id)?.name || '(missing assembly)';
+    return model.memberById.get(task.unit.id)?.name || '(missing member)';
+  };
+  const memberName = () => model.memberById.get(task.member)?.name || '(missing member)';
+  const n = (task.boltIds || []).length;
+  const joint = task.jointId && model.contacts.find((c) => c.id === task.jointId);
+  const place = { bridge: 'at the bridge', staging: 'in the staging yard', hand: 'while it is carried' }[task.where] || '';
+  const tool = () => project.tools.find((t) => t.id === task.toolId)?.name || '(missing tool)';
+  switch (task.kind) {
+    case 'run': return `Run ${unitName()} to the river`;
+    case 'receive': return (plan.tasks || []).some((x) => x.kind === 'run' && x.unit && x.unit.type === task.unit?.type && x.unit.id === task.unit?.id) ? `Receive ${unitName()} and run it to its place` : `Run ${unitName()} to its place`;
+    case 'support': return `Support ${memberName()} ${task.until === 'auto' || task.until == null ? 'until it stands' : `for ${task.until} s`}`;
+    case 'bolt': return `Place ${n} bolt${n === 1 ? '' : 's'} in ${memberName()}${joint ? ` (${jointLabel(model, joint)})` : ''} ${place}`;
+    case 'nut': return `Fasten ${n} nut${n === 1 ? '' : 's'}${joint ? `: ${jointLabel(model, joint)}` : ''} ${place}`;
+    case 'tool': return `Assemble ${tool()}`;
+    case 'pass': return `Pass ${tool()} to ${project.builders.find((b) => b.id === task.to)?.name || '(missing builder)'}`;
+    case 'other': return task.text || 'Other task';
+    case 'stand': return `${task.action === 'remove' ? 'Remove' : 'Place'} ${tool()} under ${memberName()}`;
+    default: return task.kind;
+  }
+}
+
+// Which side of the river a spot is on ('west' or 'east'), or null if the site has no river.
+export function sideOf(site, p) {
+  const river = site.zones.find((z) => z.type === 'nogo');
+  if (!river) return null;
+  return p.x < river.x + river.w / 2 ? 'west' : 'east';
+}
+
 export function jointLabel(model, joint) {
   const a = model.memberById.get(joint.a), b = model.memberById.get(joint.b);
   return `${a ? a.name : '?'} ↔ ${b ? b.name : '?'}`;

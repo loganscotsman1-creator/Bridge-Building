@@ -59,15 +59,15 @@ export function createExampleProject() {
   if (typeof document !== 'undefined') addExampleScreenshots(p);
 
   p.tools = [
-    { id: 't-impact-w', name: 'Impact driver (west)', kind: 'fastener', count: 1, boltTime: 4, placeTime: 0, removeTime: 0, start: { x: 12, y: 30 }, notes: 'Battery impact with socket' },
+    { id: 't-impact-w', name: 'Impact driver (west)', kind: 'fastener', count: 1, boltTime: 2, placeTime: 0, removeTime: 0, start: { x: 12, y: 30 }, notes: 'Battery impact with socket' },
     { id: 't-jack', name: 'Jack stand', kind: 'support', count: 2, boltTime: 0, placeTime: 6, removeTime: 5, start: { x: 12, y: 70 }, notes: 'Temporary support under the first bottom-chord piece' },
-    { id: 't-impact-e', name: 'Impact driver (east)', kind: 'fastener', count: 1, boltTime: 4, placeTime: 0, removeTime: 0, start: { x: 690, y: 130 }, notes: '' },
+    { id: 't-impact-e', name: 'Impact driver (east)', kind: 'fastener', count: 1, boltTime: 2, placeTime: 0, removeTime: 0, start: { x: 690, y: 130 }, notes: '' },
   ];
   p.builders = [
-    { id: 'w1', name: 'Builder 1 (west)', color: '#e11d48', role: 'carrier', start: { x: 42, y: 50 }, allowedZones: null, loadout: [], hardware: false },
-    { id: 'w2', name: 'Builder 2 (west)', color: '#2563eb', role: 'fastener', start: { x: 42, y: 130 }, allowedZones: null, loadout: ['t-impact-w'], hardware: true },
-    { id: 'w3', name: 'Builder 3 (east)', color: '#16a34a', role: 'any', start: { x: 600, y: 120 }, allowedZones: null, loadout: [], hardware: true },
-    { id: 'w4', name: 'Builder 4 (east)', color: '#d97706', role: 'any', start: { x: 600, y: 160 }, allowedZones: null, loadout: ['t-impact-e'], hardware: true },
+    { id: 'w1', name: 'Builder 1 (west)', color: '#e11d48', start: { x: 42, y: 50 }, allowedZones: null, loadout: [], hardware: true },
+    { id: 'w2', name: 'Builder 2 (west)', color: '#2563eb', start: { x: 42, y: 130 }, allowedZones: null, loadout: ['t-impact-w'], hardware: true },
+    { id: 'w3', name: 'Builder 3 (east)', color: '#16a34a', start: { x: 600, y: 120 }, allowedZones: null, loadout: [], hardware: true },
+    { id: 'w4', name: 'Builder 4 (east)', color: '#d97706', start: { x: 600, y: 160 }, allowedZones: null, loadout: ['t-impact-e'], hardware: true },
   ];
 
   const plan = p.plans[0];

@@ -32,13 +32,6 @@ export const ZONE_TYPES = {
   walkway: { label: 'Walkway', color: '#94a3b8', walk: true },
 };
 
-export const ROLES = {
-  any: 'Any task (adapts)',
-  carrier: 'Carrier / holder',
-  fastener: 'Fastener',
-  assembler: 'Staging-yard assembler',
-};
-
 export const TOOL_KINDS = {
   fastener: 'Fastening tool',
   support: 'Temporary support',
@@ -50,13 +43,13 @@ export const DEFAULT_TIMING = {
   carrySpeed: 36, // in/s while carrying a member or assembly
   pickupTime: 2, // s to pick up, set down, or hand off a piece
   alignTime: 6, // s to line up one bolted connection
-  boltTimeHand: 12, // s per bolt with no fastening tool (insert + hand tighten)
+  boltTimeHand: 10, // s to fasten a nut with no fastening tool
   assemblyJoinTime: 0, // s to add one member to an assembly; 0 = align time + bolt times
   assemblyAlignTime: 0, // s to line up one connection in the staging yard; 0 = same as alignTime
   assemblyBoltTime: 0, // s per bolt in the staging yard; 0 = the builder's fastening tool time
   stagedAlignTime: 1, // s to line up an assembly connection whose members are staged touching
   stagedBoltTime: 0, // s per bolt at such a connection; 0 = the staging-yard bolt time
-  insertTime: 2, // s to push in a bolt that holds without its nut (the nut comes later)
+  insertTime: 2, // s to place a bolt (fastening its nut is a separate step)
   gearUpTime: 2, // s to grab one tool or the nuts & bolts at the start
   soloMultiplier: 1.5, // align/fasten time multiplier when the carrier fastens while holding
   maxReach: 40, // in a builder can reach from where they stand
@@ -70,7 +63,7 @@ export function emptyView() {
 }
 
 export function emptyPlan(name = 'Plan 1') {
-  return { id: uid('p'), name, assemblies: [], steps: [] };
+  return { id: uid('p'), name, assemblies: [], steps: [], tasks: [] };
 }
 
 export function emptyProject() {
@@ -107,7 +100,7 @@ export function emptyProject() {
     site: site2027(),
     tools: [], // {id, name, kind, count, boltTime, placeTime, removeTime, start: {x, y}, notes}
     timing: { ...DEFAULT_TIMING },
-    builders: [], // {id, name, color, role, start: {x, y}, allowedZones: null | [zoneId], loadout: [toolId], hardware}
+    builders: [], // {id, name, color, start: {x, y}, allowedZones: null | [zoneId], loadout: [toolId], hardware, boltCount}
     plans: [plan],
     activePlanId: plan.id,
   };
@@ -131,9 +124,9 @@ export function normalizeProject(p) {
   out.design.members = (out.design.members || []).map((m) => ({ angle: 0, z: 0, ...m }));
   out.timing = { ...DEFAULT_TIMING, ...(p.timing || {}) };
   out.images = p.images || {};
-  out.tools = (p.tools || []).map((t) => ({ kind: 'other', count: 1, boltTime: 4, placeTime: 6, removeTime: 5, start: { x: 0, y: 0 }, notes: '', ...t }));
+  out.tools = (p.tools || []).map((t) => ({ kind: 'other', count: 1, boltTime: 4, placeTime: 6, removeTime: 5, start: { x: 0, y: 0 }, notes: '', pieces: [], ...t }));
   out.builders = (p.builders || []).map((b, i) => ({
-    role: 'any', color: DEFAULT_COLORS[i % DEFAULT_COLORS.length], start: { x: 0, y: 0 }, allowedZones: null, loadout: [], hardware: true, boltCount: null, ...b,
+    color: DEFAULT_COLORS[i % DEFAULT_COLORS.length], start: { x: 0, y: 0 }, allowedZones: null, loadout: [], hardware: true, boltCount: null, ...b,
   }));
   out.plans = (p.plans && p.plans.length ? p.plans : base.plans).map((pl) => ({ assemblies: [], steps: [], ...pl }));
   if (!out.plans.some((pl) => pl.id === out.activePlanId)) out.activePlanId = out.plans[0].id;

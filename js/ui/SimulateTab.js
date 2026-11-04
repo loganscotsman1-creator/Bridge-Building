@@ -9,7 +9,7 @@ import { stateAt } from '../sim/playback.js';
 import { BOLT_COLORS, PlanView } from './PlanView.js';
 import { IsoView } from './IsoView.js';
 import { Gantt } from './Gantt.js';
-import { Problems } from './SequenceTab.js';
+import { Problems, TaskEditor } from './SequenceTab.js';
 import { Section } from './common.js';
 
 const STATUS_COLORS = { held: '#f97316', working: '#eab308', stable: '#475569', unstable: '#dc2626' };
@@ -19,6 +19,7 @@ export function SimulateTab({ project, model, sim }) {
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(4);
   const [sel, setSel] = useState(null);
+  const [selTaskId, setSelTaskId] = useState(null);
   const raf = useRef(null);
   const end = sim.endTime;
   const spots = useMemo(() => stagingSpots(project, model), [project]);
@@ -100,7 +101,9 @@ export function SimulateTab({ project, model, sim }) {
         </div>
       </div>
     </div>
-    <div data-tour="gantt"><${Gantt} result=${sim} t=${t} setT=${(v) => { setPlaying(false); setT(v); }} /></div>
+    <div data-tour="gantt"><${Gantt} result=${sim} t=${t} setT=${(v) => { setPlaying(false); setT(v); }} selected=${selTaskId} onSelect=${setSelTaskId}
+      onEdit=${(id, patch) => updateProject((p) => { Object.assign(activePlan(p).tasks.find((x) => x.id === id) || {}, patch); })} /></div>
+    ${plan.tasks?.find((x) => x.id === selTaskId) && html`<div class="sim-edit"><${TaskEditor} key=${selTaskId} task=${plan.tasks.find((x) => x.id === selTaskId)} project=${project} model=${model} sim=${sim} onClose=${() => setSelTaskId(null)} onSelect=${setSelTaskId} /></div>`}
     <div class="sim-reports">
       <${Section} title=${`Holding time (${fmt(totalHold)} total)`}>
         <p class="hint">How long someone had to hold each piece after placing it: waiting for a fastener, then aligning and bolting, then until the piece became stable or another builder's held piece (say a lateral bolted to both trusses) could hold it up instead.</p>

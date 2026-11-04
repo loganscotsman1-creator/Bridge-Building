@@ -1,11 +1,11 @@
-// Build simulator. Walks through the plan's steps in order and schedules every builder:
-// walking, carrying, handing pieces across, holding, aligning, fastening, assembling in the
-// staging yard and placing/removing supports.
+// Build simulator. A plan is normally a step-by-step list of tasks, run by TaskSim (further down):
+// each builder does their own steps in order, side by side.
 //
-// Scheduling is greedy: each step takes the builder(s) who can get to the work soonest (or the
-// ones the plan assigns). Steps overlap whenever builders are free, but pieces are placed on the
-// bridge in plan order. A builder who places a piece keeps holding it until the stability model
-// (stability.js) says it stands on its own.
+// Sim, below, is the automatic planner behind "Auto-build plan". Given an order of pieces, it
+// greedily gives each one to the builder(s) who can get to the work soonest and records those
+// decisions as a task list (planTasks). A builder who places a piece holds it until the stability
+// model (stability.js) says it stands on its own. TaskSim builds on it for the shared set-up, rule
+// checks and results.
 //
 // Rules modelled (2027 numbering; the values live in site.rules so they can change by year):
 //   - a builder outside the staging yard carries only one member or assembly at a time (10.3.8)
@@ -18,15 +18,10 @@
 //   - builders finish in a staging yard and supports are picked back up (10.9.1)
 import { buildModel, bridgeToSite, dist2d, memberPoint } from '../model/geometry.js';
 import { activePlan, ZONE_TYPES } from '../model/schema.js';
-import { assemblyConnections, planUnits, stagingSpots, stepLabel, jointLabel } from '../model/plan.js';
+import { assemblyConnections, autoOrderSteps, planUnits, stagingSpots, stepLabel, jointLabel, taskLabel, taskUnitKey } from '../model/plan.js';
+import { uid } from '../model/ids.js';
 import { SiteGrid } from './grid.js';
 import { computeStability } from './stability.js';
-
-const CARRY_ROLES = new Set(['any', 'carrier']);
-const FASTEN_ROLES = new Set(['any', 'fastener']);
-const FETCH_ROLES = new Set(['any', 'carrier', 'assembler']);
-const ASSEMBLE_ROLES = new Set(['any', 'assembler', 'fastener']);
-const SUPPORT_ROLES = new Set(['any', 'carrier', 'fastener', 'assembler']);
 
 export const SEGMENT_KINDS = {
   walk: { label: 'Walking', color: '#cbd5e1' },
@@ -40,10 +35,11 @@ export const SEGMENT_KINDS = {
   fasten: { label: 'Fastening', color: '#ca8a04' },
   assemble: { label: 'Assembling (staging yard)', color: '#a855f7' },
   support: { label: 'Placing / removing support', color: '#14b8a6' },
+  other: { label: 'Other task', color: '#f0abfc' },
 };
 
 export function simulate(project, plan = activePlan(project)) {
-  const sim = new Sim(project, plan);
+  const sim = plan.tasks && plan.tasks.length ? new TaskSim(project, plan) : new Sim(project, plan);
   try {
     sim.run();
   } catch (e) {
@@ -83,6 +79,8 @@ class Sim {
     this.lastWorkEnd = 0;
     this.aborted = false;
     this.warned = new Set();
+    this.taskLog = []; // what the automatic planner decided, as a task list (see planTasks)
+    this.lastReceive = null;
 
     const zones = this.site.zones;
     const idsOf = (pred) => zones.filter((z) => pred(ZONE_TYPES[z.type] || {}, z)).map((z) => z.id);
@@ -149,7 +147,7 @@ class Sim {
       }
       if (builderAreas.length && !builderAreas.some((z) => inZone(z, pos))) this.warn(`${b.name} doesn't start in a builders area of a staging yard (10.6.3).`);
       return {
-        id: b.id, name: b.name, role: b.role || 'any', color: b.color, start: pos, pos, freeAt: 0, holding: null, holdSince: 0,
+        id: b.id, name: b.name, color: b.color, start: pos, pos, freeAt: 0, holding: null, holdSince: 0,
         mask, work: this.grid.maskAnd(mask, this.workZones), stage: this.grid.maskAnd(mask, this.stageZones),
         gear: [], hardware: false, boltTime: this.T.boltTimeHand, tasks: 0, boltCount: b.boltCount ?? null, boltsUsed: 0,
       };
@@ -202,6 +200,12 @@ class Sim {
   }
 
   // ---------- bookkeeping ----------
+  logTask(kind, builder, fields) {
+    const t = { id: uid('k'), kind, builder: builder.id, ...fields };
+    this.taskLog.push(t);
+    return t.id;
+  }
+
   warn(msg, stepIndex = this.stepIndex) {
     if (this.warned.has(msg)) return;
     this.warned.add(msg);
@@ -295,7 +299,7 @@ class Sim {
     return !b.holding && b.id !== exclude && Number.isFinite(b.freeAt);
   }
 
-  pool(roles, explicit, what, exclude = null) {
+  pool(explicit, what, exclude = null) {
     if (explicit && explicit !== 'auto' && explicit !== 'carrier') {
       const b = this.builderById.get(explicit);
       if (!b) this.warn(`A step is assigned to a builder who no longer exists; picking automatically.`);
@@ -303,13 +307,13 @@ class Sim {
       else if (b.id === exclude) this.warn(`${b.name} can't do ${what} while holding the piece; picking someone else.`);
       else return [b];
     }
-    return this.builders.filter((b) => roles.has(b.role));
+    return this.builders;
   }
 
   // Choose the builder who can reach `dest(b)` soonest. Returns {b, d} or null.
-  pick(roles, explicit, dest, readyTime, exclude = null, what = 'this task') {
-    let best = null;
-    for (const b of this.pool(roles, explicit, what, exclude)) {
+  pick(explicit, dest, readyTime, exclude = null, what = 'this task', preferTool = false) {
+    let best = null, withTool = null;
+    for (const b of this.pool(explicit, what, exclude)) {
       if (!this.available(b, exclude)) continue;
       const d = dest(b);
       if (!d) continue;
@@ -318,15 +322,16 @@ class Sim {
       const at = Math.max(b.freeAt + r.time + (d.extra || 0), readyTime);
       const score = at + b.tasks * 1e-3;
       if (!best || score < best.score) best = { b, score, d };
+      if (b.boltTime < this.T.boltTimeHand && (!withTool || score < withTool.score)) withTool = { b, score, d };
     }
-    return best;
+    return preferTool && withTool ? withTool : best;
   }
 
   noBuilder(what) {
     const holding = this.builders.filter((b) => b.holding).map((b) => `${b.name} (holding ${this.units.get(b.holding).name})`);
     let msg = `No builder can do "${what}".`;
     if (holding.length) msg += ' Busy holding unstable pieces: ' + holding.join(', ') + '. Add a support, change the order, or add builders.';
-    else msg += ' Check builder roles, which side of the river they start on, and their allowed zones.';
+    else msg += ' Check which side of the river builders start on, and their allowed zones.';
     this.error(msg);
     this.aborted = true;
   }
@@ -499,7 +504,7 @@ class Sim {
       const m = this.model.memberById.get(id);
       const from = this.tracks.get(id)[0];
       const drop = { x: spot.x, y: spot.y + (k - (u.memberIds.length - 1) / 2) * 4 };
-      const choice = this.pick(FETCH_ROLES, 'auto', (b) => {
+      const choice = this.pick('auto', (b) => {
         const st = this.standFor(b, [from]);
         return st && this.standFor(b, [drop]) && { to: st.stand };
       }, 0, null, `fetch ${m.name}`);
@@ -518,7 +523,7 @@ class Sim {
     if (this.aborted) return;
     arrivals.sort((a, b) => a.t - b.t);
 
-    const choice = this.pick(ASSEMBLE_ROLES, step.builder, (b) => {
+    const choice = this.pick(step.builder, (b) => {
       const st = this.standFor(b, [spot]);
       return st && { to: st.stand };
     }, arrivals.length > 1 ? arrivals[1].t : arrivals[0].t, null, `assemble ${u.name}`);
@@ -533,6 +538,12 @@ class Sim {
       const inner = (u.internal || []).filter((j) => (j.a === id && joined.has(j.b)) || (j.b === id && joined.has(j.a)));
       if (!inner.length) this.warn(`${this.model.memberById.get(id).name} doesn't touch the rest of ${u.name}.`);
       const dur = this.joinTime(a, inner, joined, id, spot);
+      for (const j of inner) {
+        const ids = j.boltIds || [];
+        if (!ids.length) continue;
+        this.logTask('bolt', a, { member: j.a, jointId: j.id, where: 'staging', boltIds: ids });
+        this.logTask('nut', a, { member: j.a, jointId: j.id, where: 'staging', boltIds: ids });
+      }
       this.seg(a, 'assemble', a.freeAt, a.freeAt + dur, { label: `Bolt ${this.model.memberById.get(id).name} into ${u.name}`, unitKey: u.key });
       joined.add(id);
     }
@@ -550,10 +561,10 @@ class Sim {
     const spot = { x: spots.reduce((s, p) => s + p.x, 0) / spots.length, y: spots.reduce((s, p) => s + p.y, 0) / spots.length };
     const yards = this.site.zones.filter((z) => ZONE_TYPES[z.type]?.stage);
     if (yards.length && !spots.every((p) => yards.some((z) => inZone(z, p)))) this.error(`${u.name} is assembled where its members are staged, but some aren't in a staging yard (10.3.7.2).`);
-    const choice = this.pick(ASSEMBLE_ROLES, step.builder, (b) => {
+    const choice = this.pick(step.builder, (b) => {
       const st = this.standFor(b, spots);
       return st && st.reach <= this.T.maxReach && { to: st.stand };
-    }, 0, null, `assemble ${u.name}`);
+    }, 0, null, `assemble ${u.name}`, true);
     if (!choice) { this.noBuilder(`assemble ${u.name}`); return; }
     const a = choice.b;
     a.tasks++;
@@ -563,6 +574,12 @@ class Sim {
       const inner = (u.internal || []).filter((j) => (j.a === id && joined.has(j.b)) || (j.b === id && joined.has(j.a)));
       if (!inner.length) this.warn(`${this.model.memberById.get(id).name} doesn't touch the rest of ${u.name}.`);
       const dur = this.joinTime(a, inner, joined, id, spot);
+      for (const j of inner) {
+        const ids = j.boltIds || [];
+        if (!ids.length) continue;
+        this.logTask('bolt', a, { member: j.a, jointId: j.id, where: 'staging', boltIds: ids });
+        this.logTask('nut', a, { member: j.a, jointId: j.id, where: 'staging', boltIds: ids });
+      }
       this.seg(a, 'assemble', a.freeAt, a.freeAt + dur, { label: `Bolt ${this.model.memberById.get(id).name} into ${u.name}`, unitKey: u.key });
       joined.add(id);
     }
@@ -576,8 +593,12 @@ class Sim {
   // Who carries a unit to the bridge, and how it gets to them: directly, or handed across from a
   // builder on the other side (e.g. members start east of the river, most of the bridge is west).
   planDelivery(u, step, targets) {
-    const carriers = this.pool(CARRY_ROLES, step.carrier, `carry ${u.name}`).filter((c) => this.available(c));
+    const everyone = this.pool(step.carrier, `carry ${u.name}`).filter((c) => this.available(c));
+    // Leave fastening tools free to fasten, if someone else can carry.
+    const withoutTool = everyone.filter((c) => c.boltTime >= this.T.boltTimeHand);
     let best = null;
+    for (const carriers of [withoutTool, everyone]) {
+    if (best) break;
     for (const c of carriers) {
       const st = this.standFor(c, targets, 'work');
       if (!st) continue;
@@ -593,7 +614,7 @@ class Sim {
       }
       // Hand-off from a runner who can reach the piece.
       for (const r of this.builders) {
-        if (r === c || !this.available(r) || !FETCH_ROLES.has(r.role)) continue;
+        if (r === c || !this.available(r)) continue;
         const rs = this.standFor(r, [u.pos]);
         if (!rs || rs.reach > this.T.maxReach) continue;
         const spots = this.grid.handoffs(this.grid.region(r.mask, r.pos), this.grid.region(c.mask, c.pos), this.T.passReach);
@@ -610,6 +631,7 @@ class Sim {
           if (!best || at < best.at) best = { at, c, st, src: rs, relay: { r, h } };
         }
       }
+    }
     }
     return best;
   }
@@ -638,6 +660,7 @@ class Sim {
     } else {
       const { r, h } = relay;
       r.tasks++;
+      this.logTask('run', r, { unit: step.unit });
       this.go(r, src.stand, 'walk', { label: 'To ' + u.name });
       this.waitUntil(r, u.readyAt, 'wait', { label: `Wait for ${u.name} to be ready` });
       this.seg(r, 'pickup', r.freeAt, r.freeAt + this.T.pickupTime, { label: 'Pick up ' + u.name });
@@ -652,6 +675,9 @@ class Sim {
       this.track(u.memberIds, c.freeAt, { kind: 'carried', builderId: c.id });
       u.handedOff = true;
     }
+    // Pieces go up in plan order, and whoever placed one holds it until it stands.
+    this.lastReceive = this.logTask('receive', c, { unit: step.unit, after: this.lastReceive });
+    this.logTask('support', c, { member: u.memberIds[0], until: 'auto' });
     if (st.reach > this.T.maxReach) this.warn(`${c.name} has to reach ${Math.round(st.reach)} in to place ${u.name} (max reach ${this.T.maxReach} in).`);
     if (!this.go(c, st.stand, 'carry', { label: 'Carry ' + u.name, memberIds: u.memberIds })) { this.aborted = true; return; }
     this.waitUntil(c, this.lastPlace, 'hold', { label: `Holding ${u.name} until the previous piece is placed`, unitKey: u.key });
@@ -686,10 +712,10 @@ class Sim {
       let f = null;
       if (!solo) {
         const first = this.nodeSite(joints[0].id);
-        const fc = this.pick(FASTEN_ROLES, step.fastener, (b) => {
+        const fc = this.pick(step.fastener, (b) => {
           const s = this.standFor(b, [first], 'work');
           return s && { to: s.stand };
-        }, placeAt, c.id, `fasten ${u.name}`);
+        }, placeAt, c.id, `fasten ${u.name}`, true);
         if (fc) { f = fc.b; f.tasks++; } else solo = true;
         if (solo) this.warn(`Nobody else can reach to fasten ${u.name}, so ${c.name} fastens it while holding it (slower).`);
       }
@@ -721,6 +747,10 @@ class Sim {
         // for a later member.)
         const put = this.fastenJoint(j);
         if (put.length) {
+          const asLog = { member: j.a, jointId: j.id, where: 'bridge', along: solo || undefined };
+          this.logTask('bolt', f, { ...asLog, boltIds: put.map((b) => b.id) });
+          const nuts = put.filter((b) => !b.snug).map((b) => b.id);
+          if (nuts.length) this.lastNut = this.logTask('nut', f, { ...asLog, boltIds: nuts });
           const t0 = f.freeAt;
           let at = t0;
           for (const b of put) {
@@ -798,16 +828,17 @@ class Sim {
     todo.sort((p, q) => p.bolt.pos[0] - q.bolt.pos[0]);
     for (const { bolt, joint } of todo) {
       const where = bridgeToSite(this.site, bolt.pos[0], bolt.pos[1]);
-      const c = this.pick(FASTEN_ROLES, explicit, (b) => {
+      const c = this.pick(explicit, (b) => {
         const s = this.standFor(b, [where], 'work');
         return s && { to: s.stand };
-      }, 0, null, 'fasten an inserted bolt');
+      }, 0, null, 'fasten an inserted bolt', true);
       if (!c) { this.error(`Nobody is free to come back and fasten the bolt at ${jointLabel(this.model, joint)}.`); continue; }
       const f = c.b;
       f.tasks++;
       const label = jointLabel(this.model, joint);
       if (!this.go(f, c.d.to, 'walk', { label: 'Back to ' + label })) continue;
       const dt = this.boltTimeOf(joint, f, false);
+      this.lastNut = this.logTask('nut', f, { member: bolt.a, jointId: joint.id, where: 'bridge', boltIds: [bolt.id] });
       this.boltEvent(bolt, f, f.freeAt, f.freeAt + dt, 'tighten');
       this.seg(f, 'fasten', f.freeAt, f.freeAt + dt, { label: 'Fasten the nut: ' + label, unitKey: this.unitOfMember.get(bolt.a)?.key, nodeId: joint.id, bolts: 1 });
       this.snugLeft.delete(bolt.id);
@@ -885,12 +916,13 @@ class Sim {
     if (step.action === 'remove') {
       const inst = this.toolInst.find((ti) => ti.tool.id === tool.id && ti.placedAt === node);
       if (!inst) { this.warn(`"${label}": there is no ${tool.name} there to remove; skipped.`); return; }
-      const ch = this.pick(SUPPORT_ROLES, step.builder, (b) => { const s = this.standFor(b, [where], 'work'); return s && { to: s.stand }; }, this.lastWorkEnd, null, label);
+      const ch = this.pick(step.builder, (b) => { const s = this.standFor(b, [where], 'work'); return s && { to: s.stand }; }, this.lastWorkEnd, null, label);
       if (!ch) { this.noBuilder(label); return; }
       const b = ch.b;
       b.tasks++;
       this.go(b, ch.d.to, 'walk', { label: 'To ' + tool.name });
       this.waitUntil(b, this.lastWorkEnd, 'wait', { label: 'Wait for the bolts before removing ' + tool.name });
+      this.logTask('stand', b, { action: 'remove', toolId: tool.id, member: m.id, after: this.lastNut });
       this.seg(b, 'support', b.freeAt, b.freeAt + (tool.removeTime || 0), { label });
       inst.placedAt = null;
       inst.carriedBy = b.id;
@@ -904,7 +936,7 @@ class Sim {
     if (this.site.zones.some((z) => z.type === 'nogo' && inZone(z, where))) this.warn(`"${label}": the support would stand in the river or a no-go zone, which is an accident penalty (10.4.2).`);
     const free = this.toolInst.filter((ti) => ti.tool.id === tool.id && !ti.placedAt);
     if (!free.length) { this.error(`"${label}": every ${tool.name} is already in use. Remove one first or add more in Tools.`); return; }
-    const ch = this.pick(SUPPORT_ROLES, step.builder, (b) => {
+    const ch = this.pick(step.builder, (b) => {
       const s = this.standFor(b, [where], 'work');
       if (!s) return null;
       const mine = free.find((ti) => ti.carriedBy === b.id);
@@ -923,6 +955,7 @@ class Sim {
     const b = ch.b;
     b.tasks++;
     const inst = ch.d.inst;
+    this.logTask('stand', b, { action: 'place', toolId: tool.id, member: m.id });
     if (ch.d.fetchFrom) {
       this.go(b, ch.d.fetchFrom, 'walk', { label: 'To ' + tool.name });
       this.seg(b, 'gear', b.freeAt, b.freeAt + this.T.gearUpTime, { label: 'Grab ' + tool.name });
@@ -1029,6 +1062,593 @@ class Sim {
       model: this.model,
     };
   }
+}
+
+// ---------- step-by-step plans ----------
+// A plan is a list of tasks, each given to a builder. Each builder does their tasks in list order,
+// starting each as soon as they're free and what it needs is ready (a piece placed, a hand-off
+// partner at the river, a bolt in...). A task marked `along` is done at the same time as that
+// builder's previous task. Builders run side by side, so this is simulated event by event: each
+// builder is a small coroutine that yields what it's waiting for.
+export class TaskSim extends Sim {
+  run() {
+    this.stepIndex = -1;
+    this.gearUp();
+    for (const inst of this.toolInst) inst.assembled = !(inst.tool.pieces || []).length;
+    for (const b of this.builders) this.refreshTool(b);
+    this.now = 0;
+    this.inserted = new Set();
+    this.nutted = new Set();
+    this.aligned = new Set();
+    this.doneTasks = new Set();
+    this.taskTimes = {};
+    this.supports = []; // builders holding a piece up right now
+    this.dirty = true;
+    this.runners = [];
+    this.handoffMemo = new Map();
+
+    const tasks = this.plan.tasks;
+    this.taskIndex = new Map(tasks.map((t, i) => [t.id, i]));
+    this.taskIds = new Set(tasks.map((t) => t.id));
+    for (const b of this.builders) {
+      const queue = tasks.filter((t) => t.builder === b.id);
+      this.spawn(b, (r) => this.builderLoop(b, queue, r), b.freeAt);
+    }
+    tasks.filter((t) => !this.builderById.has(t.builder)).forEach((t) => this.warn('A step is given to a builder who no longer exists; skipped.', this.taskIndex.get(t.id)));
+    this.engine();
+    this.stepIndex = null;
+    this.finish();
+  }
+
+  spawn(b, make, at = this.now) {
+    const r = { b, ctx: { idx: null }, done: false, wait: { at } };
+    r.gen = make(r);
+    this.runners.push(r);
+    return r;
+  }
+
+  engine() {
+    const ready = (r) => !r.wait || (r.wait.at != null ? r.wait.at <= this.now + 1e-9 : r.wait.cond());
+    let guard = 0;
+    for (;;) {
+      let moved = true;
+      while (moved && guard++ < 2000000) {
+        moved = false;
+        for (const r of [...this.runners]) {
+          if (r.done || !ready(r)) continue;
+          this.stepIndex = r.ctx.idx;
+          const res = r.gen.next();
+          if (res.done) r.done = true; else r.wait = res.value;
+          moved = true;
+        }
+        // Stability is only decided once everything happening at this instant has happened (so a
+        // piece and the hand supporting it arrive together).
+        if (!moved && this.dirty) { this.dirty = false; this.settle(this.now); moved = true; }
+      }
+      this.runners = this.runners.filter((r) => !r.done);
+      if (!this.runners.length) return;
+      const times = this.runners.map((r) => r.wait?.at).filter((x) => x != null);
+      if (!times.length) {
+        // Only tasks that hold pieces with nothing left that could change that are stuck for good
+        // at the end of the plan; that's reported at the finish.
+        const stuck = this.runners.filter((r) => !r.wait?.quiet);
+        if (stuck.length) {
+          for (const r of stuck) {
+            this.stepIndex = r.ctx.idx;
+            this.error(`${r.b.name} is stuck waiting for ${r.wait?.why || 'something'}. Nothing else in the plan makes that happen.`);
+          }
+          this.aborted = true;
+        }
+        return;
+      }
+      this.now = Math.min(...times);
+    }
+  }
+
+  // Run one builder's tasks: a main task, plus anything marked to happen alongside it.
+  * builderLoop(b, queue, r) {
+    let i = 0;
+    while (i < queue.length) {
+      const main = queue[i++];
+      const along = [];
+      while (i < queue.length && queue[i].along) along.push(queue[i++]);
+      const group = { started: false };
+      r.ctx = { idx: this.taskIndex.get(main.id), b, task: main, along: false, group, mult: 1 };
+      this.stepIndex = r.ctx.idx;
+      const side = along.length ? this.spawn(b, (s) => this.alongLoop(b, along, group, s)) : null;
+      yield* this.doTask(r.ctx);
+      group.started = true;
+      if (side) yield { cond: () => side.done, why: 'the other thing they are doing', quiet: true };
+    }
+  }
+
+  * alongLoop(b, list, group, r) {
+    for (const task of list) {
+      r.ctx = { idx: this.taskIndex.get(task.id), b, task, along: true, group, mult: this.T.soloMultiplier };
+      this.stepIndex = r.ctx.idx;
+      yield { cond: () => group.started, why: 'their main task to start' };
+      yield* this.doTask(r.ctx);
+    }
+  }
+
+  * doTask(ctx) {
+    const { task } = ctx;
+    const start = this.now;
+    if (task.after && this.taskIds.has(task.after)) {
+      yield* this.waitFor(ctx, () => this.doneTasks.has(task.after), 'step ' + (this.taskIndex.get(task.after) + 1));
+    }
+    const handler = { run: this.doRun, receive: this.doReceive, support: this.doHold, bolt: this.doBolt, nut: this.doNut, tool: this.doTool, pass: this.doPass, other: this.doOther, stand: this.doStand }[task.kind];
+    if (handler) yield* handler.call(this, ctx);
+    else this.warn(`Unknown kind of step "${task.kind}"; skipped.`);
+    this.doneTasks.add(task.id);
+    this.taskTimes[task.id] = { start, end: this.now };
+  }
+
+  // ---------- small pieces of a task ----------
+  * waitFor(ctx, cond, why) {
+    if (cond()) return;
+    const t0 = this.now;
+    yield { cond, why };
+    if (!ctx.along && this.now > t0 + 1e-9) this.addSeg(ctx, 'wait', t0, this.now, { label: 'Wait for ' + why });
+  }
+
+  addSeg(ctx, kind, t0, t1, extra = {}) {
+    const b = ctx.b;
+    const s = { builderId: b.id, kind, t0, t1, x: b.pos.x, y: b.pos.y, step: ctx.idx, taskId: ctx.task.id, ...extra };
+    if (ctx.along) s.along = true;
+    this.segments.push(s);
+    return s;
+  }
+
+  * work(ctx, kind, dt, extra = {}) {
+    const d = Math.max(0, dt) * ctx.mult;
+    if (d <= 1e-9 && kind !== 'pickup') return;
+    this.addSeg(ctx, kind, this.now, this.now + d, extra);
+    yield { at: this.now + d };
+  }
+
+  * walk(ctx, to, kind, extra = {}) {
+    const { b } = ctx;
+    const r = this.travel(b, b.pos, to, kind === 'carry');
+    if (!r) {
+      this.error(`${b.name} can't find a path to (${Math.round(to.x)}, ${Math.round(to.y)}) without leaving their allowed zones or crossing the river.`);
+      return false;
+    }
+    if (r.length > 0.01) {
+      this.segments.push({ builderId: b.id, kind, t0: this.now, t1: this.now + r.time, x: b.pos.x, y: b.pos.y, path: r.points, step: ctx.idx, taskId: ctx.task.id, ...extra });
+      yield { at: this.now + r.time };
+    }
+    b.pos = { x: to.x, y: to.y };
+    return true;
+  }
+
+  // Get within reach of a spot. Someone multitasking stays where they are.
+  * reach(ctx, where, area, label) {
+    const { b } = ctx;
+    if (dist2d(b.pos, where) <= this.T.maxReach) return true;
+    if (ctx.along) {
+      this.warn(`${b.name} is ${Math.round(dist2d(b.pos, where))} in away from what they're doing at the same time (reach ${this.T.maxReach} in).`);
+      return true;
+    }
+    const s = this.standFor(b, [where], area);
+    if (!s) { this.error(`${b.name} can't get to ${label} from their side of the river${area === 'work' ? ' and a construction zone or riverbank' : ''}.`); return false; }
+    if (s.reach > this.T.maxReach) this.warn(`${b.name} has to reach ${Math.round(s.reach)} in to get to ${label} (reach ${this.T.maxReach} in).`);
+    return yield* this.walk(ctx, s.stand, 'walk', { label: 'To ' + label });
+  }
+
+  unitOf(task) {
+    const u = this.units.get(taskUnitKey(task));
+    if (!u) this.warn('This step refers to a piece that no longer exists, or is now part of an assembly; skipped.');
+    return u;
+  }
+
+  unitSpot(u) {
+    const spots = u.memberIds.map((id) => this.tracks.get(id)[0]);
+    return { x: spots.reduce((s, p) => s + p.x, 0) / spots.length, y: spots.reduce((s, p) => s + p.y, 0) / spots.length };
+  }
+
+  // An assembly is ready to carry once every bolt inside it has its nut on.
+  assemblyDone(u) {
+    if (u.type !== 'assembly') return true;
+    return (u.internal || []).every((j) => (j.boltIds || []).every((id) => this.nutted.has(id)));
+  }
+
+  * pickUp(ctx, u) {
+    const { b } = ctx;
+    if (u.type === 'assembly' && !this.rulesAssemblyChecked?.has(u.key)) {
+      const max = this.rules.maxAssemblyMembers ?? Infinity;
+      if (u.memberIds.length > max) this.error(`${u.name} has ${u.memberIds.length} members; the rules allow at most ${max} (10.3.7).`);
+    }
+    yield* this.waitFor(ctx, () => this.assemblyDone(u), `${u.name} to be bolted together`);
+    if (!(yield* this.reach(ctx, this.unitSpot(u), 'walk', u.name))) return false;
+    yield* this.work(ctx, 'pickup', this.T.pickupTime, { label: 'Pick up ' + u.name });
+    this.track(u.memberIds, this.now, { kind: 'carried', builderId: b.id });
+    b.carrying = u.key;
+    return true;
+  }
+
+  checkHands(ctx, u) {
+    const { b } = ctx;
+    if (b.carrying && b.carrying !== u.key) this.error(`${b.name} would be carrying two pieces at once, ${this.units.get(b.carrying).name} and ${u.name} (only one at a time).`);
+  }
+
+  // Where this piece crosses the river between these two builders.
+  handoffFor(u, runner, catcher) {
+    if (this.handoffMemo.has(u.key)) return this.handoffMemo.get(u.key);
+    const from = this.unitSpot(u);
+    const spots = this.grid.handoffs(this.grid.region(runner.mask, runner.pos), this.grid.region(catcher.mask, catcher.pos), this.T.passReach);
+    const targets = this.unitTargets(u);
+    const place = targets[Math.floor(targets.length / 2)];
+    let best = null;
+    for (const h of spots) {
+      const est = dist2d(from, h.g) + dist2d(h.t, place);
+      if (!best || est < best.est) best = { ...h, est };
+    }
+    const memo = best && { g: best.g, t: best.t, runnerThere: false, catcherThere: false, done: false };
+    this.handoffMemo.set(u.key, memo);
+    return memo;
+  }
+
+  * doRun(ctx) {
+    const { b, task } = ctx;
+    const u = this.unitOf(task);
+    if (!u) return;
+    this.checkHands(ctx, u);
+    ctx.group.started = true;
+    const recv = this.plan.tasks.find((t) => t.kind === 'receive' && taskUnitKey(t) === u.key);
+    const catcher = recv && this.builderById.get(recv.builder);
+    if (!catcher) { this.error(`${u.name} is run to the river, but no step has a builder receive it.`); return; }
+    if (!(yield* this.pickUp(ctx, u))) return;
+    const h = this.handoffFor(u, b, catcher);
+    if (!h) { this.error(`${b.name} and ${catcher.name} can't hand ${u.name} to each other: they're on the same side of the river, or too far apart (hand-off distance ${this.T.passReach} in).`); return; }
+    if (!(yield* this.walk(ctx, h.g, 'carry', { label: `Run ${u.name} to the river`, memberIds: u.memberIds }))) return;
+    h.runnerThere = true;
+    yield* this.waitFor(ctx, () => h.catcherThere, catcher.name);
+    yield* this.work(ctx, 'pickup', this.T.pickupTime, { label: `Hand ${u.name} to ${catcher.name}` });
+    b.carrying = null;
+    u.handedOff = true;
+    h.done = true;
+  }
+
+  * doReceive(ctx) {
+    const { b, task } = ctx;
+    const u = this.unitOf(task);
+    if (!u) return;
+    if (u.installed) { this.warn(`${u.name} is placed more than once in the plan; extra step skipped.`); return; }
+    this.checkHands(ctx, u);
+    ctx.group.started = true;
+    const run = this.plan.tasks.find((t) => t.kind === 'run' && taskUnitKey(t) === u.key);
+    const runner = run && this.builderById.get(run.builder);
+    if (runner && runner !== b) {
+      const h = this.handoffFor(u, runner, b);
+      if (!h) return; // the runner's step reports this
+      if (!(yield* this.walk(ctx, h.t, 'walk', { label: `Meet ${runner.name} for ${u.name}` }))) return;
+      h.catcherThere = true;
+      yield* this.waitFor(ctx, () => h.runnerThere, runner.name);
+      yield* this.work(ctx, 'pickup', this.T.pickupTime, { label: `Take ${u.name} from ${runner.name}` });
+      this.track(u.memberIds, this.now, { kind: 'carried', builderId: b.id });
+      b.carrying = u.key;
+    } else if (!(yield* this.pickUp(ctx, u))) return;
+    const st = this.standFor(b, this.unitTargets(u), 'work');
+    if (!st) { this.error(`${b.name} can't get ${u.name} to its place from their side of the river. Run it across to someone on the other side.`); return; }
+    if (st.reach > this.T.maxReach) this.warn(`${b.name} has to reach ${Math.round(st.reach)} in to place ${u.name} (reach ${this.T.maxReach} in).`);
+    if (!(yield* this.walk(ctx, st.stand, 'carry', { label: 'Run ' + u.name + ' to its place', memberIds: u.memberIds }))) return;
+    // 10.3.11: a piece that touches nothing installed starts a new portion, which must start on a footing.
+    const touching = u.joints.some((j) => this.unitOfMember.get(u.memberIds.includes(j.a) ? j.b : j.a)?.installed);
+    if (!touching && !u.memberIds.some((m) => this.bearings.has('brg:' + m))) this.error(`${u.name} doesn't touch any installed piece or a footing, so it can't start a constructed portion (10.3.11).`);
+    u.installed = true;
+    u.installedAt = this.now;
+    this.track(u.memberIds, this.now, { kind: 'bridge' });
+    this.status(u, this.now, 'held');
+    b.carrying = null;
+    for (const id of this.counted()) { const bolt = this.boltById.get(id); for (const jid of bolt.jointIds) this.credit(id, jid); }
+    this.dirty = true;
+  }
+
+  // Bolts that hold the bridge: nut on, or just inserted where that's allowed.
+  counted() {
+    return [...this.nutted, ...[...this.inserted].filter((id) => this.boltById.get(id)?.snug)];
+  }
+
+  * doHold(ctx) {
+    const { b, task } = ctx;
+    const m = this.model.memberById.get(task.member);
+    const u = m && this.unitOfMember.get(m.id);
+    if (!u) { this.warn('This support step refers to a member that no longer exists; skipped.'); return; }
+    yield* this.waitFor(ctx, () => u.installed, `${u.name} to be placed`);
+    const spots = this.unitTargets(u);
+    const near = spots.reduce((best, p) => (dist2d(b.pos, p) < dist2d(b.pos, best) ? p : best), spots[0]);
+    if (!(yield* this.reach(ctx, near, 'work', u.name))) return;
+    ctx.group.started = true;
+    const rec = { unitKey: u.key, name: u.name, builderId: b.id, start: this.now, end: null, alignStart: null, workEnd: null, solo: false, step: ctx.idx };
+    this.holds.push(rec);
+    const hold = { b, task, u, rec, start: this.now, timed: task.until !== 'auto' && task.until != null, done: false, ctx };
+    if (u.stable && !hold.timed) this.warn(`${b.name} isn't needed to support ${u.name} here: it already stands on its own by then.`);
+    this.supports.push(hold);
+    this.dirty = true;
+    if (hold.timed) yield { at: this.now + Math.max(0, Number(task.until) || 0) };
+    else yield { cond: () => hold.done, why: `${u.name} to stand on its own`, quiet: true };
+    this.endHold(hold);
+  }
+
+  endHold(hold, open = false) {
+    if (hold.ended) return;
+    hold.ended = true;
+    this.supports = this.supports.filter((h) => h !== hold);
+    hold.rec.end = this.now;
+    if (this.now - hold.start > 1e-6) this.addSeg(hold.ctx, 'hold', hold.start, this.now, { label: 'Supporting ' + hold.u.name + (open ? ' (never released)' : ''), unitKey: hold.u.key, resizable: true, open });
+    this.dirty = true;
+  }
+
+  // Which pieces stand, and who can let go. A held piece counts as fixed, so it can hold up what's
+  // bolted to it. Open-ended supports let go once everything stays up without them (those holding
+  // pieces that stand on their own first, then the longest-held). Timed ones keep to their time,
+  // so a builder can hold on until someone takes over.
+  settle(t) {
+    const installed = [...this.units.values()].filter((u) => u.installed);
+    if (!installed.length) return;
+    const supportNodes = new Set(this.bearings);
+    for (const [n, c] of this.supported) if (c > 0) supportNodes.add(n);
+    const solve = (held) => computeStability({
+      units: installed.map((u) => ({ key: u.key, nodeIds: u.nodeIds, attached: u.attached })),
+      supportNodes,
+      nodePos: this.nodePos,
+      rigidBoltCount: this.project.design.rigidBoltCount,
+      held,
+    }).stable;
+    const heldBy = (list) => new Set(list.map((h) => h.u.key));
+    const real = solve(new Set());
+    let active = this.supports.filter((h) => !h.done);
+    let up = solve(heldBy(active));
+    const order = active.filter((h) => !h.timed).sort((p, q) => (real.has(q.u.key) - real.has(p.u.key)) || (p.start - q.start));
+    for (const h of order) {
+      const next = active.filter((x) => x !== h);
+      const s = solve(heldBy(next));
+      if (![...up].every((x) => s.has(x))) continue;
+      if (!real.has(h.u.key)) {
+        const other = next.find((x) => x.u !== h.u && !solve(heldBy(next.filter((y) => y !== x))).has(h.u.key));
+        if (other) h.rec.heldUpBy = { name: other.u.name, builder: other.b.name };
+      }
+      h.done = true;
+      active = next;
+      up = s;
+    }
+    for (const u of installed) {
+      const now = real.has(u.key);
+      if (now && !u.stable) {
+        u.stable = true;
+        u.stableAt = t;
+        this.status(u, t, 'stable');
+      } else if (!now && u.stable) {
+        u.stable = false;
+        this.status(u, t, up.has(u.key) ? 'held' : 'unstable');
+      }
+      if (!now && !up.has(u.key)) {
+        if (!u.fell) {
+          u.fell = true;
+          this.status(u, t, 'unstable');
+          this.error(`${u.name} isn't supported at ${fmt(t)} and would fall. Have someone support it, or bolt it to something that stands.`);
+        }
+      } else if (u.fell) { u.fell = false; if (!now) this.status(u, t, 'held'); }
+    }
+  }
+
+  jointsOfBolt(bolt) {
+    return bolt.jointIds.map((id) => this.jointById.get(id)).filter(Boolean);
+  }
+
+  stagingWhere(ctx, bolt, member) {
+    const s = this.tracks.get(member)?.[0];
+    return s ? { x: s.x, y: s.y } : bridgeToSite(this.site, bolt.pos[0], bolt.pos[1]);
+  }
+
+  boltList(ctx) {
+    const list = (ctx.task.boltIds || []).map((id) => this.boltById.get(id)).filter(Boolean);
+    if (!list.length) this.warn('This step has no bolts (the connection may have changed); skipped.');
+    return list;
+  }
+
+  * doBolt(ctx) {
+    const { b, task } = ctx;
+    const where = task.where || 'bridge';
+    const staging = where === 'staging';
+    const list = this.boltList(ctx);
+    const memberId = task.member || list[0]?.a;
+    const home = this.unitOfMember.get(memberId);
+    if (!home || !list.length) return;
+    if (!b.hardware) this.warn(`${b.name} places bolts but isn't carrying nuts & bolts (turn on "Nuts & bolts" in Crew).`);
+    if (where === 'bridge') yield* this.waitFor(ctx, () => home.installed, `${home.name} to be placed`);
+    if (where === 'hand') yield* this.waitFor(ctx, () => b.carrying === home.key, `${b.name} to be carrying ${home.name}`);
+    for (const bolt of list) {
+      if (this.inserted.has(bolt.id)) { this.warn(`A bolt is placed more than once in the plan: ${jointLabel(this.model, this.jointsOfBolt(bolt)[0] || { a: bolt.a, b: bolt.b })}.`); continue; }
+      const spot = staging ? this.stagingWhere(ctx, bolt, memberId) : where === 'hand' ? { x: b.pos.x, y: b.pos.y } : bridgeToSite(this.site, bolt.pos[0], bolt.pos[1]);
+      if (where !== 'hand' && !(yield* this.reach(ctx, spot, staging ? 'walk' : 'work', 'the connection'))) return;
+      // Lining up happens as the first bolt goes through two members that are together.
+      for (const j of this.jointsOfBolt(bolt)) {
+        if (this.aligned.has(j.id) || !this.together(j.a, j.b, staging)) continue;
+        this.aligned.add(j.id);
+        yield* this.work(ctx, staging ? 'assemble' : 'align', this.alignTimeOf(j, staging), { label: 'Align ' + jointLabel(this.model, j), unitKey: home.key, nodeId: j.id });
+      }
+      const dt = this.T.insertTime * ctx.mult;
+      this.boltEvent(bolt, b, this.now, this.now + dt, 'insert', where === 'bridge' ? null : spot);
+      yield* this.work(ctx, staging ? 'assemble' : 'insert', this.T.insertTime, { label: `Place a bolt in ${this.model.memberById.get(memberId)?.name}`, unitKey: home.key, bolts: 1 });
+      this.inserted.add(bolt.id);
+      if (bolt.snug) for (const jid of bolt.jointIds) this.credit(bolt.id, jid);
+      this.dirty = true;
+    }
+  }
+
+  // Are these two members together where this work happens?
+  together(a, b, staging) {
+    const ua = this.unitOfMember.get(a), ub = this.unitOfMember.get(b);
+    if (!ua || !ub) return false;
+    return staging ? ua === ub : ua.installed && ub.installed;
+  }
+
+  * doNut(ctx) {
+    const { b, task } = ctx;
+    const staging = task.where === 'staging';
+    const list = this.boltList(ctx);
+    // Wait for a tool that's on its way to this builder.
+    const i = this.taskIndex.get(task.id);
+    for (const t of this.plan.tasks.slice(0, i)) {
+      if (t.kind === 'pass' && t.to === b.id) yield* this.waitFor(ctx, () => this.doneTasks.has(t.id), 'a tool being passed to them');
+    }
+    for (const bolt of list) {
+      if (this.nutted.has(bolt.id)) { this.warn(`A nut is fastened more than once in the plan.`); continue; }
+      yield* this.waitFor(ctx, () => this.inserted.has(bolt.id), 'its bolt to be placed');
+      const joint = this.jointsOfBolt(bolt)[0];
+      yield* this.waitFor(ctx, () => bolt.memberIds.every((id, k) => k === 0 || this.together(bolt.memberIds[0], id, staging)), staging ? 'the members of its assembly' : 'every member on the bolt to be placed');
+      const spot = staging ? this.stagingWhere(ctx, bolt, bolt.a) : bridgeToSite(this.site, bolt.pos[0], bolt.pos[1]);
+      if (!(yield* this.reach(ctx, spot, staging ? 'walk' : 'work', 'the connection'))) return;
+      const dt = this.boltTimeOf(joint || {}, b, staging);
+      const home = this.unitOfMember.get(bolt.a);
+      this.boltEvent(bolt, b, this.now, this.now + dt * ctx.mult, 'tighten', staging ? spot : null);
+      yield* this.work(ctx, staging ? 'assemble' : 'fasten', dt, { label: 'Fasten a nut' + (joint ? ': ' + jointLabel(this.model, joint) : ''), unitKey: home?.key, nodeId: joint?.id, bolts: 1 });
+      this.nutted.add(bolt.id);
+      if (!bolt.snug) for (const jid of bolt.jointIds) this.credit(bolt.id, jid);
+      this.dirty = true;
+      if (home && home.type === 'assembly' && !home.built && this.assemblyDone(home)) {
+        home.built = true;
+        const s = this.unitSpot(home);
+        home.pos = s;
+        this.track(home.memberIds, this.now, { kind: 'ground', x: s.x, y: s.y, assembled: true });
+      }
+    }
+  }
+
+  // A fastening tool only counts once it's put together.
+  refreshTool(b) {
+    b.gear = this.toolInst.filter((ti) => ti.carriedBy === b.id && !ti.placedAt);
+    const ready = b.gear.filter((g) => g.tool.kind === 'fastener' && g.assembled);
+    b.boltTime = ready.length ? Math.min(...ready.map((g) => g.tool.boltTime)) : this.T.boltTimeHand;
+  }
+
+  * doTool(ctx) {
+    const { b, task } = ctx;
+    const tool = this.project.tools.find((t) => t.id === task.toolId);
+    if (!tool) { this.warn('This step uses a tool that no longer exists; skipped.'); return; }
+    const insts = this.toolInst.filter((ti) => ti.tool.id === tool.id);
+    let inst = insts.find((ti) => ti.carriedBy === b.id && !ti.assembled) || insts.find((ti) => !ti.carriedBy && !ti.assembled && !ti.placedAt && !ti.claimedBy);
+    if (!inst) { this.warn(`There's no ${tool.name} left to assemble.`); return; }
+    inst.claimedBy = b.id;
+    if (inst.carriedBy !== b.id) {
+      if (!(yield* this.reach(ctx, inst.pos, 'walk', tool.name))) return;
+      inst.carriedBy = b.id;
+    }
+    ctx.group.started = true;
+    const pieces = tool.pieces || [];
+    for (const piece of pieces) yield* this.work(ctx, 'gear', piece.time || 0, { label: `Assemble ${tool.name}: ${piece.name || 'piece'}` });
+    inst.assembled = true;
+    this.refreshTool(b);
+  }
+
+  * doPass(ctx) {
+    const { b, task } = ctx;
+    const tool = this.project.tools.find((t) => t.id === task.toolId);
+    const to = this.builderById.get(task.to);
+    if (!tool || !to) { this.warn('This step refers to a tool or builder that no longer exists; skipped.'); return; }
+    const mine = () => this.toolInst.find((ti) => ti.tool.id === tool.id && ti.carriedBy === b.id && !ti.placedAt);
+    yield* this.waitFor(ctx, () => !!mine(), `${b.name} to have a ${tool.name}`);
+    if (dist2d(b.pos, to.pos) > this.T.passReach) {
+      const s = this.standFor(b, [to.pos]);
+      if (!s) { this.error(`${b.name} can't get close enough to pass a ${tool.name} to ${to.name}.`); return; }
+      if (!(ctx.along)) { if (!(yield* this.walk(ctx, s.stand, 'walk', { label: 'To ' + to.name }))) return; }
+      if (dist2d(b.pos, to.pos) > this.T.passReach) { this.error(`${to.name} is ${Math.round(dist2d(b.pos, to.pos))} in from the closest ${b.name} can get, so the ${tool.name} can't be passed (hand-off distance ${this.T.passReach} in).`); return; }
+    }
+    ctx.group.started = true;
+    yield* this.work(ctx, 'pickup', this.T.pickupTime, { label: `Pass ${tool.name} to ${to.name}` });
+    const inst = mine();
+    if (inst) inst.carriedBy = to.id;
+    this.refreshTool(b);
+    this.refreshTool(to);
+  }
+
+  * doOther(ctx) {
+    ctx.group.started = true;
+    yield* this.work(ctx, 'other', Number(ctx.task.duration) || 0, { label: ctx.task.text || 'Other task', resizable: true });
+  }
+
+  // A temporary support tool (a jack stand) placed under a member or taken back out.
+  * doStand(ctx) {
+    const { b, task } = ctx;
+    const tool = this.project.tools.find((t) => t.id === task.toolId);
+    const m = this.model.memberById.get(task.member);
+    if (!tool || !m) { this.warn('This support step refers to a tool or member that no longer exists; skipped.'); return; }
+    const node = 'sup:' + m.id;
+    const where = this.nodeSite(node);
+    const label = taskLabel(task, this.model, this.plan, this.project);
+    if (task.action === 'remove') {
+      const inst = this.toolInst.find((ti) => ti.tool.id === tool.id && ti.placedAt === node);
+      if (!inst) { this.warn(`"${label}": there is no ${tool.name} there to remove; skipped.`); return; }
+      if (!(yield* this.reach(ctx, where, 'work', tool.name))) return;
+      yield* this.work(ctx, 'support', tool.removeTime || 0, { label });
+      inst.placedAt = null;
+      inst.carriedBy = b.id;
+      this.supported.set(node, (this.supported.get(node) || 1) - 1);
+      this.supportEvents.push({ t: this.now, key: inst.key, nodeId: node, action: 'remove', name: tool.name });
+      this.refreshTool(b);
+      this.dirty = true;
+      return;
+    }
+    if (this.site.zones.some((z) => z.type === 'nogo' && inZone(z, where))) this.warn(`"${label}": the support would stand in the river or a no-go zone, which is an accident penalty (10.4.2).`);
+    // (Claimed as soon as someone sets off for it, so two builders don't go for the same one.)
+    const free = () => this.toolInst.filter((ti) => ti.tool.id === tool.id && !ti.placedAt && (!ti.carriedBy || ti.carriedBy === b.id) && (!ti.claimedBy || ti.claimedBy === b.id));
+    if (!free().length) { this.error(`"${label}": every ${tool.name} is already in use or with someone else. Remove one first or add more in Tools.`); return; }
+    const inst = free().find((ti) => ti.carriedBy === b.id) || free().find((ti) => this.standFor(b, [ti.pos])?.reach <= this.T.maxReach);
+    if (!inst) { this.error(`${b.name} can't reach a ${tool.name} from their side of the river.`); return; }
+    inst.claimedBy = b.id;
+    if (inst.carriedBy !== b.id) {
+      if (!(yield* this.reach(ctx, inst.pos, 'walk', tool.name))) return;
+      yield* this.work(ctx, 'pickup', this.T.pickupTime, { label: 'Pick up ' + tool.name });
+      inst.carriedBy = b.id;
+    }
+    if (!(yield* this.reach(ctx, where, 'work', 'the spot under ' + m.name))) return;
+    yield* this.work(ctx, 'support', tool.placeTime || 0, { label });
+    inst.placedAt = node;
+    inst.carriedBy = null;
+    inst.claimedBy = null;
+    this.supported.set(node, (this.supported.get(node) || 0) + 1);
+    this.supportEvents.push({ t: this.now, key: inst.key, nodeId: node, action: 'place', name: tool.name });
+    this.refreshTool(b);
+    this.dirty = true;
+  }
+
+  finish() {
+    // Anyone still supporting a piece when the plan runs out.
+    for (const h of [...this.supports]) {
+      if (!this.aborted) { this.stepIndex = h.ctx.idx; this.error(`${h.u.name} never stands on its own: ${h.b.name} is still supporting it at the end. Add bolts, a support tool, or another piece that braces it. (If they're the one with the next bolts to fasten, mark those steps "at the same time" so they can do both.)`); }
+      h.rec.open = true;
+      this.endHold(h, true);
+    }
+    for (const b of this.builders) { b.freeAt = this.now; b.holding = null; }
+    this.stepIndex = null;
+    if (!this.aborted) {
+      const left = this.model.bolts.filter((b) => b.jointId && !this.nutted.has(b.id));
+      if (left.length) this.warn(`${left.length} bolt${left.length === 1 ? ' is' : 's are'} never fastened in this plan.`);
+      for (const u of this.units.values()) if (u.installed && !u.stable && !u.fell) this.error(`${u.name} doesn't stand on its own when the plan ends.`);
+    }
+    // (The checks shared with the automatic planner: everyone back in a yard, time limits...)
+    this.boltsDone = new Set(this.model.bolts.map((b) => b.id));
+    super.finish();
+  }
+
+  result() {
+    const r = super.result();
+    r.taskTimes = this.taskTimes || {};
+    r.stepTimes = this.plan.tasks.map((t) => this.taskTimes?.[t.id] || null);
+    r.holds = r.holds.filter((h) => h.duration > 1e-6);
+    return r;
+  }
+}
+
+// Turn the automatic planner's decisions into a step-by-step plan: who runs, receives, supports and
+// bolts each piece. `steps` is the order to follow (by default footings first, west to east).
+export function planTasks(project, plan, steps = null) {
+  const scratch = { ...plan, tasks: [], steps: steps || autoOrderSteps(buildModel(project), plan) };
+  const sim = new Sim(project, scratch);
+  try { sim.run(); } catch (e) { console.error(e); sim.aborted = true; }
+  return sim.taskLog.map((t) => { const out = {}; for (const k of Object.keys(t)) if (t[k] !== undefined && t[k] !== null) out[k] = t[k]; return out; });
 }
 
 export function fmt(t) {

@@ -13,6 +13,7 @@ export function removeMemberRefs(project, memberIds) {
   for (const plan of project.plans) {
     for (const a of plan.assemblies) a.memberIds = a.memberIds.filter((m) => !ids.has(m));
     plan.steps = plan.steps.filter((s) => !(s.kind === 'install' && s.unit.type === 'member' && ids.has(s.unit.id)) && !(s.kind === 'support' && ids.has(s.memberId)));
+    if (plan.tasks) plan.tasks = plan.tasks.filter((t) => !(t.unit && t.unit.type === 'member' && ids.has(t.unit.id)) && !ids.has(t.member));
   }
   for (const id of ids) delete project.site.staging[id];
 }

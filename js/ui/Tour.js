@@ -3,7 +3,7 @@
 // replays it.
 import { html, useEffect, useLayoutEffect, useState } from '../lib/preact.js';
 
-const DONE_KEY = 'bss.tourDone.v4'; // bump when the tour changes enough that everyone should see it again
+const DONE_KEY = 'bss.tourDone.v5'; // bump when the tour changes enough that everyone should see it again
 
 export const TOUR = [
   {
@@ -49,12 +49,12 @@ export const TOUR = [
   {
     tab: 'tools', target: 'tools',
     title: '3 · Tools',
-    body: 'Add fastening tools (with time per bolt) and temporary supports like jack stands (with time to place and remove), and how many of each you have.',
+    body: 'Add fastening tools (with the time to fasten a nut), temporary supports like jack stands, and how many of each you have. A tool can list the pieces it\'s assembled from.',
   },
   {
     tab: 'crew', target: 'crew',
     title: '4 · Crew',
-    body: 'One card per builder (up to 6): a role (or "any task") and which tools and nuts & bolts they grab when the clock starts. Builders can\'t cross the river, so the side they start on is the side they work from; pieces are handed across.',
+    body: 'One card per builder (up to 6): which side of the river they work from, and which tools and nuts & bolts they grab when the clock starts. What they do is set step by step in tab 5.',
   },
   {
     tab: 'crew', target: 'timing',
@@ -64,12 +64,22 @@ export const TOUR = [
   {
     tab: 'sequence', target: 'steps',
     title: '5 · Build sequence',
-    body: 'The build order. Drag steps to reorder them, or name who carries and who fastens each piece. Click a step to see the bridge at that point in the 3D view.',
+    body: 'The plan, one step at a time: each step is a task for one builder. They do their steps in this order, starting each as soon as they can. Drag to reorder, click one to edit it and see the bridge at that moment. Auto-build plan fills in a working plan to edit from.',
+  },
+  {
+    tab: 'sequence', target: 'add-step',
+    title: 'Adding steps',
+    body: 'Run a piece to the river, receive it and run it to its place, support the bridge, place a bolt, fasten a nut, assemble or pass a tool, or write in anything else. Tick "at the same time" to multitask, like fastening a nut while supporting the bridge.',
+  },
+  {
+    tab: 'sequence', target: 'seq-gantt',
+    title: 'Adjust it on the timeline',
+    body: 'Drag the right end of a support bar to change how long someone holds on. Click the bar to hand the support over to another builder after their other task is done.',
   },
   {
     tab: 'sequence', target: 'assemblies',
     title: 'Assemblies and supports',
-    body: 'To make an assembly, click 2–3 pieces in the 3D view and press "Make assembly". It\'s bolted together right where its members are staged and carried in as one piece; each assembly gets its own color. You can also add steps that place or remove temporary supports, or that send someone back to fasten bolts that were only inserted.',
+    body: 'To make an assembly, click 2–3 pieces in the 3D view and press "Make assembly". It\'s bolted together in the staging yard with bolt and nut steps, then run in as one piece; each assembly gets its own color.',
   },
   {
     tab: 'sequence', target: 'total',
@@ -94,7 +104,7 @@ export const TOUR = [
   {
     tab: 'simulate', target: 'gantt',
     title: 'Who is doing what',
-    body: 'One row per builder over time. Orange is holding a piece, yellow is aligning and fastening. Click anywhere to jump there. Below it, the holding-time table shows how long each piece had to be held, and why.',
+    body: 'One row per builder over time. Orange is holding a piece, yellow is aligning and fastening; things done at the same time sit in the lower half of the lane. Click anywhere to jump there. Below it, the holding-time table shows how long each piece had to be held, and why.',
   },
   {
     target: 'file',

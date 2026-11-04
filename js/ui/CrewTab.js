@@ -1,8 +1,9 @@
-// Crew tab: builders (role, allowed zones, what they grab at the start) and timing assumptions.
+// Crew tab: builders (side of the river, allowed zones, what they grab at the start) and timing assumptions.
 import { html } from '../lib/preact.js';
 import { updateProject } from '../model/store.js';
 import { uid } from '../model/ids.js';
-import { DEFAULT_COLORS, DEFAULT_TIMING, ROLES, ZONE_TYPES } from '../model/schema.js';
+import { DEFAULT_COLORS, DEFAULT_TIMING, ZONE_TYPES } from '../model/schema.js';
+import { sideOf } from '../model/plan.js';
 import { Check, Hint, NumField, Section, SelectField, TextField } from './common.js';
 
 const TIMING_FIELDS = [
@@ -10,18 +11,24 @@ const TIMING_FIELDS = [
   ['carrySpeed', 'Carrying speed', 'in/s', 'While carrying a member or assembly'],
   ['pickupTime', 'Pick up, set down or hand off a piece', 's', ''],
   ['alignTime', 'Align one bolted connection', 's', 'Line up holes before the bolt goes in'],
-  ['boltTimeHand', 'One bolt by hand', 's', 'Used when the fastener has no fastening tool'],
-  ['insertTime', 'Insert a bolt without its nut', 's', 'For connections marked to hold on an inserted bolt. The nut takes the normal time per bolt later.'],
+  ['boltTimeHand', 'Fasten a nut by hand', 's', 'Used when the builder has no fastening tool'],
+  ['insertTime', 'Place a bolt', 's', 'Push a bolt through a member. Fastening its nut is a separate step.'],
   ['assemblyAlignTime', 'Align a connection in the staging yard', 's', 'When making assemblies. 0 = same as above'],
-  ['assemblyBoltTime', 'One bolt in the staging yard', 's', "When making assemblies. 0 = the fastening tool's time"],
+  ['assemblyBoltTime', 'Fasten a nut in the staging yard', 's', "When making assemblies. 0 = the fastening tool's time"],
   ['stagedAlignTime', 'Align when staged touching', 's', 'Assembly connections whose members are placed touching in the Staging tab'],
-  ['stagedBoltTime', 'One bolt when staged touching', 's', '0 = the staging-yard bolt time'],
-  ['assemblyJoinTime', 'Add a member to an assembly (flat)', 's', 'Replaces the two above with one time per member. 0 = align + bolt times'],
+  ['stagedBoltTime', 'Fasten a nut when staged touching', 's', '0 = the staging-yard bolt time'],
   ['gearUpTime', 'Grab one tool / the nuts & bolts', 's', 'At the start, after the clock begins'],
-  ['soloMultiplier', 'Slowdown when fastening while holding', '×', 'A carrier fastening their own piece one-handed'],
+  ['soloMultiplier', 'Slowdown when multitasking', '×', 'A step done at the same time as another, like fastening a nut while supporting the bridge'],
   ['maxReach', 'Reach', 'in', 'How far a builder can reach from where they stand (e.g. over the river)'],
   ['passReach', 'Hand-off distance', 'in', 'How far apart two builders can stand and still pass a piece, e.g. across the river'],
 ];
+
+// Move a builder's start to the builders area on that side of the river.
+function moveToSide(site, b, side) {
+  const inSide = (z) => sideOf(site, { x: z.x + z.w / 2, y: z.y + z.h / 2 }) === side;
+  const area = site.zones.find((z) => z.type === 'builders' && inSide(z)) || site.zones.find((z) => ZONE_TYPES[z.type]?.stage && !ZONE_TYPES[z.type]?.sub && inSide(z));
+  if (area) b.start = { x: Math.round(area.x + area.w / 2), y: Math.round(area.y + area.h / 2) };
+}
 
 export function CrewTab({ project }) {
   const T = project.timing;
@@ -35,13 +42,11 @@ export function CrewTab({ project }) {
     const area = areas.length ? areas[n % areas.length] : p.site.zones.find((z) => z.type === 'staging');
     const k = areas.length ? Math.floor(n / areas.length) : n;
     const start = area ? { x: Math.round(area.x + area.w / 2), y: Math.round(area.y + 15 + ((k * 22) % Math.max(22, area.h - 25))) } : { x: 20 + n * 25, y: 20 };
-    p.builders.push({ id: uid('w'), name: 'Builder ' + (n + 1), color: DEFAULT_COLORS[n % DEFAULT_COLORS.length], role: 'any', start, allowedZones: null, loadout: [], hardware: true });
+    p.builders.push({ id: uid('w'), name: 'Builder ' + (n + 1), color: DEFAULT_COLORS[n % DEFAULT_COLORS.length], start, allowedZones: null, loadout: [], hardware: true });
   });
   const remove = (id) => updateProject((p) => {
     p.builders = p.builders.filter((b) => b.id !== id);
-    for (const pl of p.plans) for (const s of pl.steps) {
-      for (const k of ['carrier', 'fastener', 'builder']) if (s[k] === id) s[k] = 'auto';
-    }
+    for (const pl of p.plans) if (pl.tasks) pl.tasks = pl.tasks.filter((t) => t.builder !== id && t.to !== id);
   });
 
   return html`<div class="page two-col">
@@ -56,8 +61,9 @@ export function CrewTab({ project }) {
             <${TextField} label="Name" value=${b.name} onChange=${(v) => setB(b.id, (x) => { x.name = v; })} />
             <button class="danger small" onClick=${() => remove(b.id)}>Delete</button>
           </div>
-          <${SelectField} label="Role" value=${b.role} options=${Object.entries(ROLES)} onChange=${(v) => setB(b.id, (x) => { x.role = v; })}
-            title="Automatic assignment only gives builders tasks that fit their role. Steps can still name a builder directly." />
+          ${sideOf(project.site, b.start) && html`<${SelectField} label="Side of the river" value=${sideOf(project.site, b.start)} options=${[['west', 'West'], ['east', 'East']]}
+            title="Builders can't cross the river, so this is the side they work from. Changing it moves their start to that side's builders area (or drag it in the Site tab)."
+            onChange=${(v) => setB(b.id, (x) => { moveToSide(project.site, x, v); })} />`}
           <div class="field col"><span class="lbl">May be in</span>
             <div class="chips">
               <${Check} label="Anywhere (except no-go)" checked=${!b.allowedZones} onChange=${(v) => setB(b.id, (x) => { x.allowedZones = v ? null : zones.filter((z) => z.type !== 'nogo').map((z) => z.id); })} />
@@ -85,15 +91,7 @@ export function CrewTab({ project }) {
           onChange=${(v) => updateProject((p) => { p.timing[k] = v; }, { key: 't' + k })} />`)}
         <button onClick=${() => updateProject((p) => { p.timing = { ...DEFAULT_TIMING }; })}>Reset to defaults</button>
       <//>
-      <${Section} title="Roles">
-        <ul class="plain">
-          <li><b>Any task</b>: adapts to whatever needs doing.</li>
-          <li><b>Carrier / holder</b>: carries pieces to the bridge, hands them across the river, and holds them until they're stable.</li>
-          <li><b>Fastener</b>: aligns connections and fastens bolts on the bridge; can also bolt assemblies together.</li>
-          <li><b>Staging-yard assembler</b>: fetches members, hands them across the river, and bolts assemblies together in the staging yard.</li>
-        </ul>
-        <${Hint}>Everyone can place and remove supports. A step in the Sequence tab can name a specific builder, which overrides roles. Construction cost counts every builder for the whole build, so more builders only pay off if they cut the time enough (6.2.5).<//>
-      <//>
+      <${Hint}>Who does what is set step by step in the Build sequence tab. Construction cost counts every builder for the whole build, so more builders only pay off if they cut the time enough (6.2.5).<//>
     </div>
   </div>`;
 }
