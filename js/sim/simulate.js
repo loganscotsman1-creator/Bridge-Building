@@ -39,7 +39,8 @@ export const SEGMENT_KINDS = {
 };
 
 export function simulate(project, plan = activePlan(project)) {
-  const sim = plan.tasks && plan.tasks.length ? new TaskSim(project, plan) : new Sim(project, plan);
+  // (Only a plan saved before step-by-step planning, not yet converted, has steps and no tasks.)
+  const sim = plan.tasks && (plan.tasks.length || !plan.steps?.length) ? new TaskSim(project, plan) : new Sim(project, plan);
   try {
     sim.run();
   } catch (e) {
@@ -209,11 +210,11 @@ class Sim {
   warn(msg, stepIndex = this.stepIndex) {
     if (this.warned.has(msg)) return;
     this.warned.add(msg);
-    this.warnings.push({ msg, step: stepIndex });
+    this.warnings.push({ msg, step: stepIndex, t: this.now });
   }
 
   error(msg, stepIndex = this.stepIndex) {
-    this.errors.push({ msg, step: stepIndex });
+    this.errors.push({ msg, step: stepIndex, t: this.now });
   }
 
   seg(b, kind, t0, t1, extra = {}) {
@@ -1082,6 +1083,9 @@ export class TaskSim extends Sim {
     this.aligned = new Set();
     this.doneTasks = new Set();
     this.taskTimes = {};
+    this.taskStarts = {};
+    this.stuckTasks = {}; // task id -> what it's waiting for that never happens
+    this.falls = []; // pieces nobody is holding up: {unitKey, name, t, step}
     this.supports = []; // builders holding a piece up right now
     this.dirty = true;
     this.runners = [];
@@ -1135,6 +1139,7 @@ export class TaskSim extends Sim {
         if (stuck.length) {
           for (const r of stuck) {
             this.stepIndex = r.ctx.idx;
+            if (r.ctx.task) this.stuckTasks[r.ctx.task.id] = r.wait?.why || 'something';
             this.error(`${r.b.name} is stuck waiting for ${r.wait?.why || 'something'}. Nothing else in the plan makes that happen.`);
           }
           this.aborted = true;
@@ -1174,10 +1179,11 @@ export class TaskSim extends Sim {
   * doTask(ctx) {
     const { task } = ctx;
     const start = this.now;
+    this.taskStarts[task.id] = start;
     if (task.after && this.taskIds.has(task.after)) {
       yield* this.waitFor(ctx, () => this.doneTasks.has(task.after), 'step ' + (this.taskIndex.get(task.after) + 1));
     }
-    const handler = { run: this.doRun, receive: this.doReceive, support: this.doHold, bolt: this.doBolt, nut: this.doNut, tool: this.doTool, pass: this.doPass, other: this.doOther, stand: this.doStand }[task.kind];
+    const handler = { run: this.doRun, receive: this.doReceive, support: this.doHold, bolt: this.doBolt, nut: this.doNut, tool: this.doTool, pass: this.doPass, other: this.doOther, stand: this.doStand, assembly: this.doAssembly }[task.kind];
     if (handler) yield* handler.call(this, ctx);
     else this.warn(`Unknown kind of step "${task.kind}"; skipped.`);
     this.doneTasks.add(task.id);
@@ -1250,7 +1256,9 @@ export class TaskSim extends Sim {
   // An assembly is ready to carry once every bolt inside it has its nut on.
   assemblyDone(u) {
     if (u.type !== 'assembly') return true;
-    return (u.internal || []).every((j) => (j.boltIds || []).every((id) => this.nutted.has(id)));
+    // (A bolt that also goes through a piece outside the assembly can only be finished at the bridge.)
+    const inside = (id) => this.boltById.get(id)?.memberIds.every((m) => u.memberIds.includes(m));
+    return (u.internal || []).every((j) => (j.boltIds || []).every((id) => !inside(id) || this.nutted.has(id)));
   }
 
   * pickUp(ctx, u) {
@@ -1427,6 +1435,7 @@ export class TaskSim extends Sim {
         if (!u.fell) {
           u.fell = true;
           this.status(u, t, 'unstable');
+          this.falls.push({ unitKey: u.key, name: u.name, t });
           this.error(`${u.name} isn't supported at ${fmt(t)} and would fall. Have someone support it, or bolt it to something that stands.`);
         }
       } else if (u.fell) { u.fell = false; if (!now) this.status(u, t, 'held'); }
@@ -1515,6 +1524,22 @@ export class TaskSim extends Sim {
         this.track(home.memberIds, this.now, { kind: 'ground', x: s.x, y: s.y, assembled: true });
       }
     }
+  }
+
+  // Make an assembly in the yard: every bolt and nut inside it that no other step takes care of.
+  * doAssembly(ctx) {
+    const { task } = ctx;
+    const u = this.units.get('a:' + task.assemblyId);
+    if (!u) { this.warn('This step makes an assembly that no longer exists; skipped.'); return; }
+    ctx.group.started = true;
+    const others = (kind) => new Set(this.plan.tasks.filter((t) => t.kind === kind).flatMap((t) => t.boltIds || []));
+    const placedElsewhere = others('bolt'), nuttedElsewhere = others('nut');
+    const ids = [...new Set((u.internal || []).flatMap((j) => j.boltIds || []))].filter((id) => this.boltById.get(id)?.memberIds.every((m) => u.memberIds.includes(m)));
+    if (!ids.length) this.warn(`${u.name} has no bolts between its pieces yet (tab 1).`);
+    const part = (kind, boltIds) => ({ ...ctx, task: { ...task, kind, where: 'staging', member: u.memberIds[0], boltIds } });
+    const bolts = ids.filter((id) => !placedElsewhere.has(id)), nuts = ids.filter((id) => !nuttedElsewhere.has(id));
+    if (bolts.length) yield* this.doBolt(part('bolt', bolts));
+    if (nuts.length) yield* this.doNut(part('nut', nuts));
   }
 
   // A fastening tool only counts once it's put together.
@@ -1620,6 +1645,7 @@ export class TaskSim extends Sim {
       if (!this.aborted) { this.stepIndex = h.ctx.idx; this.error(`${h.u.name} never stands on its own: ${h.b.name} is still supporting it at the end. Add bolts, a support tool, or another piece that braces it. (If they're the one with the next bolts to fasten, mark those steps "at the same time" so they can do both.)`); }
       h.rec.open = true;
       this.endHold(h, true);
+      this.taskTimes[h.task.id] = { start: h.start, end: this.now };
     }
     for (const b of this.builders) { b.freeAt = this.now; b.holding = null; }
     this.stepIndex = null;
@@ -1636,6 +1662,9 @@ export class TaskSim extends Sim {
   result() {
     const r = super.result();
     r.taskTimes = this.taskTimes || {};
+    r.taskStarts = this.taskStarts || {};
+    r.stuckTasks = this.stuckTasks || {};
+    r.falls = this.falls || [];
     r.stepTimes = this.plan.tasks.map((t) => this.taskTimes?.[t.id] || null);
     r.holds = r.holds.filter((h) => h.duration > 1e-6);
     return r;

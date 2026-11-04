@@ -10,6 +10,7 @@ import { autoBolts, clampBox, newBox, removeMember } from '../js/model/edit.js';
 import { snapBox, snapPoint, snapSize } from '../js/ui/snap.js';
 import { assemblyConnections, defaultView, layOutAssembly, membersArea, stagedPoly, stagingSpots, viewSizes } from '../js/model/plan.js';
 import { stateAt } from '../js/sim/playback.js';
+import { applyAssembly, connectionChoices, dissolveAssembly, dropSlot, insertAtSlot, onStagingSide, pieceChoices, planChecks, removeTask, taskBlocks, taskGroup } from '../js/model/timeline.js';
 
 const results = [];
 async function test(name, fn) {
@@ -710,6 +711,142 @@ await test('a staged view decides whether assembly pieces touch', () => {
   p.site.staging[id] = { ...p.site.staging[id], view: 'front', rot: 0 };
   const after = assemblyConnections(p, buildModel(p), plan)[0];
   assert(after.joints.some((j) => !j.touching), 'no longer touching');
+});
+
+await test('a plan with no steps is empty, not rebuilt from old steps', () => {
+  const p = taskProject();
+  const pl = p.plans[0];
+  pl.tasks = [];
+  pl.assemblies = [];
+  const r = simulate(p);
+  assert(!r.segments.some((s) => s.kind === 'carry'), 'nothing is carried');
+  const c = planChecks(p, buildModel(p), pl, r);
+  assert(c.pieces.done === 0 && c.pieces.total === buildModel(p).members.length, JSON.stringify(c.pieces));
+  assert(c.bolts.done === 0 && c.nuts.done === 0 && c.bolts.total === c.nuts.total && c.bolts.total > 0);
+  assert(c.todo.some((x) => x.kind === 'receive') && c.todo.some((x) => x.kind === 'bolt') && c.todo.some((x) => x.kind === 'nut'));
+});
+
+await test('the timeline: a drop lands before the bar it is over, after the last, or alongside one', () => {
+  const t = (id, along) => ({ id, kind: 'other', builder: 'b', duration: 10, ...(along ? { along: true } : {}) });
+  const plan = { tasks: [t('a'), t('b'), t('c')], assemblies: [] };
+  const sim = { taskTimes: { a: { start: 0, end: 10 }, b: { start: 10, end: 20 }, c: { start: 20, end: 30 } }, segments: [] };
+  const blocks = taskBlocks(plan, sim);
+  assert(dropSlot(blocks, 'b', 2).before === 'a');
+  assert(dropSlot(blocks, 'b', 16).before === 'c');
+  const end = dropSlot(blocks, 'b', 99);
+  assert(end.before === null && !end.along);
+  const on = dropSlot(blocks, 'b', 12, true);
+  assert(on.along && on.with === 'b', JSON.stringify(on));
+  // Off the end of the row, the lower half is just the next step.
+  assert(!dropSlot(blocks, 'b', 99, true).along);
+  const tasks = plan.tasks.map((x) => ({ ...x }));
+  insertAtSlot(tasks, [t('n')], on);
+  assert(tasks.map((x) => x.id).join() === 'a,b,n,c', tasks.map((x) => x.id).join());
+  assert(tasks[2].along);
+  // Moving a bar brings what's done at the same time with it.
+  insertAtSlot(tasks, taskGroup(tasks, 'b'), { builder: 'other', time: 0, before: null });
+  assert(tasks.map((x) => x.id).join() === 'b,n,a,c', tasks.map((x) => x.id).join());
+  assert(tasks.find((x) => x.id === 'n').builder === 'other' && tasks.find((x) => x.id === 'n').along);
+});
+
+await test('making an assembly on the timeline bolts it together before it can be carried', () => {
+  const p = taskProject();
+  const pl = p.plans[0];
+  const model = buildModel(p);
+  const a = pl.assemblies[0];
+  const inner = model.contacts.filter((c) => c.bolts > 0 && a.memberIds.includes(c.a) && a.memberIds.includes(c.b));
+  const innerBolts = new Set(inner.flatMap((c) => c.boltIds));
+  const byHand = pl.tasks.filter((t) => (t.kind === 'bolt' || t.kind === 'nut') && t.where === 'staging' && t.boltIds.some((id) => innerBolts.has(id)));
+  const maker = byHand[0].builder;
+  const first = pl.tasks.indexOf(byHand[0]);
+  pl.tasks = pl.tasks.filter((t) => !byHand.includes(t));
+  pl.tasks.splice(first, 0, { id: 'mk', kind: 'assembly', builder: maker, assemblyId: a.id });
+  const r = simulate(p);
+  assert(!r.aborted && !r.errors.length, r.errors.map((e) => e.msg).slice(0, 2).join(' | '));
+  assert(r.taskTimes.mk.end > r.taskTimes.mk.start, 'it takes time');
+  const run = pl.tasks.find((t) => t.unit?.type === 'assembly' && t.unit.id === a.id);
+  assert(r.taskTimes[run.id].end >= r.taskTimes.mk.end, 'carried only once it is made');
+  assert(r.segments.some((s) => s.taskId === 'mk' && s.kind === 'assemble'));
+  const c = planChecks(p, model, pl, r);
+  assert(c.bolts.done === c.bolts.total && c.nuts.done === c.nuts.total, 'its bolts count as planned');
+
+  // Without the step, nothing makes it: the carrying step is reported as stuck.
+  pl.tasks = pl.tasks.filter((t) => t.id !== 'mk');
+  const stuck = simulate(p);
+  assert(stuck.aborted && stuck.stuckTasks[run.id], JSON.stringify(stuck.stuckTasks));
+  assert(taskBlocks(pl, stuck, p).get(run.builder).some((b) => b.ghost && b.task.id === run.id), 'drawn as a ghost');
+  assert(planChecks(p, model, pl, stuck).todo.some((x) => x.kind === 'assembly' && x.preset.assemblyId === a.id), 'listed as still to do');
+});
+
+await test('an assembly made from pieces already on the timeline takes over their steps', () => {
+  const p = taskProject();
+  const pl = p.plans[0];
+  pl.assemblies = [];
+  const model = buildModel(p);
+  const c = model.contacts.find((x) => x.bolts > 0);
+  const [x, y] = [c.a, c.b];
+  pl.tasks = [
+    { id: 'r1', kind: 'run', builder: p.builders[2].id, unit: { type: 'member', id: x } },
+    { id: 'r2', kind: 'run', builder: p.builders[3].id, unit: { type: 'member', id: y } },
+    { id: 'n1', kind: 'nut', builder: p.builders[3].id, jointId: c.id, boltIds: [...c.boltIds], where: 'bridge', member: x },
+  ];
+  const made = applyAssembly(pl, model, [x, y], { name: 'Pair' });
+  assert(pl.assemblies.length === 1 && made.name === 'Pair');
+  assert(pl.tasks.filter((t) => t.kind === 'run').length === 1, 'one run for the pair');
+  assert(pl.tasks.find((t) => t.id === 'r1').unit.id === made.id);
+  assert(pl.tasks.find((t) => t.id === 'n1').where === 'staging', 'its bolts are done in the yard');
+  pl.tasks.push({ id: 'mk', kind: 'assembly', builder: p.builders[2].id, assemblyId: made.id });
+  removeTask(pl, model, 'mk');
+  assert(!pl.assemblies.length && !pl.tasks.some((t) => t.unit?.type === 'assembly'), 'taking the step off undoes the assembly');
+  assert(pl.tasks.find((t) => t.id === 'n1').where === 'bridge');
+});
+
+await test('pop-ups offer what a builder can get at by then', () => {
+  const p = taskProject();
+  const pl = p.plans[0];
+  pl.assemblies = [];
+  const model = buildModel(p);
+  const near = p.builders.find((b) => onStagingSide(p.site, b));
+  const far = p.builders.find((b) => !onStagingSide(p.site, b));
+  assert(near && far, 'both sides of the river');
+  const [m1, m2] = [model.contacts.find((c) => c.bolts > 0).a, model.contacts.find((c) => c.bolts > 0).b];
+  pl.tasks = [];
+  let r = simulate(p);
+  assert(pieceChoices(p, model, pl, r, 'run', near.id, 0).get(m1).status === 'ready');
+  assert(pieceChoices(p, model, pl, r, 'receive', near.id, 0).get(m1).status === 'ready', 'nearby: from the yard');
+  assert(pieceChoices(p, model, pl, r, 'receive', far.id, 0).get(m1).status === 'later', 'across the river: nobody brings it');
+  assert(pieceChoices(p, model, pl, r, 'support', far.id, 0).get(m1).status === 'no', 'not on the bridge');
+  pl.tasks = [
+    { id: 'a', kind: 'run', builder: near.id, unit: { type: 'member', id: m1 } },
+    { id: 'b', kind: 'receive', builder: far.id, unit: { type: 'member', id: m1 } },
+  ];
+  r = simulate(p);
+  assert(pieceChoices(p, model, pl, r, 'receive', far.id, 0).get(m1).status === 'no', 'already placed');
+  assert(pieceChoices(p, model, pl, r, 'run', near.id, 0).get(m1).status === 'no', 'already run');
+  assert(pieceChoices(p, model, pl, r, 'support', far.id, 9999).get(m1).status === 'ready', 'on the bridge by then');
+  const row = (kind, t) => connectionChoices(model, pl, r, kind, t).find((x) => (x.joint.a === m1 && x.joint.b === m2));
+  assert(row('bolt', 9999).status === 'ready', 'a bolt can go in once one piece is there');
+  assert(row('nut', 9999).status === 'later', 'a nut needs its bolt first');
+  pl.tasks.push({ id: 'c', kind: 'bolt', builder: far.id, member: m1, jointId: row('bolt', 0).joint.id, boltIds: [...row('bolt', 0).joint.boltIds], where: 'bridge' });
+  r = simulate(p);
+  assert(row('bolt', 9999).status === 'no', 'every bolt has a step');
+  assert(row('nut', 9999).left.length === row('nut', 9999).joint.bolts);
+  assert(planChecks(p, model, pl, r).marks.get('c')?.some((x) => x.icon === '🔧'), 'the bolt is marked until its nut has a step');
+});
+
+await test('a piece nobody supports is reported where it falls', () => {
+  const p = taskProject();
+  const pl = p.plans[0];
+  pl.assemblies = [];
+  const model = buildModel(p);
+  const m = model.members.find((x) => !x.bearing && model.contacts.some((c) => c.a === x.id || c.b === x.id));
+  const near = p.builders.find((b) => onStagingSide(p.site, b));
+  pl.tasks = [{ id: 'a', kind: 'receive', builder: near.id, unit: { type: 'member', id: m.id } }];
+  const r = simulate(p);
+  if (!r.falls.length) return; // (if this piece happened to rest on a footing)
+  const c = planChecks(p, model, pl, r);
+  assert(c.falls === 1 && c.todo[0].kind === 'support' && c.todo[0].preset.member === m.id, JSON.stringify(c.todo[0]));
+  assert(c.marks.get('a').some((x) => x.bad), 'marked on the bar');
 });
 
 await test('old (version 1) project files still open', () => {

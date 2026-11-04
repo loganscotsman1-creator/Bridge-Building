@@ -3,7 +3,7 @@
 // replays it.
 import { html, useEffect, useLayoutEffect, useState } from '../lib/preact.js';
 
-const DONE_KEY = 'bss.tourDone.v6'; // bump when the tour changes enough that everyone should see it again
+const DONE_KEY = 'bss.tourDone.v7'; // bump when the tour changes enough that everyone should see it again
 
 export const TOUR = [
   {
@@ -62,29 +62,39 @@ export const TOUR = [
     body: 'How fast people walk and carry, how long aligning a connection and fastening a bolt take, how far someone can reach and how far apart two builders can hand off a piece. Time your practice builds and put the real numbers here.',
   },
   {
-    tab: 'sequence', target: 'steps',
+    tab: 'sequence', target: 'seq-timeline',
     title: '5 · Build sequence',
-    body: 'The plan, one step at a time: each step is a task for one builder. They do their steps in this order, starting each as soon as they can. Drag to reorder, click one to edit it and see the bridge at that moment. Auto-build plan fills in a working plan to edit from.',
+    body: 'The plan is built on this timeline, with one row per builder. They do their steps left to right, starting each as soon as they can. Auto-build plan fills in a working plan to edit from, and New starts an empty one.',
   },
   {
-    tab: 'sequence', target: 'add-step',
-    title: 'Adding steps',
-    body: 'Run a piece to the river, receive it and run it to its place, support the bridge, place a bolt, fasten a nut, assemble or pass a tool, or write in anything else. Tick "at the same time" to multitask, like fastening a nut while supporting the bridge.',
+    tab: 'sequence', target: 'seq-palette',
+    title: 'Drag tasks onto a builder',
+    body: 'Drag a task onto a builder\'s row. A pop-up asks which piece: the staging yard for a builder on its side of the river, or what\'s ready for them on the bridge. Bolts and nuts ask which two pieces they go between. Drop on the lower half of a bar to do both at once.',
   },
   {
-    tab: 'sequence', target: 'seq-gantt',
+    tab: 'sequence', target: 'seq-checks',
+    title: 'Nothing gets missed',
+    body: 'These tallies, the marks on the bars and the flags along the top of the timeline update as you go: pieces not placed, bolts and nuts with no step, and pieces nobody is holding up. A striped bar is one that can\'t start, and hovering over any bar says why.',
+  },
+  {
+    tab: 'sequence', target: 'seq-todo',
+    title: 'Still to do',
+    body: 'Everything the plan is still missing. Drag a line onto a builder\'s row to add that step as it is, with no pop-up.',
+  },
+  {
+    tab: 'sequence', target: 'seq-timeline',
     title: 'Adjust it on the timeline',
-    body: 'Drag the right end of a support bar to change how long someone holds on. Click the bar to hand the support over to another builder after their other task is done.',
+    body: 'Drag a bar to another builder or an earlier or later spot. Drag the right end of a support bar to change how long someone holds on. To swap who\'s supporting, drop a second Support on another builder: the first lets go once they\'ve taken over.',
   },
   {
-    tab: 'sequence', target: 'assemblies',
-    title: 'Assemblies and supports',
-    body: 'To make an assembly, click 2–3 pieces in the 3D view and press "Make assembly". It\'s bolted together in the staging yard with bolt and nut steps, then run in as one piece; each assembly gets its own color.',
+    tab: 'sequence', target: 'seq-palette',
+    title: 'Making assemblies',
+    body: 'Drag Make an assembly onto a builder and click the pieces in the staging yard that go together. That builder bolts them up, then they\'re run in as one piece; each assembly gets its own color.',
   },
   {
     tab: 'sequence', target: 'total',
     title: 'Instant feedback',
-    body: 'Build time and construction cost update after every change, and rule problems (such as a piece that doesn\'t start on a footing, or everyone stuck holding) are listed under the 3D view. Duplicate a plan to compare variations.',
+    body: 'Build time and construction cost update after every change, and rule problems are listed under the timeline. Duplicate a plan to compare variations.',
   },
   {
     tab: 'staging', target: 'staging-list',

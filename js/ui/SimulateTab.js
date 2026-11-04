@@ -135,7 +135,7 @@ export function SimulateTab({ project, model, sim }) {
           })}</tbody></table>
       <//>
       <${Section} title=${`Problems (${sim.errors.length + sim.warnings.length})`}>
-        <${Problems} sim=${sim} />
+        <${Problems} sim=${sim} nameOf=${(i) => { const x = plan.tasks?.[i]; return x ? project.builders.find((b) => b.id === x.builder)?.name : null; }} />
       <//>
     </div>
   </div>`;

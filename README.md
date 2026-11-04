@@ -133,50 +133,64 @@ fetch a tool, so give each side its own.
   need). The Simulate tab counts them down and warns if someone runs out.
 
 ### 5 · Build sequence
-The plan is built **step by step**. Each step is one task for one builder:
+The plan is built **on a timeline**, with one row per builder. Drag a task from the list onto a
+builder's row:
 
-- **Run a piece or assembly to the river** to hand off.
-- **Receive a piece or assembly and run it to its place.** With nobody running it to the river,
-  the builder picks it up from where it's staged.
-- **Support the bridge in place**: until it stands without them, or for a set time.
-- **Place a bolt in a member**: at the bridge, in the staging yard (making an assembly), or while
-  that member is being run to its place.
-- **Place and fasten a nut on a bolt**: at the bridge or in the staging yard. Choose a connection
-  and all its bolts, or one bolt.
+- **Run a piece to the river** to hand off.
+- **Receive a piece, run it to its place.** With nobody running it to the river, the builder picks it
+  up from where it's staged.
+- **Support the bridge**: until it stands without them, or for a set time.
+- **Place a bolt**: at the bridge, in the staging yard, or while that member is being run to its
+  place.
+- **Fasten a nut**: at the bridge or in the staging yard.
+- **Make an assembly** from pieces in the staging yard.
 - **Assemble a tool** from the pieces listed in the Tools tab.
-- **Pass a tool to another builder.**
-- **Other task**: write in what it is and how long it takes.
+- **Pass a tool** to another builder.
 - **Place or remove a support tool** (a jack stand) under a member.
+- **Other task**: write in what it is and how long it takes.
 
-Each builder does their steps in list order, starting each one as soon as they're free and what it
-needs is ready: a receiver waits at the river for the runner, a nut waits for its bolt, a support
-waits for its piece to be placed. So steps by different builders overlap on their own. Drag steps
-(or use ↑ ↓) to reorder them. If a plan can never finish, it tells you who is stuck and on what.
+**Which piece:** when a task lands, a pop-up asks what it's about. A builder on the staging yard's
+side of the river sees the yard as you laid it out in tab 6, and a builder across the river sees the
+bridge, with what they can get at by that point in the plan listed first. Either view is one click
+away, and what isn't ready yet is still there further down the list. A bolt or nut asks which two
+pieces it goes between: click one and the pieces it bolts to turn green, then click the second.
 
-**Multitasking:** tick *At the same time as their previous step* on any step. It starts when the
-builder's previous step starts and shares their time, for example fastening a nut while supporting
-the bridge, or placing a bolt in a member while running it to its place. It takes longer by the
-slowdown in Crew → Timing, the builder doesn't walk for it, and their next normal step waits for
-both.
+**Making an assembly:** drag *Make an assembly* onto a builder and click the pieces that go together
+in the yard. That builder does every bolt and nut inside it, then it's carried as one piece and gets
+its own color. To split the work, give someone else a bolt or nut step inside the assembly, and the
+assembly step leaves those to them. **Edit** on an assembly card changes its pieces, and taking the
+step off the timeline turns them back into loose pieces.
 
-**The timeline** under the list is adjustable. Drag the right end of a support bar (or an "other
-task" bar) to change how long it lasts. Click a support bar and use **Hand over to someone else** to
-have another builder take over once they've finished another step; the first builder lets go at
-that moment and moves on. Letting go too soon shows up as a piece that would fall. The timeline in
-the Simulate tab can be adjusted the same way.
+**When things happen:** each builder does their row left to right, starting each step as soon as
+they're free and what it needs is ready. A receiver waits at the river for the runner, a nut waits
+for its bolt, and a support waits for its piece to be placed. So a bar snaps to the earliest time it
+can start, not the exact spot it was dropped. Drag a bar to another builder or to a different place
+in the order.
+
+**Multitasking:** drop a task on the lower half of a bar to do it at the same time, for example
+fastening a nut while supporting the bridge, or placing a bolt in a member while running it to its
+place. It takes longer by the slowdown in Crew → Timing, the builder doesn't walk for it, and their
+next normal step waits for both.
+
+**Supporting:** drag the right end of a support bar (or an "other task" bar) to change how long it
+lasts. To swap who's supporting, drop another *Support* on a different builder for the same piece;
+the first builder lets go once they've taken over. Letting go too soon shows up as a piece that
+would fall.
+
+**Live checks:** as the plan comes together, the bar above the timeline counts pieces placed, bolts
+placed, nuts fastened and pieces that would fall. Marks on the bars show what a step is still
+missing (✋ nobody supports this piece, ● bolts with no step, 🔧 nuts with no step), flags along the
+top of the timeline mark problems at the time they happen, and a striped bar is a step that can't
+start. Hover over a bar to see why. **Still to do** lists everything missing, and dragging a line
+from it onto a builder adds that step with no pop-up.
 
 **Auto-build plan** fills in a working plan to edit from: footings first, west to east, trusses
 before laterals, using whoever can get there soonest (builders with a fastening tool fasten, others
-carry). Plans saved before step-by-step planning are converted this way when opened. Which pieces
-are assemblies, the staging layout and the times all carry through. **Duplicate** copies a plan so
-you can try a variation, and **Compare plans** shows every plan's time and construction cost side
-by side.
-
-**Making assemblies:** click 2–3 pieces in the 3D view (they turn yellow), then **Make
-assembly**. Each assembly gets its own color. Its bolts and nuts are steps "in the staging yard",
-and it can't be picked up until every nut is on. **Edit** on an assembly card lets you click pieces
-in or out of it. Every piece in the 3D views is labeled with its name (**Names** hides them); scroll
-to zoom in where they're crowded, and drag to rotate.
+carry). **New** starts an empty plan and **Clear timeline** empties this one. **Duplicate** copies a
+plan so you can try a variation, and **Compare plans** shows every plan's time and construction cost
+side by side. Every piece in the 3D view is labeled with its name (**Names** hides them); scroll to
+zoom in where they're crowded, and drag to rotate. Click the times along the top of the timeline to
+see the bridge at that moment.
 
 The build time and construction cost update on every change. Problems are listed under the 3D
 view; click one to jump to its step.

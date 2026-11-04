@@ -271,6 +271,7 @@ export function taskLabel(task, model, plan, project) {
     case 'tool': return `Assemble ${tool()}`;
     case 'pass': return `Pass ${tool()} to ${project.builders.find((b) => b.id === task.to)?.name || '(missing builder)'}`;
     case 'other': return task.text || 'Other task';
+    case 'assembly': return `Make ${plan.assemblies.find((a) => a.id === task.assemblyId)?.name || '(missing assembly)'}`;
     case 'stand': return `${task.action === 'remove' ? 'Remove' : 'Place'} ${tool()} under ${memberName()}`;
     default: return task.kind;
   }

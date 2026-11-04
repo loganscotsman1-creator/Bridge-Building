@@ -47,7 +47,7 @@ export function App() {
   }, []);
 
   const model = useMemo(() => buildModel(project), [project.design]);
-  // Plans saved before step-by-step planning (and the example) become step lists here.
+  // Plans saved before step-by-step planning (and the example) become timelines here.
   useEffect(() => {
     const old = (pl) => pl.tasks == null || (!pl.tasks.length && pl.steps?.length);
     if (!project.plans.some(old)) return;

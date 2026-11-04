@@ -1,32 +1,21 @@
-// Sequence tab: the plan, built step by step. Each step is one task given to one builder; a step
-// can run at the same time as that builder's previous one (multitasking). Each builder does their
-// steps in list order, starting each as soon as they're free and what it needs is ready. The
-// simulation re-runs on every change.
-import { html, useEffect, useMemo, useState } from '../lib/preact.js';
+// Sequence tab: the plan is built on a timeline. Tasks are dragged from a list onto a builder's row,
+// a pop-up asks which piece or connection each is about, and marks on the timeline show what's still
+// missing. Each builder does their steps in order, starting each as soon as they're free and what
+// it needs is ready. The simulation re-runs on every change.
+import { html, useEffect, useMemo, useRef, useState } from '../lib/preact.js';
 import { updateProject } from '../model/store.js';
 import { uid } from '../model/ids.js';
 import { activePlan, emptyPlan } from '../model/schema.js';
-import { autoOrderSteps, planUnits, sideOf, taskLabel, taskUnitKey, unitKey } from '../model/plan.js';
+import { autoOrderSteps, layOutAssembly, planUnits, sideOf, unitKey } from '../model/plan.js';
+import { ASM_COLORS, TASK_KINDS, applyAssembly, dissolveAssembly, insertAtSlot, planChecks, removeTask, shortLabel, taskBlocks, taskGroup } from '../model/timeline.js';
 import { fmt, fmtCost, planTasks, simulate } from '../sim/simulate.js';
 import { stateAt } from '../sim/playback.js';
 import { IsoView } from './IsoView.js';
-import { Gantt } from './Gantt.js';
-import { Check, Hint, NumField, Section, SelectField, TextField } from './common.js';
+import { Timeline } from './Timeline.js';
+import { AssemblyPopup, ConnectionPopup, PiecePopup, Popup, firstViewFor } from './TaskPopups.js';
+import { Check, Hint, NumField, Section, SelectField, TextField, isTyping } from './common.js';
 
-// One color per assembly, used in the 3D view and the step list.
-export const ASM_COLORS = ['#9333ea', '#0891b2', '#db2777', '#65a30d', '#ea580c', '#4f46e5', '#0d9488', '#b91c1c', '#ca8a04', '#7c3aed'];
-
-export const TASK_KINDS = {
-  run: ['⇢', 'Run a piece to the river'],
-  receive: ['⬆', 'Receive a piece and run it to its place'],
-  support: ['✋', 'Support the bridge in place'],
-  bolt: ['●', 'Place a bolt in a member'],
-  nut: ['🔧', 'Place and fasten a nut on a bolt'],
-  tool: ['⚒', 'Assemble a tool'],
-  pass: ['⇄', 'Pass a tool to another builder'],
-  other: ['✎', 'Other task'],
-  stand: ['▲', 'Place or remove a support tool'],
-};
+export { ASM_COLORS, TASK_KINDS };
 
 const STATUS_COLORS = { held: '#f97316', working: '#eab308', stable: '#475569', unstable: '#dc2626' };
 
@@ -44,24 +33,6 @@ const insideAssembly = (plan, joint) => plan.assemblies.some((a) => a.memberIds.
 function setJoint(task, plan, joint) {
   if (!joint) return { jointId: null, boltIds: [] };
   return { jointId: joint.id, boltIds: [...joint.boltIds], where: task.where === 'hand' ? 'hand' : insideAssembly(plan, joint) ? 'staging' : 'bridge' };
-}
-
-// A new step of this kind for this builder, with sensible first choices.
-function newTask(kind, builder, project, model, plan, was = {}) {
-  const t = { id: uid('k'), kind, builder };
-  const units = planUnits(model, plan).units;
-  const firstMember = model.members[0]?.id;
-  if (kind === 'run' || kind === 'receive') t.unit = was.unit || (units[0] && { type: units[0].type, id: units[0].id });
-  if (kind === 'support') { t.member = was.member || firstMember; t.until = 'auto'; }
-  if (kind === 'bolt' || kind === 'nut') {
-    t.member = was.member || firstMember;
-    Object.assign(t, { where: 'bridge' }, setJoint(t, plan, connectionsOf(model, t.member)[0]));
-  }
-  if (kind === 'tool' || kind === 'pass') t.toolId = project.tools[0]?.id;
-  if (kind === 'pass') t.to = project.builders.find((b) => b.id !== builder)?.id;
-  if (kind === 'other') { t.text = ''; t.duration = 10; }
-  if (kind === 'stand') { t.action = 'place'; t.toolId = project.tools.find((x) => x.kind === 'support')?.id; t.member = was.member || firstMember; }
-  return t;
 }
 
 // The choices for one step. `set(patch)` changes it.
@@ -114,19 +85,25 @@ function TaskFields({ task, set, project, model, plan }) {
         <${SelectField} label="Tool" value=${task.toolId || ''} options=${stands.map((t) => [t.id, t.name])} onChange=${(v) => set({ toolId: v })} />
         ${memberField}`;
     }
+    case 'assembly': {
+      const a = plan.assemblies.find((x) => x.id === task.assemblyId);
+      return a ? html`<${TextField} label="Name" value=${a.name} onChange=${(v) => setActive((pl) => { pl.assemblies.find((x) => x.id === a.id).name = v; }, 'asm' + a.id)} />
+        <${Hint}>${a.memberIds.map((id) => model.memberById.get(id)?.name).filter(Boolean).join(' + ')}. This builder does every bolt and nut inside it that no other step takes.<//>` : null;
+    }
     default: return null;
   }
 }
 
 const setActive = (fn, key) => updateProject((p) => fn(activePlan(p)), { key });
 
-// Edit one step; used next to the list and under the timelines.
-export function TaskEditor({ task, project, model, sim, onClose, onSelect }) {
+const REPICK = { run: 1, receive: 1, support: 1, bolt: 1, nut: 1, assembly: 1, stand: 1 };
+
+// Edit one step; used beside the timeline and under the one in the Simulate tab.
+export function TaskEditor({ task, project, model, sim, onClose, onSelect, onRepick = null }) {
   const plan = activePlan(project);
   const [takeover, setTakeover] = useState('');
   const [afterId, setAfterId] = useState('');
   if (!task) return null;
-  const index = plan.tasks.findIndex((t) => t.id === task.id);
   const set = (patch) => setActive((pl) => { Object.assign(pl.tasks.find((t) => t.id === task.id), patch); }, 'task' + task.id + Object.keys(patch)[0]);
   const others = project.builders.filter((b) => b.id !== task.builder);
   const taker = takeover || others[0]?.id;
@@ -134,9 +111,10 @@ export function TaskEditor({ task, project, model, sim, onClose, onSelect }) {
   // By default, once they finish whatever they're doing when this support begins.
   const begins = sim?.taskTimes?.[task.id]?.start ?? 0;
   const after = theirs.find((t) => t.id === afterId) || theirs.find((t) => (sim?.taskTimes?.[t.id]?.end ?? 0) >= begins) || theirs[theirs.length - 1];
-  return html`<${Section} title=${`Step ${index + 1}`}>
+  return html`<${Section} title=${TASK_KINDS[task.kind]?.[1] || 'Step'}>
+    <div class="small"><b>${shortLabel(task, model, plan, project)}</b></div>
+    ${onRepick && REPICK[task.kind] && html`<button data-repick onClick=${() => onRepick(task)}>${task.kind === 'assembly' ? 'Change its pieces…' : task.kind === 'bolt' || task.kind === 'nut' ? 'Change the two pieces…' : 'Change the piece…'}</button>`}
     <${SelectField} label="Builder" value=${task.builder} options=${project.builders.map((b) => [b.id, builderLabel(project, b)])} onChange=${(v) => set({ builder: v })} />
-    <div class="muted small">${TASK_KINDS[task.kind]?.[1]}</div>
     <${TaskFields} task=${task} set=${set} project=${project} model=${model} plan=${plan} />
     <${Check} label="At the same time as their previous step (multitask)" checked=${!!task.along}
       title="Starts once their previous step has started, and doesn't move them. It takes longer by the multitasking slowdown in Crew → Timing."
@@ -144,7 +122,7 @@ export function TaskEditor({ task, project, model, sim, onClose, onSelect }) {
     ${task.kind === 'support' && others.length > 0 && html`<div class="swap">
       <b>Hand over to someone else</b>
       <${SelectField} label="Builder" value=${taker} options=${others.map((b) => [b.id, builderLabel(project, b)])} onChange=${setTakeover} />
-      ${theirs.length > 0 && html`<${SelectField} label="After their step" value=${after?.id} options=${theirs.map((t) => [t.id, `${plan.tasks.indexOf(t) + 1}. ${taskLabel(t, model, plan, project)}`])} onChange=${setAfterId} />`}
+      ${theirs.length > 0 && html`<${SelectField} label="After their step" value=${after?.id} options=${theirs.map((t) => [t.id, shortLabel(t, model, plan, project)])} onChange=${setAfterId} />`}
       <button class="primary" onClick=${() => {
         const id = uid('k');
         setActive((pl) => {
@@ -159,10 +137,20 @@ export function TaskEditor({ task, project, model, sim, onClose, onSelect }) {
       <${Hint}>Once they've taken over, ${project.builders.find((b) => b.id === task.builder)?.name} lets go and moves on to their next step.<//>
     </div>`}
     <div class="row">
-      <button class="danger" onClick=${() => { setActive((pl) => { pl.tasks = pl.tasks.filter((t) => t.id !== task.id); }); onClose && onClose(); }}>Delete step</button>
+      <button class="danger" onClick=${() => { setActive((pl) => removeTask(pl, model, task.id)); onClose && onClose(); }}>Delete step</button>
       ${onClose && html`<button onClick=${onClose}>Close</button>`}
     </div>
   <//>`;
+}
+
+const CHIP_TITLES = { pieces: 'Pieces placed', bolts: 'Bolts placed', nuts: 'Nuts fastened' };
+
+function draftTask(kind, builder, project) {
+  const out = { kind, builder };
+  if (kind === 'tool' || kind === 'pass') out.toolId = project.tools[0]?.id;
+  if (kind === 'pass') out.to = project.builders.find((b) => b.id !== builder)?.id;
+  if (kind === 'other') { out.text = ''; out.duration = 10; }
+  return out;
 }
 
 export function SequenceTab({ project, model, sim }) {
@@ -170,50 +158,119 @@ export function SequenceTab({ project, model, sim }) {
   const tasks = plan.tasks || [];
   const [sel, setSel] = useState(null);
   const [t, setT] = useState(null); // the moment shown in the 3D view
-  const [editAsm, setEditAsm] = useState(null);
-  const [dragFrom, setDragFrom] = useState(null);
   const [compare, setCompare] = useState(null);
-  const [picked, setPicked] = useState([]); // member ids picked in the 3D view
-  const [form, setForm] = useState(null); // the step being added
+  const [drag, setDrag] = useState(null); // a task being dragged from a list: {kind, preset, label, x, y}
+  const [pending, setPending] = useState(null); // a task waiting for its pop-up: {kind, slot, at, carried, editId, editing, draft}
   const [thenSupport, setThenSupport] = useState(true);
-  const [thenNut, setThenNut] = useState(false);
+  const [standAction, setStandAction] = useState('place');
+  const [standTool, setStandTool] = useState('');
+  const [filter, setFilter] = useState(null); // which group of "still to do" to show
+  const api = useRef(null);
 
   const setPlan = (fn, key) => updateProject((p) => fn(activePlan(p)), { key });
   const selTask = tasks.find((x) => x.id === sel);
-  const selIndex = tasks.indexOf(selTask);
-  const { units } = planUnits(model, plan);
-  const placedUnits = new Set(tasks.filter((x) => x.kind === 'receive').map(taskUnitKey));
-  const unplaced = units.filter((u) => !placedUnits.has(u.key));
-  const errorSteps = new Set(sim.errors.map((e) => e.step));
-  const warnSteps = new Set(sim.warnings.map((e) => e.step));
-  // Keep the selected step in view (it may have been picked on the timeline).
-  useEffect(() => { document.querySelector('.steps-list li.sel')?.scrollIntoView({ block: 'nearest' }); }, [sel]);
+  const { units, inAssembly } = planUnits(model, plan);
+  const checks = useMemo(() => planChecks(project, model, plan, sim), [sim, model]);
+  const startOf = (id) => sim.taskStarts?.[id] ?? null;
   const select = (id) => {
-    setForm(null);
+    if (id === sel) { setSel(null); return; }
     setSel(id);
     const times = sim.taskTimes?.[id];
     if (times) setT(times.end);
   };
-  const move = (from, to) => setPlan((pl) => { const [s] = pl.tasks.splice(from, 1); pl.tasks.splice(to, 0, s); });
 
-  // --- adding a step ---
-  const startForm = (kind = form?.kind || 'receive', was = {}) => {
-    const builder = form?.builder || selTask?.builder || project.builders[0]?.id;
-    if (!builder) { alert('Add builders in the Crew tab first.'); return; }
-    setForm(newTask(kind, builder, project, model, plan, was));
+  // --- putting a task on the timeline ---
+  const unitOfMember = (memberId) => (inAssembly.has(memberId) ? { type: 'assembly', id: inAssembly.get(memberId) } : { type: 'member', id: memberId });
+  const addTasks = (slot, list) => {
+    setPlan((pl) => insertAtSlot(pl.tasks, list, slot, startOf));
+    setSel(list[0].id);
+    setPending(null);
   };
-  const addForm = () => {
-    const id = form.id;
-    const extra = [];
-    if (form.kind === 'receive' && thenSupport && form.unit) {
-      const u = units.find((x) => x.key === unitKey(form.unit));
-      if (u) extra.push({ id: uid('k'), kind: 'support', builder: form.builder, member: u.memberIds[0], until: 'auto' });
+  const commit = (fields, extras = []) => {
+    const { kind, slot, editId } = pending;
+    if (editId) {
+      setPlan((pl) => { Object.assign(pl.tasks.find((x) => x.id === editId), fields); });
+      setPending(null);
+      return;
     }
-    if (form.kind === 'bolt' && thenNut && form.boltIds?.length) extra.push({ ...form, id: uid('k'), kind: 'nut', where: form.where === 'hand' ? 'bridge' : form.where, along: undefined });
-    setPlan((pl) => { pl.tasks.splice(selIndex >= 0 ? selIndex + 1 : pl.tasks.length, 0, { ...form }, ...extra); });
-    setSel(id);
-    setForm(newTask(form.kind, form.builder, project, model, plan));
+    addTasks(slot, [{ id: uid('k'), kind, builder: slot.builder, ...fields }, ...extras.map((x) => ({ id: uid('k'), builder: slot.builder, ...x }))]);
   };
+  const openTask = (kind, slot, preset = null) => {
+    // When a step dropped here gets started, near enough, for what's available by then.
+    const mine = (taskBlocks(plan, sim, project).get(slot.builder) || []).filter((b) => !b.along);
+    const main = slot.with ? mine.find((b) => b.task.id === slot.with) : null;
+    const next = slot.before ? mine.findIndex((b) => b.task.id === slot.before) : mine.length;
+    const at = main ? main.start : Math.max(slot.time, mine[next - 1]?.end ?? 0);
+    const carried = main?.task.unit && (main.task.kind === 'run' || main.task.kind === 'receive') ? units.find((u) => u.key === unitKey(main.task.unit)) : null;
+    if (preset) {
+      const list = [{ id: uid('k'), kind, builder: slot.builder, ...preset, ...(kind === 'support' ? { until: 'auto' } : {}) }];
+      if (kind === 'receive' && thenSupport) {
+        const u = units.find((x) => x.key === unitKey(preset.unit));
+        if (u) list.push({ id: uid('k'), kind: 'support', builder: slot.builder, member: u.memberIds[0], until: 'auto' });
+      }
+      addTasks(slot, list);
+      return;
+    }
+    const draft = kind === 'tool' || kind === 'pass' || kind === 'other' ? draftTask(kind, slot.builder, project) : null;
+    setPending({ kind, slot, at, carried, draft });
+  };
+  const repick = (task) => setPending({ kind: task.kind, editId: task.id, slot: { builder: task.builder }, at: sim.taskStarts?.[task.id] ?? 0, editing: task });
+
+  const pickPiece = (memberId) => {
+    const { kind, editId } = pending;
+    if (kind === 'run' || kind === 'receive') commit({ unit: unitOfMember(memberId) }, kind === 'receive' && thenSupport && !editId ? [{ kind: 'support', member: memberId, until: 'auto' }] : []);
+    else if (kind === 'support') commit(editId ? { member: memberId } : { member: memberId, until: 'auto' });
+    else if (kind === 'stand') commit({ member: memberId, action: standAction, toolId: standTool || project.tools.find((x) => x.kind === 'support')?.id });
+  };
+  const finishConnection = ({ also, ...fields }) => {
+    commit(fields, also ? [{ kind: 'nut', jointId: fields.jointId, boltIds: fields.boltIds, member: fields.member, where: fields.where === 'hand' ? 'bridge' : fields.where }] : []);
+  };
+  const finishAssembly = ({ ids, name, layOut }) => {
+    const { slot, editId, editing } = pending;
+    const id = editing ? editing.assemblyId : uid('as');
+    const task = { id: uid('k'), kind: 'assembly', builder: slot.builder, assemblyId: id };
+    updateProject((p) => {
+      const pl = activePlan(p);
+      const a = applyAssembly(pl, model, ids, { id, name });
+      if (layOut) layOutAssembly(p, model, a);
+      if (!editId) insertAtSlot(pl.tasks, [task], slot, startOf);
+    });
+    if (!editId) setSel(task.id);
+    setPending(null);
+  };
+
+  // --- dragging a task out of a list ---
+  const dragging = !!drag;
+  const dragRef = useRef(null);
+  dragRef.current = { openTask, drag };
+  useEffect(() => {
+    if (!dragging) return;
+    const move = (e) => setDrag((d) => d && { ...d, x: e.clientX, y: e.clientY });
+    const up = (e) => {
+      const { drag: d, openTask: open } = dragRef.current;
+      const slot = api.current?.slotAt(e.clientX, e.clientY, new Set());
+      setDrag(null);
+      if (slot && d) open(d.kind, slot, d.preset);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    return () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+  }, [dragging]);
+  const beginDrag = (e, kind, label, preset = null) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    setDrag({ kind, label, preset, x: e.clientX, y: e.clientY });
+  };
+
+  useEffect(() => {
+    const key = (e) => {
+      if (isTyping(e) || pending || !sel) return;
+      if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); setPlan((pl) => removeTask(pl, model, sel)); setSel(null); }
+      if (e.key === 'Escape') setSel(null);
+    };
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  });
 
   const autoBuild = () => {
     if (tasks.length && !confirm('Replace every step with an automatic plan? (You can undo, or Duplicate the plan first to keep this one.)')) return;
@@ -225,59 +282,14 @@ export function SequenceTab({ project, model, sim }) {
     });
     setSel(null);
   };
+  const clearAll = () => {
+    if (!confirm('Take every step off the timeline and undo its assemblies? (Ctrl+Z brings them back.)')) return;
+    setPlan((pl) => { pl.tasks = []; pl.assemblies = []; pl.steps = []; });
+    setSel(null);
+    setT(null);
+  };
 
   // --- assemblies ---
-  const rules = project.site.rules || {};
-  const maxAsm = rules.maxAssemblyMembers ?? Infinity;
-  const makeAssembly = (ids) => {
-    if (ids.length < 2 || ids.length > maxAsm) return;
-    const id = uid('as');
-    setPlan((pl) => {
-      for (const a of pl.assemblies) a.memberIds = a.memberIds.filter((m) => !ids.includes(m));
-      pl.assemblies = pl.assemblies.filter((a) => a.memberIds.length > 1);
-      pl.assemblies.push({ id, name: 'Assembly ' + (pl.assemblies.length + 1), memberIds: [...ids], areaZoneId: null });
-      // The first piece's run and receive steps now carry the whole assembly.
-      const seen = new Set();
-      pl.tasks = pl.tasks.filter((x) => {
-        if (!x.unit || x.unit.type !== 'member' || !ids.includes(x.unit.id)) return !(x.kind === 'support' && ids.includes(x.member) && ids.indexOf(x.member) > 0);
-        if (seen.has(x.kind)) return false;
-        seen.add(x.kind);
-        x.unit = { type: 'assembly', id };
-        return true;
-      });
-      for (const x of pl.tasks) {
-        if ((x.kind === 'bolt' || x.kind === 'nut') && x.jointId) {
-          const c = model.contacts.find((q) => q.id === x.jointId);
-          if (c && ids.includes(c.a) && ids.includes(c.b)) x.where = 'staging';
-        }
-        if (x.kind === 'support' && ids.includes(x.member)) x.member = ids[0];
-      }
-    });
-    setPicked([]);
-  };
-  const deleteAssembly = (asmId) => setPlan((pl) => {
-    pl.assemblies = pl.assemblies.filter((x) => x.id !== asmId);
-    pl.tasks = pl.tasks.filter((x) => !(x.unit && x.unit.type === 'assembly' && x.unit.id === asmId));
-  });
-  const toggleMember = (asmId, memberId) => {
-    const cur = plan.assemblies.find((x) => x.id === asmId);
-    if (cur && !cur.memberIds.includes(memberId) && cur.memberIds.length >= maxAsm) {
-      alert(`An assembly can have at most ${maxAsm} members under this year's rules (10.3.7).`);
-      return;
-    }
-    setPlan((pl) => {
-      const a = pl.assemblies.find((x) => x.id === asmId);
-      if (!a) return;
-      if (a.memberIds.includes(memberId)) { a.memberIds = a.memberIds.filter((m) => m !== memberId); return; }
-      for (const other of pl.assemblies) other.memberIds = other.memberIds.filter((m) => m !== memberId);
-      a.memberIds.push(memberId);
-    });
-  };
-  const pick = (m) => {
-    if (editing) { toggleMember(editing.id, m.id); return; }
-    setPicked(picked.includes(m.id) ? picked.filter((x) => x !== m.id) : [...picked, m.id]);
-  };
-  const editing = editAsm && plan.assemblies.find((a) => a.id === editAsm);
   const asmOf = new Map();
   for (const a of plan.assemblies) for (const m of a.memberIds) asmOf.set(m, a.id);
   const asmColor = (asmId) => ASM_COLORS[Math.max(0, plan.assemblies.findIndex((a) => a.id === asmId)) % ASM_COLORS.length];
@@ -288,13 +300,10 @@ export function SequenceTab({ project, model, sim }) {
   if (selTask) {
     if (selTask.member) selMembers.add(selTask.member);
     if (selTask.unit) units.find((u) => u.key === unitKey(selTask.unit))?.memberIds.forEach((id) => selMembers.add(id));
+    if (selTask.jointId) { const c = model.contacts.find((x) => x.id === selTask.jointId); if (c) { selMembers.add(c.a); selMembers.add(c.b); } }
+    if (selTask.kind === 'assembly') plan.assemblies.find((a) => a.id === selTask.assemblyId)?.memberIds.forEach((id) => selMembers.add(id));
   }
-  const baseStyle = (m) => {
-    if (editing) {
-      if (editing.memberIds.includes(m.id)) return { color: asmColor(editing.id) };
-      if (asmOf.has(m.id)) return { color: asmColor(asmOf.get(m.id)), opacity: 0.45 };
-      return { color: '#94a3b8', opacity: 0.6 };
-    }
+  const styleOf = (m) => {
     if (selMembers.has(m.id)) return { color: '#2563eb', outline: '#1d4ed8' };
     if (state) {
       const ms = state.members.get(m.id);
@@ -303,18 +312,53 @@ export function SequenceTab({ project, model, sim }) {
     }
     return asmOf.has(m.id) ? { color: asmColor(asmOf.get(m.id)) } : { color: '#94a3b8' };
   };
-  const styleOf = (m) => {
-    const st = baseStyle(m);
-    return picked.includes(m.id) ? { ...st, color: '#facc15', outline: '#b45309', opacity: 1 } : st;
-  };
-  const pickedNames = picked.map((id) => model.memberById.get(id)?.name).filter(Boolean);
 
   const runCompare = () => setCompare(project.plans.map((pl) => {
     const r = simulate(project, pl);
     return { id: pl.id, name: pl.name, end: r.endTime, cost: r.cost, errors: r.errors.length, holds: r.holds.reduce((a, h) => a + h.duration, 0), aborted: r.aborted };
   }));
-  const colorOf = (id) => project.builders.find((b) => b.id === id)?.color || '#94a3b8';
-  const onGanttEdit = (taskId, patch) => setPlan((pl) => { Object.assign(pl.tasks.find((x) => x.id === taskId) || {}, patch); });
+  const nameOfStep = (i) => {
+    const x = tasks[i];
+    return x ? `${project.builders.find((b) => b.id === x.builder)?.name || '?'} · ${shortLabel(x, model, plan, project)}` : null;
+  };
+  const groupOf = { pieces: 'piece', bolts: 'bolt', nuts: 'nut', support: 'support' };
+  const shownTodo = checks.todo.filter((x) => !filter || x.group === groupOf[filter]);
+  const chip = (id) => {
+    const c = checks[id];
+    return html`<button key=${id} class=${'chk ' + (c.done === c.total ? 'ok' : 'todo') + (filter === id ? ' on' : '')} data-check=${id} title="Show what's left of these" onClick=${() => setFilter(filter === id ? null : id)}>
+      ${c.done === c.total ? '✔' : '○'} ${CHIP_TITLES[id]} <b>${c.done}/${c.total}</b></button>`;
+  };
+
+  // --- the pop-up for the task that just landed ---
+  const popup = () => {
+    if (!pending) return null;
+    const { kind, slot, at, carried, editing, draft } = pending;
+    const close = () => setPending(null);
+    const who = project.builders.find((b) => b.id === slot.builder)?.name;
+    const first = firstViewFor(project, kind, slot.builder);
+    const shared = { project, model, plan, sim, onClose: close };
+    if (kind === 'run' || kind === 'receive' || kind === 'support' || kind === 'stand') {
+      const stands = project.tools.filter((x) => x.kind === 'support');
+      const extra = kind === 'receive' && !editing ? html`<${Check} label="Then support it until it stands" checked=${thenSupport} onChange=${setThenSupport} />`
+        : kind === 'stand' ? html`<${SelectField} label="Action" value=${standAction} options=${[['place', 'Place it'], ['remove', 'Remove it']]} onChange=${setStandAction} />
+          ${stands.length ? html`<${SelectField} label="Tool" value=${standTool || stands[0].id} options=${stands.map((x) => [x.id, x.name])} onChange=${setStandTool} />` : html`<${Hint}>No support tools yet. Add one in the Tools tab.<//>`}` : null;
+      return html`<${PiecePopup} ...${shared} kind=${kind} title=${`${who}: ${TASK_KINDS[kind][1]}. Which piece?`} builderId=${slot.builder} t=${at} firstView=${first} onPick=${pickPiece} extra=${extra} />`;
+    }
+    if (kind === 'bolt' || kind === 'nut') {
+      return html`<${ConnectionPopup} ...${shared} kind=${kind} title=${`${who}: ${TASK_KINDS[kind][1]}. Between which two pieces?`} t=${at} firstView=${first} carried=${carried} initial=${editing || null} onDone=${finishConnection} />`;
+    }
+    if (kind === 'assembly') {
+      const initial = editing ? plan.assemblies.find((a) => a.id === editing.assemblyId) : null;
+      return html`<${AssemblyPopup} project=${project} model=${model} plan=${plan} onClose=${close} title=${initial ? `Which pieces go in ${initial.name}?` : `${who}: Make an assembly. Which pieces?`} initial=${initial} onDone=${finishAssembly} />`;
+    }
+    return html`<${Popup} title=${`${who}: ${TASK_KINDS[kind][1]}`} onClose=${close} wide=${false}>
+      <div class="pop-simple">
+        <${TaskFields} task=${draft} set=${(patch) => setPending({ ...pending, draft: { ...draft, ...patch } })} project=${project} model=${model} plan=${plan} />
+        <div class="row"><span class="spacer"></span><button onClick=${close}>Cancel</button>
+          <button class="primary" data-confirm onClick=${() => { const { kind: _k, builder: _b, ...fields } = draft; commit(fields); }}>Add step</button></div>
+      </div>
+    <//>`;
+  };
 
   return html`<div class="tab-layout seq">
     <div class="main">
@@ -327,11 +371,12 @@ export function SequenceTab({ project, model, sim }) {
           copy.id = uid('p'); copy.name = activePlan(p).name + ' (copy)';
           p.plans.push(copy); p.activePlanId = copy.id;
         })}>Duplicate</button>
-        <button onClick=${() => updateProject((p) => { const pl = emptyPlan('Plan ' + (p.plans.length + 1)); p.plans.push(pl); p.activePlanId = pl.id; })}>New</button>
+        <button title="Start a new, empty plan" onClick=${() => updateProject((p) => { const pl = emptyPlan('Plan ' + (p.plans.length + 1)); p.plans.push(pl); p.activePlanId = pl.id; })}>New</button>
         <button disabled=${project.plans.length < 2} onClick=${() => confirm(`Delete plan "${plan.name}"?`) && updateProject((p) => { p.plans = p.plans.filter((x) => x.id !== plan.id); p.activePlanId = p.plans[0].id; })}>Delete</button>
         <button onClick=${runCompare}>Compare plans</button>
         <span class="sep"></span>
         <button title="Fill in a working plan you can then edit: footings first, west to east, trusses before laterals" onClick=${autoBuild}>Auto-build plan</button>
+        <button disabled=${!tasks.length} title="Take every step off the timeline" onClick=${clearAll}>Clear timeline</button>
         <span class="spacer"></span>
         <span data-tour="total" class=${'total ' + (sim.errors.length ? 'bad' : '')} title="Construction cost uses this year's formula (number of builders × minutes × rate)">
           ${sim.aborted ? 'Plan gets stuck' : html`Build time ${fmt(sim.endTime)}${sim.cost != null && html` <span class="cost">· ${fmtCost(sim.cost)}</span>`}`}</span>
@@ -341,92 +386,66 @@ export function SequenceTab({ project, model, sim }) {
         <tbody>${compare.map((c) => html`<tr class=${c.id === plan.id ? 'sel' : ''}><td>${c.name}</td><td>${c.aborted ? 'incomplete' : fmt(c.end)}</td><td>${c.aborted ? '–' : fmtCost(c.cost)}</td><td>${fmt(c.holds)}</td><td class=${c.errors ? 'bad' : 'ok'}>${c.errors || '—'}</td>
           <td><button class="small" onClick=${() => updateProject((p) => { p.activePlanId = c.id; })}>Open</button></td></tr>`)}</tbody></table>
         <button class="small" onClick=${() => setCompare(null)}>Close</button></div>`}
-      <div class="seq-body">
-        <ol class="steps-list" data-tour="steps">
-          ${!tasks.length && html`<li class="empty">No steps yet. Add one on the right, or press <b>Auto-build plan</b> and edit from there.</li>`}
-          ${tasks.map((x, i) => {
-            const times = sim.taskTimes?.[x.id];
-            const asm = x.unit?.type === 'assembly' && plan.assemblies.find((a) => a.id === x.unit.id);
-            return html`<li key=${x.id} class=${(x.id === sel ? 'sel ' : '') + (errorSteps.has(i) ? 'flag-err ' : warnSteps.has(i) ? 'flag ' : '') + 'k-' + x.kind + (x.along ? ' along' : '')}
-              style=${asm ? { borderLeft: '4px solid ' + asmColor(asm.id) } : null}
-              draggable="true" onDragStart=${() => setDragFrom(i)} onDragOver=${(e) => e.preventDefault()}
-              onDrop=${() => { if (dragFrom != null && dragFrom !== i) move(dragFrom, i); setDragFrom(null); }}
-              onClick=${() => (x.id === sel ? (setSel(null), setT(null)) : select(x.id))}>
-              <span class="grip" title="Drag to reorder">⋮⋮</span>
-              <span class="idx">${i + 1}</span>
-              <span class="dot" style=${{ background: colorOf(x.builder) }} title=${project.builders.find((b) => b.id === x.builder)?.name}></span>
-              ${x.along && html`<span class="along-tag" title="Done at the same time as this builder's previous step">+</span>`}
-              <span class="icon">${TASK_KINDS[x.kind]?.[0]}</span>
-              <span class="label" title=${taskLabel(x, model, plan, project)}>${taskLabel(x, model, plan, project)}</span>
-              <span class="time">${times ? fmt(times.start) + '–' + fmt(times.end) : ''}</span>
-              <span class="assign" onClick=${(e) => e.stopPropagation()}>
-                <button class="small" disabled=${i === 0} onClick=${() => move(i, i - 1)} title="Move up">↑</button>
-                <button class="small" disabled=${i === tasks.length - 1} onClick=${() => move(i, i + 1)} title="Move down">↓</button>
-                <button class="small" title="Remove step" onClick=${() => { setPlan((pl) => { pl.tasks.splice(i, 1); }); if (x.id === sel) setSel(null); }}>✕</button>
-              </span>
-            </li>`;
-          })}
-        </ol>
-        <div class="seq-3d">
-          <${IsoView} model=${model} styleOf=${styleOf} supports=${state?.supports || []} onPick=${pick}
-            label=${editing ? `Click pieces to add/remove them from "${editing.name}"` : t != null ? `At ${fmt(t)}: blue = this step, gray = built, orange = held` : 'Click pieces to pick them for an assembly · colors = assemblies'} />
-          <div class="pickbar">
-            ${editing ? html`<span class="names">Editing <span class="asm-chip" style=${{ background: asmColor(editing.id) }}>${editing.name}</span>: click pieces to add or take them out.</span>
-                <button class="small primary" onClick=${() => setEditAsm(null)}>Done</button>`
-            : picked.length ? html`<span class="names"><b>Picked ${picked.length}${maxAsm < Infinity ? ' of max ' + maxAsm : ''}:</b> ${pickedNames.join(' + ')}
-                ${picked.length > maxAsm && html` <b class="bad">Too many for one assembly.</b>`}</span>
-                <button class="small primary" disabled=${picked.length < 2 || picked.length > maxAsm} onClick=${() => makeAssembly(picked)}>Make assembly</button>
-                <button class="small" onClick=${() => setPicked([])}>Clear</button>`
-            : html`<span class="names muted">Click pieces in the 3D view to pick ${maxAsm < Infinity ? `2–${maxAsm}` : 'some'} of them, then make them an assembly.</span>`}
-          </div>
-          <${Problems} sim=${sim} onPick=${(i) => i != null && tasks[i] && select(tasks[i].id)} />
-        </div>
+      <div class="seq-checks" data-tour="seq-checks">
+        ${chip('pieces')}${chip('bolts')}${chip('nuts')}
+        <button class=${'chk ' + (checks.falls ? 'bad' : 'ok') + (filter === 'support' ? ' on' : '')} data-check="support" title="Pieces nobody is holding up at some point in the plan" onClick=${() => setFilter(filter === 'support' ? null : 'support')}>
+          ${checks.falls ? html`⚠ ${checks.falls} would fall` : '✔ Nothing falls'}</button>
+        <span class=${'chk plain ' + (sim.errors.length ? 'bad' : sim.warnings.length ? 'todo' : 'ok')}>${sim.errors.length} problem${sim.errors.length === 1 ? '' : 's'}, ${sim.warnings.length} warning${sim.warnings.length === 1 ? '' : 's'}</span>
       </div>
-      <div data-tour="seq-gantt"><${Gantt} result=${sim} t=${t ?? 0} setT=${setT} compact onEdit=${onGanttEdit} onSelect=${select} selected=${sel} /></div>
+      <div class="seq-top">
+        <div class="palette" data-tour="seq-palette">
+          <div class="palette-title">Drag onto a builder</div>
+          ${Object.entries(TASK_KINDS).map(([k, [icon, label, what]]) => html`<div key=${k} class="palette-item" data-kind=${k} title=${what} onPointerDown=${(e) => beginDrag(e, k, label)}>
+            <span class="ic">${icon}</span>${label}</div>`)}
+        </div>
+        <${Timeline} project=${project} model=${model} plan=${plan} sim=${sim} checks=${checks} t=${t ?? 0} setT=${setT} selected=${sel} onSelect=${select}
+          dragging=${drag} apiRef=${api}
+          onMove=${(id, slot) => setPlan((pl) => insertAtSlot(pl.tasks, taskGroup(pl.tasks, id), slot, startOf))}
+          onEdit=${(id, patch) => setPlan((pl) => { Object.assign(pl.tasks.find((x) => x.id === id) || {}, patch); })} />
+      </div>
+      <div class="seq-bottom">
+        <div class="seq-3d">
+          <${IsoView} model=${model} styleOf=${styleOf} supports=${state?.supports || []}
+            label=${t != null ? `At ${fmt(t)}: blue = this step, gray = built, orange = held` : 'Click the time along the top of the timeline to see the bridge at that moment'} />
+        </div>
+        <div class="seq-problems"><${Problems} sim=${sim} nameOf=${nameOfStep} onPick=${(i) => i != null && tasks[i] && select(tasks[i].id)} /></div>
+      </div>
     </div>
     <aside class="side">
-      ${selTask && !form && html`<${TaskEditor} key=${selTask.id} task=${selTask} project=${project} model=${model} sim=${sim} onClose=${() => setSel(null)} onSelect=${select} />`}
-      <div data-tour="add-step">
-      <${Section} title=${selIndex >= 0 ? `Add a step after step ${selIndex + 1}` : 'Add a step at the end'}>
-        ${!form ? html`<div class="add-kinds">${Object.entries(TASK_KINDS).map(([k, [icon, label]]) => html`<button key=${k} onClick=${() => startForm(k)}><span class="icon">${icon}</span>${label}</button>`)}</div>` : html`
-          <${SelectField} label="Builder" value=${form.builder} options=${project.builders.map((b) => [b.id, builderLabel(project, b)])} onChange=${(v) => setForm({ ...form, builder: v })} />
-          <${SelectField} label="Task" value=${form.kind} options=${Object.entries(TASK_KINDS).map(([k, v]) => [k, v[1]])} onChange=${(v) => setForm(newTask(v, form.builder, project, model, plan, { unit: form.unit, member: form.member }))} />
-          <${TaskFields} task=${form} set=${(patch) => setForm({ ...form, ...patch })} project=${project} model=${model} plan=${plan} />
-          ${form.kind === 'receive' && html`<${Check} label="Then support it until it stands" checked=${thenSupport} onChange=${setThenSupport} />`}
-          ${form.kind === 'bolt' && html`<${Check} label="Then fasten the nuts too" checked=${thenNut} onChange=${setThenNut} />`}
-          <${Check} label="At the same time as their previous step (multitask)" checked=${!!form.along} onChange=${(v) => setForm({ ...form, along: v || undefined })} />
-          <div class="row"><button class="primary" onClick=${addForm}>Add step</button><button onClick=${() => setForm(null)}>Done</button></div>`}
+      ${selTask && html`<${TaskEditor} key=${selTask.id} task=${selTask} project=${project} model=${model} sim=${sim} onClose=${() => setSel(null)} onSelect=${setSel} onRepick=${repick} />`}
+      <div data-tour="seq-todo">
+      <${Section} title=${`Still to do (${shownTodo.length})`}>
+        ${!checks.todo.length && html`<div class="ok small">Every piece, bolt and nut has a step.</div>`}
+        ${checks.todo.length > 0 && html`<${Hint}>Drag one onto a builder's row to add it as it is.${filter ? ' ' : ''}${filter && html`<a href="#" onClick=${(e) => { e.preventDefault(); setFilter(null); }}>Show all</a>`}<//>`}
+        <ul class="todo">${shownTodo.map((x) => html`<li key=${x.id} class=${'todo-' + x.group} data-todo=${x.id} onPointerDown=${(e) => beginDrag(e, x.kind, x.text, x.preset)}>
+          <span class="ic">${TASK_KINDS[x.kind]?.[0]}</span><span>${x.text}</span></li>`)}</ul>
       <//>
       </div>
-      ${unplaced.length > 0 && html`<${Section} title=${`Not placed by any step (${unplaced.length})`}>
-        <ul class="list">${unplaced.map((u) => html`<li key=${u.key}><span>${u.name}</span><span class="spacer"></span>
-          <button class="small" onClick=${() => startForm('receive', { unit: { type: u.type, id: u.id } })}>Add</button></li>`)}</ul>
-      <//>`}
       <div data-tour="assemblies">
       <${Section} title=${`Assemblies (${plan.assemblies.length})`}>
-        <${Hint}>${maxAsm < Infinity ? `2 to ${maxAsm} members` : 'Members'} bolted together in the staging yard, then run and placed as one piece. Add bolt and nut steps "in the staging yard" for them; a piece can't be picked up until every nut is on.<//>
-        <button class="primary" disabled=${picked.length < 2 || picked.length > maxAsm} onClick=${() => makeAssembly(picked)}
-          title="Click pieces in the 3D view first">Make assembly from ${picked.length || 'picked'} piece${picked.length === 1 ? '' : 's'}</button>
-        ${plan.assemblies.map((a) => html`<div class=${'asm ' + (editAsm === a.id ? 'editing' : '')} key=${a.id} style=${{ borderLeft: '4px solid ' + asmColor(a.id) }}>
+        <${Hint}>Drag <b>Make an assembly</b> onto a builder to add one.<//>
+        ${plan.assemblies.map((a) => html`<div class="asm" key=${a.id} style=${{ borderLeft: '4px solid ' + asmColor(a.id) }}>
           <div class="row">
             <span class="dot" style=${{ background: asmColor(a.id) }}></span>
             <input type="text" value=${a.name} onInput=${(e) => setPlan((pl) => { pl.assemblies.find((x) => x.id === a.id).name = e.target.value; }, 'asm' + a.id)} />
-            <button class="small" onClick=${() => setEditAsm(editAsm === a.id ? null : a.id)}>${editAsm === a.id ? 'Done' : 'Edit'}</button>
-            <button class="small danger" onClick=${() => { deleteAssembly(a.id); if (editAsm === a.id) setEditAsm(null); }}>✕</button>
+            <button class="small" title="Change its pieces" onClick=${() => setPending({ kind: 'assembly', editId: a.id, slot: { builder: project.builders[0]?.id }, at: 0, editing: { assemblyId: a.id } })}>Edit</button>
+            <button class="small danger" title="Back to loose pieces" onClick=${() => { setPlan((pl) => dissolveAssembly(pl, model, a.id)); setSel(null); }}>✕</button>
           </div>
-          <div class=${a.memberIds.length > maxAsm ? 'bad' : 'muted'}>${a.memberIds.map((id) => model.memberById.get(id)?.name).filter(Boolean).join(' + ') || 'No members yet.'}</div>
+          <div class="muted">${a.memberIds.map((id) => model.memberById.get(id)?.name).filter(Boolean).join(' + ') || 'No members yet.'}</div>
         </div>`)}
       <//>
       </div>
     </aside>
+    ${drag && html`<div class="tl-ghost" style=${{ left: drag.x + 10 + 'px', top: drag.y + 8 + 'px' }}><span class="ic">${TASK_KINDS[drag.kind]?.[0]}</span> ${drag.label}</div>`}
+    ${popup()}
   </div>`;
 }
 
-export function Problems({ sim, onPick }) {
+export function Problems({ sim, onPick, nameOf = null }) {
   if (!sim.errors.length && !sim.warnings.length) return html`<div class="problems ok">No problems found.</div>`;
-  const label = (s) => (s == null || s < 0 ? 'Plan' : 'Step ' + (s + 1));
+  const label = (s) => (s == null || s < 0 ? 'Plan' : nameOf?.(s) || 'Step ' + (s + 1));
   return html`<div class="problems">
-    ${sim.errors.map((e) => html`<div class="err" onClick=${() => onPick && onPick(e.step)}><b>${label(e.step)}</b> ${e.msg}</div>`)}
-    ${sim.warnings.map((e) => html`<div class="warn" onClick=${() => onPick && onPick(e.step)}><b>${label(e.step)}</b> ${e.msg}</div>`)}
+    ${sim.errors.map((e, i) => html`<div class="err" key=${'e' + i} onClick=${() => onPick && onPick(e.step)}><b>${label(e.step)}</b> ${e.msg}</div>`)}
+    ${sim.warnings.map((e, i) => html`<div class="warn" key=${'w' + i} onClick=${() => onPick && onPick(e.step)}><b>${label(e.step)}</b> ${e.msg}</div>`)}
   </div>`;
 }
