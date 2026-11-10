@@ -293,6 +293,8 @@ export function isConvex(poly) {
 }
 
 // ---------- footings ----------
+// How close to ground level (inches) the bottom of a box has to be to rest on a footing.
+const GROUND_TOL = 1;
 // Footings in bridge x, from the site layout ([x0, x1] pairs, west first).
 export function footingRanges(project) {
   const site = project.site;
@@ -367,7 +369,12 @@ export function buildModel(project) {
     }
     const low = corners3.reduce((best, c) => (c[2] < best[2] - 1e-9 ? c : best), corners3[0]);
     const lowAll = corners3.filter((c) => Math.abs(c[2] - low[2]) < 0.05);
-    const bearingPoint = [lowAll.reduce((s, c) => s + c[0], 0) / lowAll.length, lowAll.reduce((s, c) => s + c[1], 0) / lowAll.length, low[2]];
+    let bearingPoint = [lowAll.reduce((s, c) => s + c[0], 0) / lowAll.length, lowAll.reduce((s, c) => s + c[1], 0) / lowAll.length, low[2]];
+    // Where its bottom is on the ground: any part of it, not just its middle, can rest on a footing
+    // (a chord lying along the ground, or a shape with two feet). It bears where that's over a footing.
+    const ground = corners3.filter((c) => Math.abs(c[2]) <= GROUND_TOL);
+    const onFoot = ground.length ? footings.map(([x0, x1]) => [Math.max(x0, Math.min(...ground.map((c) => c[0]))), Math.min(x1, Math.max(...ground.map((c) => c[0])))]).find(([a, b]) => b >= a - 0.5) : null;
+    if (onFoot) bearingPoint = [(onFoot[0] + onFoot[1]) / 2, ground.reduce((s, c) => s + c[1], 0) / ground.length, Math.min(...ground.map((c) => c[2]))];
     const c2 = [m.u, m.v];
     const centroid = to3(c2);
     const { d: dir } = boxAxes(m);
@@ -376,8 +383,9 @@ export function buildModel(project) {
     const fits = fits3d(poly, m.thick, lim);
     const [long, wide] = [...dims].sort((p, q) => q - p); // its size whichever way it runs
     const lbPerFt = m.lbPerFt ?? d.lbPerFt;
-    // Stands on a footing: set by hand, or (if never set) its lowest point is at ground level over one.
-    const autoBearing = m.plane !== 'L' && Math.abs(low[2]) <= 0.5 && footings.some(([x0, x1]) => bearingPoint[0] >= x0 - 0.5 && bearingPoint[0] <= x1 + 0.5);
+    // Stands on a footing: set by hand, or (if never set) part of its bottom is at ground level over
+    // one. Any number of pieces can stand on the same footing.
+    const autoBearing = m.plane !== 'L' && !!onFoot;
     const bearing = m.bearing == null ? autoBearing : !!m.bearing;
     return { ...m, bearing, autoBearing: m.bearing == null, poly, corners3, footprint, zRange, yRange: m.plane === 'L' ? null : [planeY - m.thick / 2, planeY + m.thick / 2], centroid, ends, bearingPoint, length: m.len, long, wide, weight: (long / 12) * lbPerFt, box: { dims, fits } };
   });

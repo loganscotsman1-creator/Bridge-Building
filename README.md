@@ -90,8 +90,9 @@ Each view then has a checklist on the right that walks you through it:
    bridge counts it as connected, and it shows as only partly connected until a builder comes
    back to fasten it (its nut step in tab 5). A connection with **two or more bolts is rigid** (it
    can cantilever); the threshold is in Bridge settings.
-5. **Check footing supports (F):** members whose bottom sits on a footing are found
-   automatically; click a member to mark or unmark it by hand.
+5. **Check footing supports (F):** members with any part of their bottom at ground level (within
+   1 in) over a footing are found automatically, as many as rest there: a pier, a chord lying on
+   the ground, or a shape with two feet. Click a member to mark or unmark it by hand.
 
 ### 2 · Site & zones
 The **2027 official layout** from the Site Plan Diagram is set up out of the box: west staging

@@ -119,6 +119,37 @@ await test('members standing on a footing are found automatically', () => {
   assert(!buildModel(p).memberById.get('m-P1').bearing, 'a hand setting wins');
 });
 
+await test('several pieces can rest on one footing, including long ones and ones with two feet', () => {
+  const p = normalizeProject(createExampleProject());
+  const box = (id, u, v, len, depth, extra = {}) => ({ id, name: id, plane: 'A', u, v, angle: 0, len, depth, thick: 4, ...extra });
+  p.design.members.push(
+    box('t-chord', 21, 3, 42, 6), // lying on the ground, one end over the west footing
+    box('t-feet', 17, 7, 34, 14, { corners: [[0, 0], [3, 0], [3, 10], [30, 10], [30, 0], [34, 0], [34, 14], [0, 14]] }), // two feet
+    box('t-high', 21, 30, 42, 6), // up off the ground
+    box('t-beside', 60, 3, 42, 6), // on the ground, but not over a footing
+  );
+  const m = buildModel(p);
+  const get = (id) => m.memberById.get(id);
+  assert(get('t-chord').bearing && get('t-feet').bearing, 'both rest on the footing');
+  assert(get('m-P1').bearing, 'alongside the pier');
+  assert(!get('t-high').bearing && !get('t-beside').bearing, 'not on a footing');
+  const x = get('t-chord').bearingPoint[0];
+  assert(x >= 0 && x <= 12, 'it bears over the footing: ' + x);
+  // In a plan, the pier and the chord both stand without anyone holding them.
+  const pl = p.plans[0];
+  pl.steps = [];
+  pl.assemblies = [];
+  const near = p.builders.filter((b) => onStagingSide(p.site, b));
+  const far = p.builders.filter((b) => !onStagingSide(p.site, b));
+  pl.tasks = [];
+  for (const [i, id] of ['m-P1', 't-chord'].entries()) {
+    pl.tasks.push({ id: 'r' + i, kind: 'run', builder: near[i % near.length].id, unit: { type: 'member', id } });
+    pl.tasks.push({ id: 'c' + i, kind: 'receive', builder: far[i % far.length].id, unit: { type: 'member', id } });
+  }
+  const r = simulate(p);
+  assert(!r.falls.length, 'nothing falls: ' + r.errors.map((e) => e.msg).join(' | '));
+});
+
 await test('new boxes start at the full size box and never exceed it', () => {
   const p = emptyProject();
   const m = newBox(p, 'A', 0, 0);
