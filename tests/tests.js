@@ -11,6 +11,8 @@ import { snapBox, snapPoint, snapSize } from '../js/ui/snap.js';
 import { assemblyConnections, defaultView, layOutAssembly, membersArea, stagedPoly, stagingSpots, viewSizes } from '../js/model/plan.js';
 import { stateAt } from '../js/sim/playback.js';
 import { TOURS, dueTour } from '../js/ui/Tour.js';
+import { defaultOrder, orderProblems } from '../game/js/order.js';
+import { clampPos, createGame, defaultSettings, holdPoints, itemDist, shelfItems, stepGame } from '../game/js/world.js';
 import { applyAssembly, connectionChoices, dissolveAssembly, dropSlot, insertAtSlot, onStagingSide, pieceChoices, planChecks, removeTask, taskBlocks, taskGroup } from '../js/model/timeline.js';
 
 const results = [];
@@ -945,6 +947,210 @@ await test('the tutorial: the intro first, each tab once, and again only when it
   seen.design = TOURS.design.v - 1;
   assert(dueTour('design', seen) === 'design', 'shown again after an update');
   for (const [id, t] of Object.entries(TOURS)) assert(t.steps.length >= 1 && t.steps.length <= 3, id + ' stays brief');
+});
+
+// ---------- Over Engineered (the game) ----------
+function game({ players = [['p1', 'west'], ['p2', 'east']], npcs = {}, edit } = {}) {
+  const project = normalizeProject(createExampleProject());
+  const order = defaultOrder(project);
+  if (edit) edit(order);
+  const settings = { ...defaultSettings(project, 2), fallPenalty: 30 };
+  const S = createGame({ project, order, settings, players: players.map(([id, side]) => ({ id, name: id, color: '#000', side })), npcs });
+  const input = new Map(players.map(([id]) => [id, { mx: 0, my: 0 }]));
+  const tick = (secs = 1 / 60) => { for (let i = 0; i < Math.round(secs * 60); i++) stepGame(S, input, 1 / 60); };
+  const actor = (id) => S.actors.find((a) => a.id === id);
+  const press = (id, btn) => { input.get(id)[btn] = true; tick(); input.get(id)[btn] = false; tick(); };
+  const hold = (id, btn, on) => { input.get(id)[btn] = on; };
+  const put = (id, x, y) => { const a = actor(id); const p = clampPos(S, a.side, x, y); a.x = p.x; a.y = p.y; };
+  // Hand an item to a builder and place it from the nearest spot on their side.
+  const place = (id, item) => {
+    const a = actor(id);
+    const pts = item.memberIds.flatMap((m) => S.members.get(m).poly);
+    put(id, pts.reduce((s, q) => s + q[0], 0) / pts.length, pts.reduce((s, q) => s + q[1], 0) / pts.length - 25);
+    if (itemDist(S, item, a.x, a.y) > S.settings.reach) put(id, pts.reduce((s, q) => s + q[0], 0) / pts.length, pts.reduce((s, q) => s + q[1], 0) / pts.length);
+    a.carrying = item.id;
+    item.status = 'carried';
+    press(id, 'a');
+  };
+  // Put in every needed bolt a builder on this side can reach.
+  const boltAll = (id, state = 'needed', btn = 'a') => {
+    for (const b of S.bolts) {
+      if (b.state !== state) continue;
+      const a = actor(id);
+      if (!a.anchor) put(id, b.x, b.y - 10);
+      if (Math.hypot(a.x - b.x, a.y - b.y) > S.settings.reach) continue;
+      if (btn === 'a') for (let i = 0; i < 6 && b.state === 'needed'; i++) press(id, 'a');
+      else { hold(id, 'x', true); for (let i = 0; i < 400 && b.state === 'placed'; i++) tick(); hold(id, 'x', false); tick(); }
+    }
+  };
+  return { S, project, order, input, tick, actor, press, hold, put, place, boltAll };
+}
+
+await test('game: the default order starts with a three-piece assembly, and must', () => {
+  const { S, project } = game();
+  assert(S.items[0].memberIds.length === 3, S.items[0].memberIds.join());
+  const model = buildModel(project);
+  assert(!orderProblems(defaultOrder(project, model), model).length, JSON.stringify(orderProblems(defaultOrder(project, model), model)));
+  const bad = defaultOrder(project, model).slice(2);
+  assert(orderProblems(bad, model).some((p) => p.msg.includes('three pieces')), 'a single first piece is flagged');
+  assert(orderProblems(bad, model).some((p) => p.msg.includes('not in the order')), 'missing pieces are flagged');
+});
+
+await test('game: assemblies come out when made, single pieces once every assembly before them is', () => {
+  const { S, hold, put, tick } = game();
+  assert(!shelfItems(S).length, 'nothing ready at the start: the first item is an assembly');
+  const b = S.benches[0];
+  put('p2', b.x - 12, b.y + b.h / 2);
+  hold('p2', 'x', true);
+  tick(S.items[0].time + 0.2);
+  assert(S.items[0].status === 'shelf', 'first assembly made: ' + S.items[0].status);
+  assert(S.items[1].status === 'building', 'still holding X: on to the next one');
+  assert(S.items[2].status === 'waiting', 'a single piece after an unmade assembly waits');
+  tick(S.items[1].time + 0.2);
+  hold('p2', 'x', false); tick();
+  assert(S.items[1].status === 'shelf' && S.items[2].status === 'shelf' && S.items[3].status === 'shelf', S.items.slice(0, 4).map((i) => i.status).join());
+  assert(S.actors.find((a) => a.id === 'p2').stats.assemblies === 2);
+});
+
+await test('game: pieces are passed across the river by holding A', () => {
+  const { S, press, hold, put, tick, actor } = game();
+  S.items[0].status = 'shelf';
+  const sh = S.shelf;
+  put('p2', sh.x - 12, sh.y + 10);
+  press('p2', 'a');
+  assert(actor('p2').carrying === S.items[0].id, 'grabbed from the shelf');
+  put('p2', S.river.x + S.river.w, 90);
+  put('p1', S.river.x, 90);
+  hold('p2', 'a', true); tick(0.2);
+  assert(actor('p2').extending, 'holding A while carrying away from its spot: passing');
+  press('p1', 'a');
+  assert(actor('p1').carrying === S.items[0].id && !actor('p2').carrying, 'taken across the river');
+});
+
+await test('game: the bridge falls if nobody holds it, or the holder lets go', () => {
+  const { S, place, hold, tick, press, actor, put } = game({ players: [['p1', 'west'], ['p2', 'west'], ['p3', 'east']] });
+  place('p1', S.items[0]);
+  assert(S.items[0].status === 'placed', 'placed on its footing');
+  assert(S.support.needed, 'the first assembly hangs past the footing, so it needs holding');
+  tick(S.settings.grace + 0.1);
+  assert(S.falls.length === 1 && S.penalties === 30 && S.support.fallen, 'nobody took hold in time');
+  const pt = holdPoints(S)[0];
+  assert(pt.key === 'start', 'before any lateral, hold the first assembly');
+  put('p2', pt.x, pt.y);
+  hold('p2', 'lb', true); tick();
+  assert(S.support.holders.has('p2') && !S.support.fallen, 'held again');
+  tick(5);
+  assert(S.falls.length === 1, 'holding: no more falls');
+  hold('p2', 'lb', false); tick();
+  assert(S.falls.length === 2, 'let go with nobody else holding');
+  hold('p2', 'lb', true); tick();
+  put('p1', pt.x + 10, pt.y);
+  hold('p1', 'lb', true); tick();
+  hold('p2', 'lb', false); tick();
+  assert(S.falls.length === 2, 'someone else was holding');
+});
+
+await test('game: one place touching needs one bolt, two or more places need two', () => {
+  const { S, place, hold, tick, put, press, actor } = game({ players: [['p1', 'west'], ['p2', 'west'], ['p3', 'east']] });
+  place('p1', S.items[0]);
+  const pt = holdPoints(S)[0];
+  put('p2', pt.x, pt.y); hold('p2', 'lb', true); tick();
+  place('p1', S.items[1]);
+  assert(!S.items[1].loose && !actor('p1').anchor, 'the other end assembly stands on its footing: nothing to hold');
+  const lat = S.items[2];
+  assert(lat.memberIds.every((id) => S.members.get(id).m.plane === 'L'), 'the third item is a lateral');
+  place('p1', lat);
+  assert(lat.loose && lat.loose.need === 2, 'touching both trusses: two bolts: ' + JSON.stringify(lat.loose));
+  assert(S.bolts.filter((b) => b.state === 'placed').length === 1, 'placing it put in one bolt');
+  assert(actor('p1').anchor?.kind === 'piece', 'whoever placed it holds it');
+  // Shuffle along it to the far truss (but not away from it), then bolt.
+  const far = S.bolts.find((b) => b.state === 'needed' && lat.loose.contacts.some((j) => b.jointIds.includes(j)));
+  hold('p1', 'my', 1); tick(3); hold('p1', 'my', 0);
+  assert(itemDist(S, lat, actor('p1').x, actor('p1').y) <= S.settings.reach + 1e-6, 'stays within reach of the piece');
+  assert(Math.hypot(actor('p1').x - far.x, actor('p1').y - far.y) <= S.settings.reach, 'reached the far bolt');
+  press('p1', 'a');
+  assert(!lat.loose && !actor('p1').anchor, 'second bolt: it stands, and they let go');
+  assert(S.support.holders.get('p2').key === lat.memberIds[0], 'the holder moved to the first lateral');
+  // A vertical touching one chord at one place.
+  const v = S.items.find((it) => it.memberIds.length === 1 && S.members.get(it.memberIds[0]).m.name === 'A-V1');
+  const c = buildModel(S.project).contacts.filter((x) => x.bolts && (x.a === v.memberIds[0] || x.b === v.memberIds[0]) && S.installed.has(x.a === v.memberIds[0] ? x.b : x.a));
+  place('p1', v);
+  assert(v.loose === null || (c.length >= 2 ? v.loose.need === 2 : !v.loose), JSON.stringify(v.loose) + ' / ' + c.length);
+});
+
+await test('game: a buddy piece is held by whoever placed it and bolted by someone else', () => {
+  const { S, place, hold, tick, put, press, actor } = game({ players: [['p1', 'west'], ['p2', 'west'], ['p3', 'west']], edit: (o) => { o[2].buddy = true; } });
+  place('p1', S.items[0]);
+  const pt = holdPoints(S)[0];
+  put('p2', pt.x, pt.y); hold('p2', 'lb', true); tick();
+  place('p1', S.items[1]);
+  place('p1', S.items[2]);
+  const lat = S.items[2];
+  assert(lat.loose && S.bolts.filter((b) => b.state === 'placed').length === 0, 'set in place, no bolt');
+  assert(actor('p1').anchor?.locked, 'its carrier can only hold it');
+  press('p1', 'a');
+  assert(S.bolts.filter((b) => b.state === 'placed').length === 0, 'and cannot bolt it');
+  for (const b of S.bolts.filter((x) => x.state === 'needed')) { put('p3', b.x, b.y - 10); press('p3', 'a'); }
+  assert(!lat.loose && !actor('p1').anchor, 'a buddy bolted it, so the carrier is free');
+});
+
+await test('game: if the bridge grows twice and nobody moves out to hold it, it falls', () => {
+  const { S, place, hold, tick, put, press, actor } = game({ players: [['p1', 'west'], ['p2', 'west'], ['p3', 'west']] });
+  place('p1', S.items[0]);
+  const pt = holdPoints(S)[0];
+  put('p2', pt.x, pt.y); hold('p2', 'lb', true); tick();
+  place('p1', S.items[1]); // both trusses now reach the same length: grown once
+  assert(S.support.grown === 1 && S.support.holders.get('p2').stale === 1, JSON.stringify({ g: S.support.grown, h: [...S.support.holders.values()] }));
+  const name = (n) => S.items.find((it) => it.memberIds.length === 1 && S.members.get(it.memberIds[0]).m.name === n);
+  for (const n of ['A-V1', 'A-BC2']) { place('p1', name(n)); for (let i = 0; i < 3 && name(n).loose; i++) press('p1', 'a'); }
+  assert(S.support.grown === 1, 'one truss longer than the other: not grown yet');
+  place('p1', name('B-BC2'));
+  assert(S.support.grown === 2, 'grown twice');
+  assert(S.falls.length === 1 && /nobody moved out/.test(S.falls[0].why), JSON.stringify(S.falls));
+});
+
+await test('game: NPCs make assemblies at their set time and hold the bridge until it stands', () => {
+  const { S, tick } = game({ players: [['p1', 'west']], npcs: { assembler: true } });
+  const t0 = S.items[0].time;
+  tick(t0 + 6); // time to walk to the bench first
+  assert(S.items[0].status === 'shelf', 'assembler made the first one: ' + S.items[0].status + ' ' + S.items[0].progress);
+
+  const g = game({ players: [['p1', 'west'], ['p2', 'east']], npcs: { holder: true } });
+  const holder = g.actor('npc-holder');
+  assert(holder.side === 'west', 'holds from the first assembly\'s side');
+  g.place('p1', g.S.items[0]);
+  g.tick(2.5);
+  assert(g.S.support.holders.has('npc-holder') && !g.S.falls.length, 'took hold in time');
+  // Build the whole bridge (teleporting whoever is on the right side), bolting as we go.
+  for (const it of g.S.items.slice(1)) {
+    const ms = it.memberIds.map((id) => g.S.members.get(id));
+    const x = ms.reduce((s, m) => s + m.poly[0][0], 0) / ms.length;
+    const who = g.S.sideOfX(x) === 'west' ? 'p1' : 'p2';
+    // (This order lets the bridge fall now and then; the holder takes hold again.)
+    for (let i = 0; i < 20 && g.S.support.fallen; i++) g.tick(0.5);
+    g.place(who, it);
+    assert(it.status === 'placed', it.idx + ' not placed');
+    // Walk along it to each bolt it still needs.
+    for (const b of g.S.bolts) {
+      if (!it.loose || b.state !== 'needed' || !it.loose.contacts.some((j) => b.jointIds.includes(j))) continue;
+      for (let i = 0; i < 20 && g.S.support.fallen; i++) g.tick(0.5);
+      g.put(who, b.x, b.y);
+      for (let i = 0; i < 6 && b.state === 'needed'; i++) g.press(who, 'a'); // (the nearest bolt goes in first)
+    }
+    assert(!it.loose, it.idx + ' still loose');
+    g.tick(1.5);
+  }
+  assert(g.S.items.every((it) => it.status === 'placed'), 'all placed');
+  for (let i = 0; i < 20 && g.S.support.fallen; i++) g.tick(0.5);
+  for (const id of ['p1', 'p2']) g.boltAll(id);
+  assert(g.S.support.standing, 'reaches both footings with the trusses tied: stands on its own');
+  assert(!g.S.support.holders.size && !holder.anchor, 'the holder lets go');
+  for (const id of ['p1', 'p2']) g.boltAll(id, 'placed', 'x');
+  assert(g.S.bolts.every((b) => b.state === 'fastened' || b.state === 'internal'), g.S.bolts.filter((b) => b.state !== 'fastened' && b.state !== 'internal').length + ' bolts left');
+  assert(g.S.allBuilt && !g.S.done, 'built, but not everyone is back in a staging yard');
+  for (const id of ['p1', 'p2']) { const a = g.actor(id); const z = g.S.stageZones.find((q) => g.S.sideOfX(q.x + q.w / 2) === a.side); g.put(id, z.x + 20, z.y + 20); }
+  g.tick(30);
+  assert(g.S.done, 'everyone back: done (the holder walks back too)');
 });
 
 await test('old (version 1) project files still open', () => {

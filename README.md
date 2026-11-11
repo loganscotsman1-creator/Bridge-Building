@@ -13,6 +13,47 @@ No install and no account. It runs in the browser. Your work autosaves in that b
 **Save file** downloads the whole project (members, site, crew, plans) as a `.bridge.json` file
 you can send to teammates.
 
+**Play the game:** https://loganscotsman1-creator.github.io/Bridge-Building/game/
+
+---
+
+## Over Engineered (the game)
+
+A co-op game, in the spirit of kitchen-chaos party games, for practicing how your team works
+together: up to four players on one screen build your bridge on this year's site, against the
+clock. It uses the bridge, site and timing from the sequencer in the same browser (or a project
+file you open), so the times are realistic: walking and carrying speeds, reach, and how long a nut
+takes to fasten.
+
+- **Setup:** players join by pressing A on a controller (any the browser sees: Xbox,
+  PlayStation, Switch Pro…) or Space / slash for two players on one keyboard, and pick a side of
+  the river. With 5 builders an NPC either holds the bridge or makes the assemblies; with 6 there
+  is one of each.
+- **Build order:** click pieces on the 3D bridge in the order they come in, grouping up to three
+  into an assembly. The first item must be a three-piece assembly. Mark large or awkward items
+  as needing a buddy, and set each assembly's time. Orders can be saved, downloaded and loaded.
+- **Staging** is simplified to two assembly benches (hold X) and a ready shelf. An assembly goes
+  on the shelf when it's made; a single piece as soon as every assembly before it is made.
+- **Controls:** A grabs, places a piece where it goes (with its first bolt), places bolts, and,
+  held while carrying, holds a piece out to pass it across the river. X (held) fastens a nut or
+  makes an assembly. LB (held) holds the bridge up.
+- **Stability:** a piece touching the bridge in one place is stable with one bolt; in two or
+  more places, with two bolts in different places. Until then whoever placed it holds it (and
+  can walk along it). A buddy piece's carrier can only hold it; someone else bolts it.
+- **Holding the bridge:** once anything hangs past a footing, someone must hold the bridge at a
+  lateral (before the first lateral, at the outer end of the first assembly). Pushing the stick
+  along the bridge moves the holder to the next lateral. The bridge falls (a time penalty, and it
+  must be held again before work goes on) if nobody takes hold within a few seconds, the last
+  holder lets go, or the bridge grows longer twice while every holder stays put. The bridge grows
+  when both trusses reach farther; laterals don't count, nor do a few inches. It stands on its own
+  once it reaches both footings with the trusses tied together.
+- **Finish:** every piece in, every nut fastened, everyone back in a staging yard. Bolts left
+  unfastened flash after 6 s. The results show each builder's time fastening, assembling,
+  holding, carrying, walking and waiting, plus recent runs to compare.
+
+The game's code is in [`game/`](game/): the rules in `game/js/world.js` (no drawing, so they are
+tested in `tests/`), drawing in `render.js`, controllers in `input.js`.
+
 ---
 
 ## How to use it

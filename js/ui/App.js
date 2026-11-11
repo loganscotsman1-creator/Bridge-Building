@@ -107,6 +107,7 @@ export function App() {
     <nav class="tabs" data-tour="tabs">
       ${TABS.map(([k, label]) => html`<button class=${tab === k ? 'on' : ''} onClick=${() => setTab(k)}>${label}</button>`)}
       <span class="spacer"></span>
+      <a class="help-link" href="game/" title="Over Engineered: a co-op game on this bridge for practicing teamwork">Play the game</a>
       <a class="help-link" href="https://github.com/loganscotsman1-creator/Bridge-Building#readme" target="_blank" rel="noopener">Help</a>
     </nav>
     <main class="content">
