@@ -2,7 +2,7 @@
 import { html, useEffect, useRef, useState } from '../../../js/lib/preact.js';
 import { createGame, results, stepGame } from '../world.js';
 import { draw, makeView } from '../render.js';
-import { deviceName, endFrame, readDevice } from '../input.js';
+import { KEYBOARDS, deviceName, endFrame, readDevice } from '../input.js';
 import { npcList } from './setup.js';
 
 const DT = 1 / 60;
@@ -41,7 +41,7 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart }) {
     stateRef.current = S;
     const devOf = new Map(players.map((p) => [p.id, p.device]));
     const numOf = new Map(players.map((p, i) => [p.id, i + 1]));
-    const ui = { now: 0, banners: [], paused: false, numberOf: (a) => numOf.get(a.id) || '', deviceOf: (a) => deviceName(devOf.get(a.id) || '') };
+    const ui = { now: 0, banners: [], paused: false, numberOf: (a) => numOf.get(a.id) || '', deviceOf: (a) => deviceName(devOf.get(a.id) || ''), keysOf: (a) => KEYBOARDS[devOf.get(a.id)]?.caps || null };
     const canvas = canvasRef.current;
     const g = canvas.getContext('2d');
     let raf, last = performance.now(), acc = 0, startWas = false, finished = false;

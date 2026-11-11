@@ -1,12 +1,13 @@
 // Over Engineered: the game's rules, kept apart from drawing and input so they can be tested.
 //
-// The site is the year's layout (inches, x west → east, y north → south). One staging yard is
-// simplified to two assembly benches and a ready shelf. Builders can't cross the river or leave
-// the site.
+// The site is the year's layout (inches, x west → east, y north → south). The staging yard with
+// the members is split in half: an assembly area anyone can work in, and a ready area on the half
+// facing the bridge where finished items wait. Builders can't cross the river or leave the site.
 //
 // Rules, in short:
-//   - Items (assemblies and single pieces) appear on the ready shelf in the build order: an
-//     assembly once it's made at a bench, a single piece as soon as every assembly before it is.
+//   - Items (assemblies and single pieces) appear in the ready area in the build order: an
+//     assembly once it's made, a single piece as soon as every assembly before it is. Grabbing
+//     from anywhere in or near the ready area always takes the next item in the order.
 //   - A piece is placed where it goes in the bridge (tap A within reach). It needs one bolt if it
 //     touches the bridge at one place, two bolts at two different places if it touches at two or
 //     more. Placing it puts in the first bolt. Until it has its bolts, whoever placed it holds it.
@@ -23,7 +24,7 @@ import { assemblyTime, isAssembly, startFooting } from './order.js';
 
 export const R = 8; // builder radius (in)
 const HOLD_SNAP = 80; // how far away a builder can be to take hold of the bridge
-const STATION_REACH = 26; // reach to a bench or the shelf
+const STATION_REACH = 12; // how close to the assembly or ready area counts as in it
 const ANCHOR_BRIDGE = 16; // how far a holder can lean while holding the bridge
 const ANCHOR_PIECE = 12;
 const SNAP_PUSH = 0.6; // stick push (0..1) that moves a holder to the next lateral...
@@ -68,16 +69,17 @@ export function createGame({ project, order, settings, players, npcs = {} }) {
     : { west: [R, site.width / 2], east: [site.width / 2, site.width - R] };
   const sideOfX = (x) => (river ? (x < river.x + river.w / 2 ? 'west' : 'east') : x < site.width / 2 ? 'west' : 'east');
 
-  // Staging: the yard with the members becomes two benches and a ready shelf, facing the bridge.
+  // Staging: the yard with the members is split in half, the ready area on the half facing the
+  // bridge and the assembly area behind it. Both are open ground: walk in and out freely.
   const area = membersArea(site);
   const cx = area.x + area.w / 2, cy = area.y + area.h / 2;
   const yard = site.zones.find((z) => z.type === 'staging' && cx >= z.x && cx <= z.x + z.w && cy >= z.y && cy <= z.y + z.h) || area;
   const facesWest = yard.x + yard.w / 2 > site.width / 2;
-  const shelf = { x: facesWest ? yard.x + 12 : yard.x + yard.w - 26, y: yard.y + 22, w: 14, h: yard.h - 44 };
-  const benchX = facesWest ? Math.min(yard.x + yard.w - 40, yard.x + 70) : Math.max(yard.x + 10, yard.x + yard.w - 100);
-  const benches = [0.3, 0.72].map((f, i) => ({ id: 'bench' + i, x: benchX, y: yard.y + yard.h * f - 12, w: 30, h: 24, itemId: null, userId: null }));
+  const half = yard.w / 2;
+  const ready = { x: facesWest ? yard.x : yard.x + half, y: yard.y, w: half, h: yard.h };
+  const assembly = { x: facesWest ? yard.x + half : yard.x, y: yard.y, w: half, h: yard.h };
   const stagingSide = sideOfX(yard.x + yard.w / 2);
-  const obstacles = [shelf, ...benches];
+  const obstacles = [];
   const stageZones = site.zones.filter((z) => z.type === 'staging');
 
   // Members, with their outlines on the site.
@@ -107,7 +109,7 @@ export function createGame({ project, order, settings, players, npcs = {} }) {
   const startEdge = F.length ? (dir > 0 ? F[sf][0] : F[sf][1]) : 0;
 
   const S = {
-    t: 0, project, model, site, settings, F, toSite, river, sides, sideOfX, shelf, benches, obstacles, stageZones, stagingSide, yard,
+    t: 0, project, model, site, settings, F, toSite, river, sides, sideOfX, ready, assembly, obstacles, stageZones, stagingSide, yard,
     members, items, itemOf, bolts, installed: new Set(),
     out: (x) => (dir > 0 ? x - startEdge : startEdge - x), dir, startFooting: sf,
     support: { needed: false, standing: false, fallen: false, grace: 0, holders: new Map(), length: 0, grown: 0 },
@@ -119,7 +121,7 @@ export function createGame({ project, order, settings, players, npcs = {} }) {
   const spawn = (side, i, n) => {
     const yards = stageZones.filter((z) => sideOfX(z.x + z.w / 2) === side);
     const z = yards[0] || { x: side === 'west' ? sides.west[0] : sides.east[0], y: 0, w: 60, h: site.depth };
-    const x = z === yard ? (facesWest ? z.x + z.w - 28 : z.x + 28) : z.x + z.w / 2;
+    const x = z === yard ? yard.x + half : z.x + z.w / 2; // between the ready and assembly areas
     return clampPos(S, side, x, z.y + ((i + 1) * z.h) / (n + 1));
   };
   const bySide = { west: players.filter((p) => p.side === 'west'), east: players.filter((p) => p.side === 'east') };
@@ -129,8 +131,7 @@ export function createGame({ project, order, settings, players, npcs = {} }) {
     S.actors.push(newActor(p, pos));
   }
   if (npcs.assembler) {
-    const b = benches[1];
-    S.actors.push(newActor({ id: 'npc-assembler', name: 'Assembler (NPC)', color: '#64748b', side: stagingSide, npc: 'assembler' }, clampPos(S, stagingSide, b.x + (facesWest ? b.w + R + 4 : -R - 4), b.y + b.h / 2)));
+    S.actors.push(newActor({ id: 'npc-assembler', name: 'Assembler (NPC)', color: '#64748b', side: stagingSide, npc: 'assembler' }, clampPos(S, stagingSide, assembly.x + assembly.w / 2, assembly.y + assembly.h * 0.75)));
   }
   if (npcs.holder) {
     const side = F.length ? sideOfX(toSite((F[sf][0] + F[sf][1]) / 2, 0)[0]) : 'west';
@@ -174,7 +175,7 @@ export function clampPos(S, side, x, y) {
 }
 const inStaging = (S, a) => S.stageZones.some((z) => a.x >= z.x - 1 && a.x <= z.x + z.w + 1 && a.y >= z.y - 1 && a.y <= z.y + z.h + 1);
 
-// ---------- the ready shelf ----------
+// ---------- the ready area ----------
 // Single pieces come out as soon as every assembly before them is made; assemblies once they're made.
 export function releaseItems(S) {
   let blocked = false;
@@ -187,11 +188,21 @@ export function releaseItems(S) {
   }
 }
 export const shelfItems = (S) => S.items.filter((it) => it.status === 'shelf');
+// Where an item sits in an area: a grid in build order, squeezed together if there are many.
+function gridSlot(r, i, n) {
+  const cell = 22, cols = Math.max(1, Math.floor((r.w - 8) / cell));
+  const rows = Math.max(1, Math.ceil(n / cols));
+  const dy = Math.min(cell, (r.h - 16) / rows);
+  return { x: r.x + 4 + cell * ((i % cols) + 0.5), y: r.y + 12 + dy * (Math.floor(i / cols) + 0.5) };
+}
 export function shelfSlot(S, item) {
   const list = shelfItems(S);
-  const i = list.indexOf(item);
-  const step = Math.min(16, (S.shelf.h - 8) / Math.max(1, list.length));
-  return { x: S.shelf.x + S.shelf.w / 2, y: S.shelf.y + 8 + step * (i + 0.5) };
+  return gridSlot(S.ready, list.indexOf(item), list.length);
+}
+export const buildingItems = (S) => S.items.filter((it) => it.status === 'building');
+export function benchSlot(S, item) {
+  const list = buildingItems(S);
+  return gridSlot(S.assembly, list.indexOf(item), list.length);
 }
 
 // ---------- the bridge ----------
@@ -427,19 +438,19 @@ function passer(S, a) {
   }
   return best;
 }
+// Anywhere in or near the ready area, grabbing takes the next item in the build order.
+const inReady = (S, a) => distToRect(a.x, a.y, S.ready) <= STATION_REACH;
 function shelfPick(S, a) {
-  if (distToRect(a.x, a.y, S.shelf) > STATION_REACH) return null;
-  let best = null, bd = Infinity;
-  for (const it of shelfItems(S)) { const p = shelfSlot(S, it); const d = dist(p.x, p.y, a.x, a.y); if (d < bd) { bd = d; best = it; } }
-  return best;
+  return inReady(S, a) ? shelfItems(S)[0] || null : null;
 }
-function benchFor(S, a) {
-  for (const b of S.benches) {
-    if (distToRect(a.x, a.y, b) > STATION_REACH) continue;
-    if (b.userId && b.userId !== a.id) continue;
-    if (b.itemId || S.items.some((it) => it.multi && it.status === 'waiting')) return b;
-  }
-  return null;
+// In the assembly area, X works on: what you were making, else one someone left half made, else
+// the next assembly in the order, else helps someone with theirs.
+function assemblyFor(S, a) {
+  if (distToRect(a.x, a.y, S.assembly) > STATION_REACH) return null;
+  if (a.work?.kind === 'assemble' && a.work.target.status === 'building') return a.work.target;
+  const busy = new Set(S.actors.filter((o) => o !== a && o.work?.kind === 'assemble').map((o) => o.work.target));
+  const building = buildingItems(S);
+  return building.find((it) => !busy.has(it)) || S.items.find((it) => it.multi && it.status === 'waiting') || building[0] || null;
 }
 
 export function actionA(S, a) {
@@ -447,7 +458,7 @@ export function actionA(S, a) {
   if (a.carrying) {
     const item = S.items.find((it) => it.id === a.carrying);
     if (canPlace(S, a, item)) return { kind: 'place', label: item.buddy ? 'Set in place' : 'Place + bolt' };
-    if (distToRect(a.x, a.y, S.shelf) <= STATION_REACH) return { kind: 'putback', label: 'Put back' };
+    if (inReady(S, a)) return { kind: 'putback', label: 'Put back' };
     return { kind: 'extend', label: 'Hold to pass' };
   }
   const o = passer(S, a);
@@ -462,8 +473,11 @@ export function actionX(S, a) {
   if (a.anchor?.locked || a.carrying) return null;
   const b = nearestBolt(S, a, 'placed');
   if (b) return { kind: 'fasten', label: 'Fasten', target: b };
-  const bench = benchFor(S, a);
-  if (bench) return { kind: 'assemble', label: 'Assemble', target: bench };
+  const it = assemblyFor(S, a);
+  if (it) {
+    const helping = it.status === 'building' && S.actors.some((o) => o !== a && o.work?.kind === 'assemble' && o.work.target === it);
+    return { kind: 'assemble', label: (helping ? 'Help with #' : 'Assemble #') + (it.idx + 1), target: it };
+  }
   return null;
 }
 export function actionLB(S, a) {
@@ -499,7 +513,7 @@ function doA(S, a, act) {
 function work(S, a, dt) {
   let w = a.work;
   if (w && w.kind === 'fasten' && (w.target.state !== 'placed' || S.support.fallen || dist(w.target.x, w.target.y, a.x, a.y) > S.settings.reach)) w = null;
-  if (w && w.kind === 'assemble' && distToRect(a.x, a.y, w.target) > STATION_REACH) { w.target.userId = null; w = null; }
+  if (w && w.kind === 'assemble' && (w.target.status !== 'building' || distToRect(a.x, a.y, S.assembly) > STATION_REACH)) w = null;
   if (!w) {
     const act = actionX(S, a);
     if (!act) { a.work = null; return false; }
@@ -517,19 +531,13 @@ function work(S, a, dt) {
     }
     return true;
   }
-  const bench = w.target;
-  bench.userId = a.id;
-  if (!bench.itemId) {
-    const next = S.items.find((it) => it.multi && it.status === 'waiting');
-    if (!next) { bench.userId = null; a.work = null; return false; }
-    next.status = 'building';
-    bench.itemId = next.id;
-  }
-  const it = S.items.find((x) => x.id === bench.itemId);
+  // Several builders on one assembly make it faster together.
+  const it = w.target;
+  if (it.status === 'waiting') it.status = 'building';
   it.progress += dt;
   if (it.progress >= it.time) {
     it.status = 'shelf';
-    bench.itemId = null;
+    a.work = null;
     a.stats.assemblies++;
     S.events.push({ kind: 'ready', item: it.id, made: true });
     releaseItems(S);
@@ -613,7 +621,7 @@ export function stepGame(S, inputs, dt) {
     if (!inp.lb && a.prev.lb) letGo(S, a);
     // X: hold to fasten or assemble.
     const busy = inp.x ? work(S, a, dt) : false;
-    if (!inp.x && a.work) { if (a.work.kind === 'assemble') a.work.target.userId = null; a.work = null; }
+    if (!inp.x && a.work) a.work = null;
     a.prev = { a: !!inp.a, x: !!inp.x, lb: !!inp.lb };
 
     a.activity = busy ? a.lastWork
@@ -671,12 +679,11 @@ function goTo(S, a, x, y, tol = 4) {
 function npcThink(S, a, dt) {
   const none = { mx: 0, my: 0, a: false, x: false, lb: false };
   if (a.npc === 'assembler') {
-    const b = S.benches[1];
-    const spot = clampPos(S, a.side, S.shelf.x < b.x ? b.x + b.w + R + 3 : b.x - R - 3, b.y + b.h / 2);
+    const z = S.assembly;
+    const spot = clampPos(S, a.side, z.x + z.w / 2, z.y + z.h * 0.75);
     const g = goTo(S, a, spot.x, spot.y);
     if (!g.there) return { ...none, ...g };
-    const more = b.itemId || S.items.some((it) => it.multi && it.status === 'waiting');
-    return { ...none, x: !!more };
+    return { ...none, x: !!assemblyFor(S, a) };
   }
   // Holder: holds the bridge at the newest lateral it can reach until it stands, then bolts and
   // fastens the buddy pieces.

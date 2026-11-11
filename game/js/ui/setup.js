@@ -9,7 +9,7 @@ import { deviceHelp, deviceName, endFrame, pressedDevices } from '../input.js';
 
 export const PLAYER_COLORS = ['#e11d48', '#2563eb', '#16a34a', '#d97706'];
 
-// Which side each NPC works from: the holder at the first assembly's footing, the assembler at the benches.
+// Which side each NPC works from: the holder at the first assembly's footing, the assembler in the assembly area.
 export function npcSides(project, model, order) {
   const site = project.site;
   const F = footingRanges(project);
@@ -137,7 +137,7 @@ export function Setup({ project, model, from, order, setOrder, setup, setSetup, 
           <button class=${setup.npcRole === 'assembler' ? 'on' : ''} onClick=${() => setSetup({ ...setup, npcRole: 'assembler' })}>NPC makes assemblies</button>
         </div>`}
         ${npcs.holder && html`<p class="oe-hint">The holder (${sides.holder} side) holds the bridge at the newest lateral until it stands, then bolts the buddy pieces.</p>`}
-        ${npcs.assembler && html`<p class="oe-hint">The assembler (${sides.assembler} side) makes every assembly at its set time. Players can use the other bench to get ahead.</p>`}
+        ${npcs.assembler && html`<p class="oe-hint">The assembler (${sides.assembler} side) makes every assembly at its set time. Players can make assemblies alongside it to get ahead.</p>`}
       </section>
 
       <section class="oe-card">
@@ -154,8 +154,8 @@ export function Setup({ project, model, from, order, setOrder, setup, setSetup, 
         <details class="oe-how">
           <summary>How to play</summary>
           <ul>
-            <li><b>A</b>: grab from the shelf or a teammate, place a piece where it goes (puts in its first bolt), place a bolt. Hold A while carrying to pass a piece across.</li>
-            <li><b>X</b> (hold): fasten a nut, or make an assembly at a bench.</li>
+            <li><b>A</b>: grab the next item from the ready area (from anywhere in it) or from a teammate, place a piece where it goes (puts in its first bolt), place a bolt. Hold A while carrying to pass a piece across.</li>
+            <li><b>X</b> (hold): fasten a nut, or make an assembly in the assembly area. Several builders can work there at once, on different assemblies or together on one.</li>
             <li><b>LB</b> (hold): hold the bridge up at a lateral. Push the stick along the bridge to move out to the next lateral. Let go with nobody else holding and it falls.</li>
             <li>A piece touching the bridge in one place needs one bolt; in two or more places, two bolts in different places. Until then whoever placed it holds it. ★ pieces need a buddy to bolt them.</li>
             <li>The bridge stands on its own once it reaches both footings with the trusses tied together. Then fasten everything and get back to a staging yard.</li>

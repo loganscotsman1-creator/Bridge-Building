@@ -1,6 +1,6 @@
 // Drawing the game: a tilted top-down view of the site, with heights shown by lifting things up the
 // screen, so top chords, bottom chords and laterals read as above or below each other.
-import { holdPoints, shelfItems, shelfSlot, R } from './world.js';
+import { benchSlot, buildingItems, holdPoints, shelfItems, shelfSlot, R } from './world.js';
 
 // Screen units per inch of ground depth (y) and of height (z). The ground stretches to fill a
 // tall screen; heights are exaggerated a little so above and below are easy to tell apart.
@@ -85,22 +85,21 @@ export function draw(g, S, V, ui) {
   g.textAlign = 'center';
   for (const z of site.zones) {
     if (!ZONE_FILL[z.type] && z.type !== 'nogo') continue;
-    if (z.type === 'footing') continue;
+    if (z.type === 'footing' || z === S.yard) continue;
     const [x, y] = P(z.x + z.w / 2, z.y + z.h - 6);
     g.fillStyle = z.type === 'nogo' ? 'rgba(255,255,255,0.55)' : 'rgba(15,23,42,0.28)';
-    g.fillText(z === S.yard ? 'Assembly benches + ready shelf' : z.name, x, y);
+    g.fillText(z.name, x, y);
   }
 
-  // Staging: the ready shelf and the benches.
-  const box3 = (r, h, top, side) => {
-    poly(g, [P(r.x, r.y + r.h, 0), P(r.x + r.w, r.y + r.h, 0), P(r.x + r.w, r.y + r.h, h), P(r.x, r.y + r.h, h)]);
-    g.fillStyle = side; g.fill();
-    poly(g, [P(r.x, r.y, h), P(r.x + r.w, r.y, h), P(r.x + r.w, r.y + r.h, h), P(r.x, r.y + r.h, h)]);
-    g.fillStyle = top; g.fill();
-    g.strokeStyle = 'rgba(0,0,0,0.25)'; g.lineWidth = 1; g.stroke();
-  };
-  box3(S.shelf, 10, '#c89b62', '#9a7142');
-  for (const b of S.benches) box3(b, 12, '#94a3b8', '#64748b');
+  // Staging: the ready area and the assembly area, side by side in the yard.
+  for (const [r, fill, edge, name] of [[S.ready, 'rgba(250,204,21,0.22)', '#ca8a04', 'Ready area'], [S.assembly, 'rgba(37,99,235,0.16)', '#2563eb', 'Assembly area']]) {
+    poly(g, ground(r.x + 2, r.y + 2, r.w - 4, r.h - 4));
+    g.fillStyle = fill; g.fill();
+    g.setLineDash([6, 4]); g.strokeStyle = edge; g.lineWidth = 1.5; g.stroke(); g.setLineDash([]);
+    const [x, y] = P(r.x + r.w / 2, r.y + r.h - 6);
+    g.fillStyle = 'rgba(15,23,42,0.4)'; g.textAlign = 'center';
+    g.fillText(name, x, y);
+  }
 
   // The bridge still to build, faintly.
   const carriedBy = new Map(S.actors.filter((a) => a.carrying).map((a) => [a.carrying, a]));
@@ -154,24 +153,25 @@ export function draw(g, S, V, ui) {
     }
   }
 
-  // Shelf items and bench progress
-  for (const it of shelfItems(S)) {
+  // Items waiting in the ready area (the next one to be grabbed is ringed), and assemblies being made.
+  shelfItems(S).forEach((it, i) => {
     const p = shelfSlot(S, it);
-    const [x, y] = P(p.x, p.y, 11);
-    drawPieceIcon(g, x, y, it, k, '#334155');
+    const [x, y] = P(p.x, p.y, 2);
+    if (i === 0) { g.strokeStyle = '#ca8a04'; g.lineWidth = 2.5; g.beginPath(); g.ellipse(x, y - 4, k * 10, k * 6, 0, 0, 7); g.stroke(); }
+    drawPieceIcon(g, x, y, it, k, i === 0 ? '#0f172a' : '#475569');
+  });
+  for (const it of buildingItems(S)) {
+    const p = benchSlot(S, it);
+    const [x, y] = P(p.x, p.y, 2);
+    drawPieceIcon(g, x, y, it, k, '#1e3a8a');
+    const w = 18 * k;
+    g.fillStyle = 'rgba(15,23,42,0.6)'; g.fillRect(x - w / 2, y + 6, w, 5);
+    g.fillStyle = '#22c55e'; g.fillRect(x - w / 2, y + 6, (w * it.progress) / it.time, 5);
   }
-  for (const b of S.benches) {
-    const it = b.itemId && S.items.find((x) => x.id === b.itemId);
-    const [x, y] = P(b.x + b.w / 2, b.y + b.h / 2, 13);
-    if (it) {
-      drawPieceIcon(g, x, y, it, k, '#1e3a8a');
-      const w = b.w * k;
-      g.fillStyle = 'rgba(15,23,42,0.6)'; g.fillRect(x - w / 2, y + 10, w, 6);
-      g.fillStyle = '#22c55e'; g.fillRect(x - w / 2, y + 10, (w * it.progress) / it.time, 6);
-    } else if (S.items.some((x) => x.multi && x.status === 'waiting')) {
-      g.fillStyle = 'rgba(15,23,42,0.55)'; g.font = `600 ${Math.max(10, k * 3.4)}px system-ui`; g.textAlign = 'center';
-      g.fillText('Hold X to assemble', x, y + 4);
-    }
+  if (!buildingItems(S).length && S.items.some((x) => x.multi && x.status === 'waiting')) {
+    const [x, y] = P(S.assembly.x + S.assembly.w / 2, S.assembly.y + S.assembly.h * 0.4, 0);
+    g.fillStyle = 'rgba(15,23,42,0.5)'; g.font = `600 ${Math.max(10, k * 3.4)}px system-ui`; g.textAlign = 'center';
+    g.fillText('Hold X here to assemble', x, y);
   }
 
   // Where to hold the bridge.
@@ -282,21 +282,26 @@ function drawActorTop(g, S, V, a, ui) {
   if (a.npc || !a.prompt) return;
   const chips = [['A', a.prompt.A], ['X', a.prompt.X], ['LB', a.prompt.LB]].filter(([, p]) => p && p.kind !== 'holding');
   if (!chips.length) return;
-  g.font = `600 ${Math.max(10, k * 3.4)}px system-ui`;
+  // Keyboard players see their keys; controller players see the buttons.
+  const keyOf = ui.keysOf(a);
+  const cap = (b) => (keyOf ? keyOf[b] : b);
   const pad = 4, gap = 4, bh = Math.max(15, k * 5.4);
-  const widths = chips.map(([b, p]) => g.measureText(p.label).width + bh + pad * 2 + (b === 'LB' ? 6 : 0));
+  g.font = `800 ${Math.max(9, k * 3)}px system-ui`;
+  const bws = chips.map(([b]) => Math.max(bh - 4, g.measureText(cap(b)).width + 10));
+  g.font = `600 ${Math.max(10, k * 3.4)}px system-ui`;
+  const widths = chips.map(([, p], i) => g.measureText(p.label).width + bws[i] + pad * 2 + 6);
   const total = widths.reduce((s, w) => s + w, 0) + gap * (chips.length - 1);
   let cx = x - total / 2;
   const cy = y - bh - 6;
   chips.forEach(([b, p], i) => {
     rrect(g, cx, cy, widths[i], bh, bh / 2);
     g.fillStyle = 'rgba(15,23,42,0.85)'; g.fill();
-    const bw = b === 'LB' ? bh + 6 : bh - 4;
+    const bw = bws[i];
     rrect(g, cx + 2, cy + 2, bw, bh - 4, (bh - 4) / 2);
     g.fillStyle = BTN[b]; g.fill();
     g.fillStyle = '#fff'; g.textAlign = 'center'; g.textBaseline = 'middle';
     g.font = `800 ${Math.max(9, k * 3)}px system-ui`;
-    g.fillText(b, cx + 2 + bw / 2, cy + bh / 2 + 0.5);
+    g.fillText(cap(b), cx + 2 + bw / 2, cy + bh / 2 + 0.5);
     g.font = `600 ${Math.max(10, k * 3.4)}px system-ui`;
     g.textAlign = 'left';
     g.fillText(p.label, cx + bw + 6, cy + bh / 2 + 0.5);

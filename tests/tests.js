@@ -12,7 +12,7 @@ import { assemblyConnections, defaultView, layOutAssembly, membersArea, stagedPo
 import { stateAt } from '../js/sim/playback.js';
 import { TOURS, dueTour } from '../js/ui/Tour.js';
 import { defaultOrder, orderProblems } from '../game/js/order.js';
-import { clampPos, createGame, defaultSettings, holdPoints, itemDist, shelfItems, stepGame } from '../game/js/world.js';
+import { clampPos, createGame, defaultSettings, holdPoints, itemDist, shelfItems, shelfSlot, stepGame } from '../game/js/world.js';
 import { applyAssembly, connectionChoices, dissolveAssembly, dropSlot, insertAtSlot, onStagingSide, pieceChoices, planChecks, removeTask, taskBlocks, taskGroup } from '../js/model/timeline.js';
 
 const results = [];
@@ -999,8 +999,8 @@ await test('game: the default order starts with a three-piece assembly, and must
 await test('game: assemblies come out when made, single pieces once every assembly before them is', () => {
   const { S, hold, put, tick } = game();
   assert(!shelfItems(S).length, 'nothing ready at the start: the first item is an assembly');
-  const b = S.benches[0];
-  put('p2', b.x - 12, b.y + b.h / 2);
+  const b = S.assembly;
+  put('p2', b.x + b.w / 2, b.y + b.h / 2);
   hold('p2', 'x', true);
   tick(S.items[0].time + 0.2);
   assert(S.items[0].status === 'shelf', 'first assembly made: ' + S.items[0].status);
@@ -1012,13 +1012,40 @@ await test('game: assemblies come out when made, single pieces once every assemb
   assert(S.actors.find((a) => a.id === 'p2').stats.assemblies === 2);
 });
 
+await test('game: several builders work in the one assembly area, apart or together', () => {
+  const { S, hold, put, tick, actor } = game({ players: [['p1', 'east'], ['p2', 'east'], ['p3', 'east']] });
+  const z = S.assembly;
+  put('p1', z.x + 20, z.y + 40); put('p2', z.x + 50, z.y + 140);
+  hold('p1', 'x', true); hold('p2', 'x', true); tick(0.5);
+  assert(S.items[0].status === 'building' && S.items[1].status === 'building', 'two builders, two assemblies at once');
+  hold('p1', 'x', false); hold('p2', 'x', false); tick();
+  hold('p1', 'x', true); tick(0.1);
+  assert(actor('p1').work.target === S.items[0], 'resumes the earliest half-made assembly');
+  hold('p2', 'x', true); tick(0.1);
+  assert(actor('p2').work.target === S.items[1], 'the other picks up the other one');
+  hold('p2', 'x', false); tick();
+  put('p3', z.x + 30, z.y + 90); hold('p3', 'x', true); tick(0.1);
+  assert(actor('p3').work.target === S.items[1], 'a third builder takes the unattended one');
+  hold('p3', 'x', false); tick();
+  // Nothing else to make: help.
+  for (const it of S.items) if (it.multi && it.status === 'waiting') it.status = 'shelf';
+  S.items[1].status = 'shelf';
+  const left = S.items[0].time - S.items[0].progress;
+  put('p2', z.x + 30, z.y + 60); hold('p2', 'x', true); tick(0.1);
+  assert(actor('p2').work.target === S.items[0], 'nothing else to make: helps with #1');
+  tick(left / 2 + 0.2);
+  assert(S.items[0].status === 'shelf', 'two builders on one assembly make it about twice as fast');
+});
+
 await test('game: pieces are passed across the river by holding A', () => {
   const { S, press, hold, put, tick, actor } = game();
   S.items[0].status = 'shelf';
-  const sh = S.shelf;
-  put('p2', sh.x - 12, sh.y + 10);
+  S.items[1].status = 'shelf';
+  const far = shelfSlot(S, S.items[1]);
+  put('p2', far.x, far.y);
   press('p2', 'a');
-  assert(actor('p2').carrying === S.items[0].id, 'grabbed from the shelf');
+  assert(actor('p2').carrying === S.items[0].id, 'grabbed the next item in the order, wherever they stood in the ready area');
+  assert(!S.obstacles.length, 'the ready and assembly areas are open ground');
   put('p2', S.river.x + S.river.w, 90);
   put('p1', S.river.x, 90);
   hold('p2', 'a', true); tick(0.2);

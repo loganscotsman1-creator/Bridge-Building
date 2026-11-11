@@ -1,8 +1,8 @@
 // The build order: the list of assemblies and single pieces, in the order they become available
-// on the ready shelf. Each item is {id, memberIds, buddy, time}:
+// in the ready area. Each item is {id, memberIds, buddy, time}:
 //   buddy – large or awkward: whoever carries it into place can only hold it there, and someone
 //           else has to bolt it
-//   time  – seconds to make the assembly at a bench (null = worked out from the project's timing)
+//   time  – seconds to make the assembly (null = worked out from the project's timing)
 import { buildModel, footingRanges } from '../../js/model/geometry.js';
 import { activePlan } from '../../js/model/schema.js';
 import { autoOrderSteps, planUnits } from '../../js/model/plan.js';
@@ -58,7 +58,7 @@ export function orderProblems(order, model, rules = {}) {
   return out;
 }
 
-// Seconds to make an assembly at a bench: each connection inside it lined up and its nuts fastened.
+// Seconds for one builder to make an assembly: each connection inside it lined up and its nuts fastened.
 export function assemblyTime(item, project, model, fastenTime) {
   if (item.time != null) return item.time;
   if (!isAssembly(item)) return 0;
