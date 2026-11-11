@@ -11,6 +11,7 @@ import { snapBox, snapPoint, snapSize } from '../js/ui/snap.js';
 import { assemblyConnections, defaultView, layOutAssembly, membersArea, stagedPoly, stagingSpots, viewSizes } from '../js/model/plan.js';
 import { stateAt } from '../js/sim/playback.js';
 import { TOURS, dueTour } from '../js/ui/Tour.js';
+import { feetInches, parseLength, snapZoneEdge, snapZoneMove } from '../js/model/zonesnap.js';
 import { defaultOrder, orderProblems } from '../game/js/order.js';
 import { clampPos, createGame, defaultSettings, holdPoints, itemDist, shelfItems, shelfSlot, stepGame } from '../game/js/world.js';
 import { applyAssembly, connectionChoices, dissolveAssembly, dropSlot, insertAtSlot, onStagingSide, pieceChoices, planChecks, removeTask, taskBlocks, taskGroup } from '../js/model/timeline.js';
@@ -947,6 +948,28 @@ await test('the tutorial: the intro first, each tab once, and again only when it
   seen.design = TOURS.design.v - 1;
   assert(dueTour('design', seen) === 'design', 'shown again after an update');
   for (const [id, t] of Object.entries(TOURS)) assert(t.steps.length >= 1 && t.steps.length <= 3, id + ' stays brief');
+});
+
+await test('site zones snap to the site edges and to each other, and lengths can be typed in feet', () => {
+  const site = { width: 720, depth: 180, zones: [
+    { id: 'a', x: 0, y: 0, w: 60, h: 180 },
+    { id: 'b', x: 100, y: 20, w: 50, h: 40 },
+  ] };
+  const b = site.zones[1];
+  let m = snapZoneMove(site, b, 64, 3, 6);
+  assert(m.x === 60 && m.y === 0, 'west edge onto zone a, north edge onto the site: ' + JSON.stringify(m));
+  assert(m.guides.length === 2, 'both lines shown');
+  m = snapZoneMove(site, b, 667, 137, 6);
+  assert(m.x === 670 && m.y === 140, 'east edge onto the site east edge, south edge onto the site south edge: ' + JSON.stringify(m));
+  m = snapZoneMove(site, b, 300, 70, 6);
+  assert(m.x === 300 && m.y === 70 && !m.guides.length, 'nothing near: stays put');
+  assert(snapZoneMove(site, b, 64, 3, 0).x === 64, 'no snapping with no tolerance (Alt held)');
+  assert(snapZoneEdge(site, b, 'x', 716, 6).at === 720 && snapZoneEdge(site, b, 'y', 176, 6).at === 180, 'resized edges snap to the site');
+  assert(snapZoneEdge(site, b, 'x', 57, 6).at === 60, 'and to other zones');
+  assert(parseLength('150') === 150 && parseLength('150 in') === 150 && parseLength('150"') === 150, 'inches');
+  assert(parseLength("12'") === 144 && parseLength("12' 6\"") === 150 && parseLength('12 ft 6 in') === 150 && parseLength('2.5ft') === 30, 'feet and inches');
+  assert(parseLength('abc') === null && parseLength('') === null, 'not a length');
+  assert(feetInches(150) === "12' 6\"" && feetInches(144) === "12'" && feetInches(8) === '8"', feetInches(150) + ' ' + feetInches(144) + ' ' + feetInches(8));
 });
 
 // ---------- Over Engineered (the game) ----------

@@ -1,6 +1,6 @@
 // Site tab: lay out the staging yards, construction zones, footings, river and other zones,
 // place the bridge, say where builders, tools and members start, and set this year's rules.
-import { html, useEffect, useState } from '../lib/preact.js';
+import { html, useEffect, useRef, useState } from '../lib/preact.js';
 import { updateProject } from '../model/store.js';
 import { uid } from '../model/ids.js';
 import { ZONE_TYPES, normalizeSite } from '../model/schema.js';
@@ -8,6 +8,7 @@ import { site2027 } from '../model/rules2027.js';
 import { stagingSpots } from '../model/plan.js';
 import { deleteMySite, downloadJSON, fetchLibrarySite, fetchSiteLibrary, mySites, pickFile, readJSONFile, safeFilename, saveMySite, siteForSharing } from '../model/storage.js';
 import { PlanView } from './PlanView.js';
+import { feetInches, parseLength } from '../model/zonesnap.js';
 import { Check, Hint, NumField, Section, SelectField, TextField } from './common.js';
 
 export function SiteTab({ project, model }) {
@@ -40,15 +41,15 @@ export function SiteTab({ project, model }) {
         }}>Reset to 2027 layout</button>
       </div>
       <${PlanView} project=${project} model=${model} spots=${spots} sel=${sel} setSel=${setSel} editable=${true} />
-      <div class="hint-bar">Drag zones, corners, the bridge, builders, tools and members to place them. Scroll to zoom, drag empty space to pan.</div>
+      <div class="hint-bar">Drag zones, corners, the bridge, builders, tools and members to place them. Zones snap to the site's edges and to each other (hold Alt to place freely). Scroll to zoom, drag empty space to pan.</div>
     </div>
     <aside class="side">
       ${sel && html`<${SelectedPanel} project=${project} sel=${sel} setSel=${setSel} />`}
       <${Section} title="Site">
         <${TextField} label="Layout name" value=${site.name} onChange=${(v) => updateProject((p) => { p.site.name = v; }, { key: 'sname' })} />
         <${TextField} label="Competition year" value=${site.year} onChange=${(v) => updateProject((p) => { p.site.year = v; }, { key: 'syear' })} />
-        <${NumField} label="Width (x)" unit="in" value=${site.width} min=${24} onChange=${(v) => updateProject((p) => { p.site.width = v; }, { key: 'sw' })} />
-        <${NumField} label="Depth (y)" unit="in" value=${site.depth} min=${24} onChange=${(v) => updateProject((p) => { p.site.depth = v; }, { key: 'sd' })} />
+        <${LengthField} label="Width (x)" value=${site.width} min=${24} onChange=${(v) => updateProject((p) => { p.site.width = v; }, { key: 'sw' })} />
+        <${LengthField} label="Depth (y)" value=${site.depth} min=${24} onChange=${(v) => updateProject((p) => { p.site.depth = v; }, { key: 'sd' })} />
         <${NumField} label="Bridge rotation" unit="°" value=${site.bridge.rotation} onChange=${(v) => updateProject((p) => { p.site.bridge.rotation = v; }, { key: 'srot' })} />
         <${NumField} label="Path grid" unit="in" value=${site.cell} min=${2} title="Smaller is more precise around zone edges but slower" onChange=${(v) => updateProject((p) => { p.site.cell = v; }, { key: 'scell' })} />
         <label class="field col"><span class="lbl">Notes</span><textarea rows="2" value=${site.notes} onInput=${(e) => updateProject((p) => { p.site.notes = e.target.value; }, { key: 'snotes' })}></textarea></label>
@@ -74,11 +75,22 @@ function SelectedPanel({ project, sel, setSel }) {
     return html`<${Section} title="Zone">
       <${TextField} label="Name" value=${z.name} onChange=${(v) => set((x) => { x.name = v; })} />
       <${SelectField} label="Type" value=${z.type} options=${Object.entries(ZONE_TYPES).map(([k, v]) => [k, v.label])} onChange=${(v) => set((x) => { x.type = v; })} />
-      <div class="row2">
-        <${NumField} label="x" unit="in" value=${z.x} onChange=${(v) => set((x) => { x.x = v; })} />
-        <${NumField} label="y" unit="in" value=${z.y} onChange=${(v) => set((x) => { x.y = v; })} />
-        <${NumField} label="Width" unit="in" value=${z.w} min=${1} onChange=${(v) => set((x) => { x.w = v; })} />
-        <${NumField} label="Depth" unit="in" value=${z.h} min=${1} onChange=${(v) => set((x) => { x.h = v; })} />
+      <${Hint}>Type inches (150) or feet and inches (12' 6"). The site is ${feetInches(site.width)} × ${feetInches(site.depth)}.<//>
+      <div class="row2 zone-dims">
+        <${LengthField} label="Width" value=${z.w} min=${1} onChange=${(v) => set((x) => { x.w = v; })} />
+        <${LengthField} label="Depth" value=${z.h} min=${1} onChange=${(v) => set((x) => { x.h = v; })} />
+        <${LengthField} label="West edge (x)" value=${z.x} title="Distance from the site's west edge" onChange=${(v) => set((x) => { x.x = v; })} />
+        <${LengthField} label="North edge (y)" value=${z.y} title="Distance from the site's north edge" onChange=${(v) => set((x) => { x.y = v; })} />
+        <${LengthField} label="East edge" value=${z.x + z.w} title="Keeps the west edge where it is and changes the width" onChange=${(v) => set((x) => { x.w = Math.max(1, v - x.x); })} />
+        <${LengthField} label="South edge" value=${z.y + z.h} title="Keeps the north edge where it is and changes the depth" onChange=${(v) => set((x) => { x.h = Math.max(1, v - x.y); })} />
+      </div>
+      <div class="row wrap">
+        <span class="muted">Move to the site's</span>
+        <button class="small" title="West edge" onClick=${() => set((x) => { x.x = 0; })}>West</button>
+        <button class="small" title="East edge" onClick=${() => set((x) => { x.x = site.width - x.w; })}>East</button>
+        <button class="small" title="North edge" onClick=${() => set((x) => { x.y = 0; })}>North</button>
+        <button class="small" title="South edge" onClick=${() => set((x) => { x.y = site.depth - x.h; })}>South</button>
+        <button class="small" title="Stretch to the full depth of the site" onClick=${() => set((x) => { x.y = 0; x.h = site.depth; })}>Full depth</button>
       </div>
       <button class="danger" onClick=${() => { updateProject((p) => { p.site.zones = p.site.zones.filter((x) => x.id !== sel.id); }); setSel(null); }}>Delete zone</button>
     <//>`;
@@ -106,6 +118,29 @@ function SelectedPanel({ project, sel, setSel }) {
   }
   return null;
 }
+
+// A length in inches that can also be typed in feet and inches (12' 6"). Shows feet next to it.
+function LengthField({ label, value, onChange, min, title }) {
+  const [text, setText] = useState(fmt(value));
+  const focused = useRef(false);
+  useEffect(() => { if (!focused.current) setText(fmt(value)); }, [value]);
+  const n = parseLength(text);
+  return html`<label class="field" title=${title}>
+    <span class="lbl">${label}</span>
+    <span class="inp">
+      <input type="text" class=${'len' + (n == null ? ' bad' : '')} value=${text}
+        onFocus=${() => { focused.current = true; }}
+        onBlur=${() => { focused.current = false; setText(fmt(value)); }}
+        onInput=${(e) => {
+          setText(e.target.value);
+          const v = parseLength(e.target.value);
+          if (v != null) onChange(min != null ? Math.max(min, v) : v);
+        }} />
+      <em title=${feetInches(value)}>in</em>
+    </span>
+  </label>`;
+}
+const fmt = (v) => (Number.isFinite(v) ? String(Math.round(v * 100) / 100) : '');
 
 // The numbers from this year's rules that the simulator checks. They're saved with the layout.
 function RulesPanel({ project }) {

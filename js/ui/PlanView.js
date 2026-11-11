@@ -1,12 +1,13 @@
 // Top-down site plan: zones, the bridge footprint, staging piles, tools, builders.
 // In edit mode things can be dragged; in playback mode it draws the simulation state at time t.
-import { html, useMemo, useRef } from '../lib/preact.js';
+import { html, useMemo, useRef, useState } from '../lib/preact.js';
 import { updateProject } from '../model/store.js';
 import { uid } from '../model/ids.js';
 import { ZONE_TYPES } from '../model/schema.js';
 import { stagedPoly } from '../model/plan.js';
 import { bridgeToSite, pointInPoly } from '../model/geometry.js';
 import { useCamera, gridLines } from './camera.js';
+import { snapZoneEdge, snapZoneMove } from '../model/zonesnap.js';
 
 const STATUS_COLORS = { held: '#f97316', working: '#eab308', stable: '#475569', unstable: '#dc2626' };
 export const BOLT_COLORS = { fastened: '#16a34a', inserted: '#f59e0b', working: '#eab308', moving: '#2563eb', todo: '#94a3b8' };
@@ -18,6 +19,7 @@ export function PlanView({ project, model, spots, state = null, sel, setSel, edi
   const { toScreen, toWorld, eventPos } = cam;
   const k = cam.cam.k;
   const dragRef = useRef(null);
+  const [guides, setGuides] = useState([]); // snap lines to draw while a zone is dragged
   const S = (p) => toScreen(p.x, p.y);
   const isSel = (type, id) => sel && sel.type === type && sel.id === id;
 
@@ -84,22 +86,32 @@ export function PlanView({ project, model, spots, state = null, sel, setSel, edi
     const { sx, sy } = eventPos(e);
     const w = toWorld(sx, sy);
     const dx = Math.round(w.u - d.start.x), dy = Math.round(w.v - d.start.y);
+    // Zones snap to the site's edges and each other's edges (hold Alt to place freely).
+    const tol = e.altKey ? 0 : 8 / k;
+    let g = [];
     updateProject((p) => {
       const s = p.site;
-      if (d.type === 'zone') { const z = s.zones.find((x) => x.id === d.id); z.x = d.orig.x + dx; z.y = d.orig.y + dy; }
-      else if (d.type === 'corner') {
+      if (d.type === 'zone') {
+        const z = s.zones.find((x) => x.id === d.id);
+        const m = snapZoneMove(s, z, d.orig.x + dx, d.orig.y + dy, tol);
+        z.x = m.x; z.y = m.y; g = m.guides;
+      } else if (d.type === 'corner') {
         const z = s.zones.find((x) => x.id === d.id), o = d.orig;
         const left = d.corner === 0 || d.corner === 2, top = d.corner === 0 || d.corner === 1;
-        if (left) { z.x = Math.min(o.x + o.w - 6, o.x + dx); z.w = o.x + o.w - z.x; } else z.w = Math.max(6, o.w + dx);
-        if (top) { z.y = Math.min(o.y + o.h - 6, o.y + dy); z.h = o.y + o.h - z.y; } else z.h = Math.max(6, o.h + dy);
+        const ex = snapZoneEdge(s, z, 'x', left ? o.x + dx : o.x + o.w + dx, tol);
+        const ey = snapZoneEdge(s, z, 'y', top ? o.y + dy : o.y + o.h + dy, tol);
+        if (left) { z.x = Math.min(o.x + o.w - 6, ex.at); z.w = o.x + o.w - z.x; } else { z.x = o.x; z.w = Math.max(6, ex.at - o.x); }
+        if (top) { z.y = Math.min(o.y + o.h - 6, ey.at); z.h = o.y + o.h - z.y; } else { z.y = o.y; z.h = Math.max(6, ey.at - o.y); }
+        g = [ex.guide, ey.guide].filter(Boolean);
       } else if (d.type === 'bridge') { s.bridge.x = d.orig.x + dx; s.bridge.y = d.orig.y + dy; }
       else if (d.type === 'builder') { const b = p.builders.find((x) => x.id === d.id); b.start = { x: d.orig.x + dx, y: d.orig.y + dy }; }
       else if (d.type === 'tool') { const t = p.tools.find((x) => x.id === d.id); t.start = { x: d.orig.x + dx, y: d.orig.y + dy }; }
       else if (d.type === 'piece') s.staging[d.id] = { x: d.orig.x + dx, y: d.orig.y + dy, rot: d.orig.rot, ...(d.orig.view ? { view: d.orig.view } : {}) };
     }, { key: d.key });
+    if (d.type === 'zone' || d.type === 'corner' || guides.length) setGuides(g);
   };
 
-  const onPointerUp = () => { cam.endPan(); dragRef.current = null; };
+  const onPointerUp = () => { cam.endPan(); dragRef.current = null; if (guides.length) setGuides([]); };
 
   // --- drawing ---
   const els = [];
@@ -126,6 +138,13 @@ export function PlanView({ project, model, spots, state = null, sel, setSel, edi
       ${selZ && editable && [[a.x, a.y], [b.x, a.y], [a.x, b.y], [b.x, b.y]].map(([x, y], i) => html`<rect key=${i} x=${x - 5} y=${y - 5} width="10" height="10" fill="#fff" stroke=${color} stroke-width="2" />`)}
     </g>`);
   }
+
+  // Lines a dragged zone has snapped to.
+  guides.forEach((gd, i) => {
+    const a = gd.axis === 'x' ? S({ x: gd.at, y: 0 }) : S({ x: 0, y: gd.at });
+    const b = gd.axis === 'x' ? S({ x: gd.at, y: site.depth }) : S({ x: site.width, y: gd.at });
+    els.push(html`<line key=${'g' + i} x1=${a.x} y1=${a.y} x2=${b.x} y2=${b.y} stroke="#db2777" stroke-width="1.5" stroke-dasharray="5 3" />`);
+  });
 
   // Bridge
   for (const m of model.members) {
