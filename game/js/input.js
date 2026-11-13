@@ -41,17 +41,17 @@ export function readDevice(id) {
     return {
       mx: (keys.has(k.right) ? 1 : 0) - (keys.has(k.left) ? 1 : 0),
       my: (keys.has(k.down) ? 1 : 0) - (keys.has(k.up) ? 1 : 0),
-      a: down(k.a), x: down(k.x), lb: down(k.lb), start: down(k.start),
+      a: down(k.a), x: down(k.x), y: false, b: false, lb: down(k.lb), start: down(k.start),
     };
   }
   const p = pads()[+id.slice(3)];
-  if (!p || !p.connected) return { mx: 0, my: 0, a: false, x: false, lb: false, start: false };
+  if (!p || !p.connected) return { mx: 0, my: 0, a: false, x: false, y: false, b: false, lb: false, start: false };
   const btn = (i) => !!(p.buttons[i] && (p.buttons[i].pressed || p.buttons[i].value > 0.5));
   let mx = p.axes[0] || 0, my = p.axes[1] || 0;
   const m = Math.hypot(mx, my);
   if (m < 0.22) { mx = 0; my = 0; } else { const s = Math.min(1, (m - 0.22) / 0.7) / m; mx *= s; my *= s; }
   if (btn(14)) mx = -1; if (btn(15)) mx = 1; if (btn(12)) my = -1; if (btn(13)) my = 1;
-  return { mx, my, a: btn(0), x: btn(2) || btn(1), lb: btn(4) || btn(6), start: btn(9) };
+  return { mx, my, a: btn(0), x: btn(2) || btn(1), y: btn(3), b: btn(1), lb: btn(4) || btn(6), start: btn(9) };
 }
 
 // Devices with A (or Space / slash) pressed right now, for joining.

@@ -125,3 +125,13 @@ body.playing { overflow: hidden; }
 .oe-brief-tips { margin: 14px 0 0; padding-left: 18px; color: #cbd5e1; font-size: 13px; line-height: 1.6; }
 .oe-brief-go { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 16px; color: #94a3b8; font-size: 13px; }
 .oe-brief-back { margin-top: 10px; background: none; border: none; color: #94a3b8; text-decoration: underline; cursor: pointer; padding: 0; font-size: 13px; }
+
+.oe-navfocus { outline: 3px solid #facc15; outline-offset: 3px; border-radius: 8px; }
+.oe-num.oe-navfocus { background: rgba(250, 204, 21, 0.08); }
+.oe-padhint { color: #64748b; font-size: 11px; }
+.oe-padhint kbd, .oe-osk kbd { font-size: 10px; }
+.oe-osk { display: grid; grid-template-columns: repeat(6, 1fr); gap: 3px; margin-top: 2px; }
+.oe-osk .k { text-align: center; padding: 3px 0; border-radius: 5px; background: #1e293b; color: #cbd5e1; font: 700 11px system-ui; }
+.oe-osk .k.wide { font-size: 10px; }
+.oe-osk .k.on { background: #facc15; color: #1c1917; }
+.oe-osk small { grid-column: 1 / -1; color: #64748b; font-size: 10px; text-align: center; }

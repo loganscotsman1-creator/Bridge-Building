@@ -29,7 +29,9 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart }) {
     const ui = { now: 0, banners: [], fx: [], shakeUntil: 0, muted: isMuted(), countdown: 3, briefing: true, paused: false, numberOf: (a) => numOf.get(a.id) || '', deviceOf: (a) => deviceName(devOf.get(a.id) || ''), keysOf: (a) => KEYBOARDS[devOf.get(a.id)]?.caps || null };
     const canvas = canvasRef.current;
     const g = canvas.getContext('2d');
-    let raf, last = performance.now(), acc = 0, startWas = false, finished = false, finishedAt = 0;
+    // startWas starts true: a Start press that began the game on the setup screen must be let go
+    // before it counts here, or it would skip straight past the controls window.
+    let raf, last = performance.now(), acc = 0, startWas = true, finished = false, finishedAt = 0;
     const itemLabel = (id) => '#' + (S.items.find((x) => x.id === id).idx + 1);
     unlock();
     let lastCount = 4;

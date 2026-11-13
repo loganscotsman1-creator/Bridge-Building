@@ -27,7 +27,9 @@ takes to fasten.
 
 - **Setup:** players join by pressing A on a controller (any the browser sees: Xbox,
   PlayStation, Switch Pro…) or Space / slash for two players on one keyboard, and pick a side of
-  the river. With 5 builders an NPC either holds the bridge or makes the assemblies; with 6 there
+  the river. With a controller, X switches side and Y opens an on-screen keyboard for a name
+  (A types, B deletes, Y is done). Player 1 can also set the builders and times from their
+  controller (stick up/down to pick, left/right to change) and press Start to begin. With 5 builders an NPC either holds the bridge or makes the assemblies; with 6 there
   is one of each.
 - **Build order:** click pieces on the 3D bridge in the order they come in, grouping up to three
   into an assembly. The first item must be a three-piece assembly. Mark large or awkward items
