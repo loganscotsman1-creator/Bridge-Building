@@ -13,7 +13,7 @@ import { stateAt } from '../js/sim/playback.js';
 import { TOURS, dueTour } from '../js/ui/Tour.js';
 import { feetInches, parseLength, snapZoneEdge, snapZoneMove } from '../js/model/zonesnap.js';
 import { defaultOrder, orderProblems } from '../game/js/order.js';
-import { clampPos, createGame, defaultSettings, holdPoints, itemDist, shelfItems, shelfSlot, stepGame } from '../game/js/world.js';
+import { clampPos, createGame, defaultSettings, holdPoints, itemBox, itemDist, readyLayout, shelfItems, shelfSlot, stepGame } from '../game/js/world.js';
 import { applyAssembly, connectionChoices, dissolveAssembly, dropSlot, insertAtSlot, onStagingSide, pieceChoices, planChecks, removeTask, taskBlocks, taskGroup } from '../js/model/timeline.js';
 
 const results = [];
@@ -1035,10 +1035,26 @@ await test('game: assemblies come out when made, single pieces once every assemb
   assert(S.actors.find((a) => a.id === 'p2').stats.assemblies === 2);
 });
 
+await test('game: staging is split north and south, and ready items stand at full size inside the ready area', () => {
+  const { S } = game();
+  assert(S.ready.x === S.assembly.x && S.ready.w === S.assembly.w && S.ready.y + S.ready.h === S.assembly.y, 'north/south halves: ' + JSON.stringify([S.ready, S.assembly]));
+  for (const it of S.items.slice(0, 8)) it.status = 'shelf';
+  const lay = readyLayout(S);
+  assert(lay.size === 8, 'every ready item has a place');
+  for (const [it, sl] of lay) {
+    const b = itemBox(S, it);
+    const x0 = b.x0 + sl.dx, x1 = b.x1 + sl.dx, y1 = b.y1 + sl.dy;
+    assert(x0 >= S.ready.x - 0.01 && x1 <= S.ready.x + S.ready.w + 0.01, `#${it.idx + 1} fits across: ${x0.toFixed(1)}..${x1.toFixed(1)}`);
+    assert(y1 <= S.ready.y + S.ready.h + 0.01 && b.y0 + sl.dy >= S.ready.y - 0.01, `#${it.idx + 1} fits from north to south`);
+    assert(Math.abs(b.x1 - b.x0 - (x1 - x0)) < 1e-9 && Math.abs(b.z0 + sl.dz) < 1e-9, 'full size, standing on the ground');
+  }
+  assert(S.settings.walkSpeed > 54 && S.items[0].time < 20, 'quicker than real life by default: ' + S.items[0].time);
+});
+
 await test('game: several builders work in the one assembly area, apart or together', () => {
   const { S, hold, put, tick, actor } = game({ players: [['p1', 'east'], ['p2', 'east'], ['p3', 'east']] });
   const z = S.assembly;
-  put('p1', z.x + 20, z.y + 40); put('p2', z.x + 50, z.y + 140);
+  put('p1', z.x + 20, z.y + 20); put('p2', z.x + 110, z.y + 70);
   hold('p1', 'x', true); hold('p2', 'x', true); tick(0.5);
   assert(S.items[0].status === 'building' && S.items[1].status === 'building', 'two builders, two assemblies at once');
   hold('p1', 'x', false); hold('p2', 'x', false); tick();
@@ -1047,14 +1063,14 @@ await test('game: several builders work in the one assembly area, apart or toget
   hold('p2', 'x', true); tick(0.1);
   assert(actor('p2').work.target === S.items[1], 'the other picks up the other one');
   hold('p2', 'x', false); tick();
-  put('p3', z.x + 30, z.y + 90); hold('p3', 'x', true); tick(0.1);
+  put('p3', z.x + 60, z.y + 45); hold('p3', 'x', true); tick(0.1);
   assert(actor('p3').work.target === S.items[1], 'a third builder takes the unattended one');
   hold('p3', 'x', false); tick();
   // Nothing else to make: help.
   for (const it of S.items) if (it.multi && it.status === 'waiting') it.status = 'shelf';
   S.items[1].status = 'shelf';
   const left = S.items[0].time - S.items[0].progress;
-  put('p2', z.x + 30, z.y + 60); hold('p2', 'x', true); tick(0.1);
+  put('p2', z.x + 30, z.y + 50); hold('p2', 'x', true); tick(0.1);
   assert(actor('p2').work.target === S.items[0], 'nothing else to make: helps with #1');
   tick(left / 2 + 0.2);
   assert(S.items[0].status === 'shelf', 'two builders on one assembly make it about twice as fast');

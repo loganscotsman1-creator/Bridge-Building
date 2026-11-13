@@ -2,7 +2,7 @@
 // to three into an assembly, and mark the awkward ones as needing a buddy.
 import { html, useState } from '../../../js/lib/preact.js';
 import { IsoView } from '../../../js/ui/IsoView.js';
-import { assemblyTime, defaultOrder, itemId, orderProblems } from '../order.js';
+import { gameAssemblyTime, defaultOrder, itemId, orderProblems } from '../order.js';
 
 const hue = (i, n) => `hsl(${Math.round(220 - (200 * i) / Math.max(1, n - 1))} 70% 50%)`;
 const hex = (i, n) => {
@@ -82,7 +82,7 @@ export function OrderEditor({ project, model, order, setOrder, settings, onDone 
               <label class="oe-chk" title="Large or awkward: whoever carries it into place can only hold it there, and someone else bolts it">
                 <input type="checkbox" checked=${it.buddy} onChange=${(e) => patch(it.id, { buddy: e.target.checked })} /> Needs a buddy ★
               </label>
-              ${it.memberIds.length > 1 && html`<label class="oe-chk">Make in <input type="number" min="1" step="any" value=${it.time ?? ''} placeholder=${assemblyTime({ ...it, time: null }, project, model, settings.fastenTime)}
+              ${it.memberIds.length > 1 && html`<label class="oe-chk">Make in <input type="number" min="1" step="any" value=${it.time ?? ''} placeholder=${gameAssemblyTime({ ...it, time: null }, project, model, settings)}
                 onInput=${(e) => { const v = parseFloat(e.target.value); patch(it.id, { time: Number.isFinite(v) && v > 0 ? v : null }); }} /> s</label>`}
             </div>
           </div>

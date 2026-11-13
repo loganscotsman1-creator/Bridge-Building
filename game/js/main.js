@@ -4,7 +4,7 @@ import { buildModel } from '../../js/model/geometry.js';
 import { loadAutosave } from '../../js/model/storage.js';
 import { normalizeProject } from '../../js/model/schema.js';
 import { createExampleProject } from '../../js/model/example.js';
-import { defaultFastenTime, defaultOrder, readOrderFile } from './order.js';
+import { defaultOrder, gameFastenTime, readOrderFile } from './order.js';
 import { defaultSettings } from './world.js';
 import { Setup } from './ui/setup.js';
 import { OrderEditor } from './ui/ordereditor.js';
@@ -12,6 +12,7 @@ import { Play } from './ui/play.js';
 import { Results } from './ui/results.js';
 
 const SETUP_KEY = 'oe.setup.v1';
+const SETTINGS_VERSION = 2;
 const CURRENT_KEY = 'oe.current.v1';
 
 function loadProject() {
@@ -40,7 +41,9 @@ function App() {
   const setOrder = (items) => { setOrderState(items); writeJSON(CURRENT_KEY, { projectName: project.name, items }); };
   const [setup, setSetupState] = useState(() => {
     const s = readJSON(SETUP_KEY, {});
-    return { builders: 4, npcRole: 'holder', players: [], ...s, settings: { ...defaultSettings(project, defaultFastenTime(project)), ...(s.settings || {}) } };
+    // Settings saved before the game's pace changed are dropped, so everyone gets the new defaults.
+    const saved = s.settingsVersion === SETTINGS_VERSION ? s.settings || {} : {};
+    return { builders: 4, npcRole: 'holder', players: [], ...s, settingsVersion: SETTINGS_VERSION, settings: { ...defaultSettings(project, gameFastenTime(project)), ...saved } };
   });
   const setSetup = (s) => { setSetupState(s); writeJSON(SETUP_KEY, { ...s, players: s.players.map((p) => ({ ...p })) }); };
   const [screen, setScreen] = useState('setup');
@@ -53,7 +56,7 @@ function App() {
     setSource({ project: np, from: src });
     setOrderState(defaultOrder(np, m));
     writeJSON(CURRENT_KEY, null);
-    setSetup({ ...setup, settings: { ...setup.settings, fastenTime: defaultFastenTime(np) } });
+    setSetup({ ...setup, settings: { ...setup.settings, fastenTime: gameFastenTime(np) } });
   };
 
   useEffect(() => { document.body.classList.toggle('playing', screen === 'play'); }, [screen]);

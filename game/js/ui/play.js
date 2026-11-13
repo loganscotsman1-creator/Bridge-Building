@@ -1,32 +1,12 @@
 // The game itself: a full-window canvas, a fixed-step loop, controllers in, sounds out.
 import { html, useEffect, useRef, useState } from '../../../js/lib/preact.js';
-import { createGame, results, stepGame } from '../world.js';
-import { draw, makeView } from '../render.js';
+import { createGame, results, shelfSlot, stepGame } from '../world.js';
+import { addFx, draw, makeView } from '../render.js';
+import { SFX, isMuted, setMuted, unlock } from '../sound.js';
 import { KEYBOARDS, deviceName, endFrame, readDevice } from '../input.js';
 import { npcList } from './setup.js';
 
 const DT = 1 / 60;
-
-// Tiny synth sounds, so nothing needs downloading.
-let audio = null;
-function beep(freq, dur = 0.08, type = 'square', vol = 0.05, slide = 0) {
-  try {
-    audio = audio || new AudioContext();
-    const o = audio.createOscillator(), g = audio.createGain();
-    o.type = type; o.frequency.value = freq;
-    if (slide) o.frequency.linearRampToValueAtTime(freq + slide, audio.currentTime + dur);
-    g.gain.value = vol;
-    g.gain.exponentialRampToValueAtTime(0.0001, audio.currentTime + dur);
-    o.connect(g).connect(audio.destination);
-    o.start(); o.stop(audio.currentTime + dur);
-  } catch { /* no audio */ }
-}
-const SOUNDS = {
-  grab: () => beep(520, 0.05), pass: () => beep(660, 0.08, 'triangle'), place: () => beep(330, 0.12, 'square', 0.06),
-  bolt: () => beep(880, 0.04), fastened: () => beep(990, 0.09, 'triangle', 0.05, 300), secure: () => beep(740, 0.12, 'triangle'),
-  ready: () => beep(600, 0.1, 'sine', 0.05, 200), fall: () => beep(200, 0.5, 'sawtooth', 0.08, -150), stands: () => { beep(523, 0.15, 'triangle'); setTimeout(() => beep(784, 0.25, 'triangle'), 150); },
-  held: () => beep(440, 0.1, 'triangle'), done: () => [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => beep(f, 0.2, 'triangle', 0.06), i * 130)),
-};
 
 export function Play({ project, order, setup, onFinish, onQuit, onRestart }) {
   const canvasRef = useRef(null);
@@ -34,6 +14,7 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart }) {
   const pausedRef = useRef(false);
   pausedRef.current = paused;
   const stateRef = useRef(null);
+  const [soundOn, setSoundOn] = useState(!isMuted());
 
   useEffect(() => {
     const players = setup.players.map((p, i) => ({ id: 'p' + (i + 1), name: p.name, color: p.color, side: p.side, device: p.device }));
@@ -41,11 +22,51 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart }) {
     stateRef.current = S;
     const devOf = new Map(players.map((p) => [p.id, p.device]));
     const numOf = new Map(players.map((p, i) => [p.id, i + 1]));
-    const ui = { now: 0, banners: [], paused: false, numberOf: (a) => numOf.get(a.id) || '', deviceOf: (a) => deviceName(devOf.get(a.id) || ''), keysOf: (a) => KEYBOARDS[devOf.get(a.id)]?.caps || null };
+    const ui = { now: 0, banners: [], fx: [], shakeUntil: 0, muted: isMuted(), paused: false, numberOf: (a) => numOf.get(a.id) || '', deviceOf: (a) => deviceName(devOf.get(a.id) || ''), keysOf: (a) => KEYBOARDS[devOf.get(a.id)]?.caps || null };
     const canvas = canvasRef.current;
     const g = canvas.getContext('2d');
-    let raf, last = performance.now(), acc = 0, startWas = false, finished = false;
+    let raf, last = performance.now(), acc = 0, startWas = false, finished = false, finishedAt = 0;
     const itemLabel = (id) => '#' + (S.items.find((x) => x.id === id).idx + 1);
+    unlock();
+    const onKey = (e) => { if (e.code === 'KeyM' || e.key === 'm' || e.key === 'M') { setMuted(!isMuted()); ui.muted = isMuted(); } };
+    window.addEventListener('keydown', onKey);
+
+    // Where an event happened, for its effect.
+    const actorAt = (id) => S.actors.find((a) => a.id === id);
+    const itemAt = (id) => {
+      const it = S.items.find((x) => x.id === id);
+      const pts = it.memberIds.flatMap((m) => S.members.get(m).m.corners3);
+      const xy = it.memberIds.flatMap((m) => S.members.get(m).poly);
+      return { x: xy.reduce((t, q) => t + q[0], 0) / xy.length, y: xy.reduce((t, q) => t + q[1], 0) / xy.length, z: pts.reduce((t, q) => t + q[2], 0) / pts.length };
+    };
+    const bridgeAt = () => {
+      const xy = [...S.installed].flatMap((m) => S.members.get(m).poly);
+      return xy.length ? { x: xy.reduce((t, q) => t + q[0], 0) / xy.length, y: xy.reduce((t, q) => t + q[1], 0) / xy.length, z: 16 } : { x: S.site.width / 2, y: S.site.depth / 2, z: 16 };
+    };
+    const boltAt = (id) => S.bolts.find((b) => b.id === id);
+    const effect = (e) => {
+      if (e.kind === 'fastened') { const b = boltAt(e.bolt); addFx(ui, 'sparks', b.x, b.y, b.z); addFx(ui, 'ring', b.x, b.y, b.z, { color: '#22c55e', size: 8 }); }
+      else if (e.kind === 'bolt') { const b = boltAt(e.bolt); addFx(ui, 'ring', b.x, b.y, b.z, { color: '#fff', size: 6 }); }
+      else if (e.kind === 'flash') { const b = boltAt(e.bolt); addFx(ui, 'ring', b.x, b.y, b.z, { color: '#ef4444', size: 10 }); }
+      else if (e.kind === 'place') { const p = itemAt(e.item); addFx(ui, 'dust', p.x, p.y, Math.max(0, p.z - 8)); }
+      else if (e.kind === 'secure') { const p = itemAt(e.item); addFx(ui, 'ring', p.x, p.y, p.z, { color: '#22c55e', size: 18, life: 0.6 }); }
+      else if (e.kind === 'grab') { const a = actorAt(e.by); addFx(ui, 'ring', a.x, a.y, 0, { color: a.color, size: 10 }); }
+      else if (e.kind === 'pass') { const a = actorAt(e.from), b = actorAt(e.to); addFx(ui, 'swoosh', a.x, a.y, 0, { x2: b.x, y2: b.y, color: b.color }); }
+      else if (e.kind === 'ready' && e.made) { const sl = shelfSlot(S, S.items.find((x) => x.id === e.item)); if (sl) { addFx(ui, 'ring', sl.x, sl.y, 0, { color: '#facc15', size: 24, life: 0.7 }); addFx(ui, 'dust', sl.x, sl.y, 0); } }
+      else if (e.kind === 'fall') { const p = bridgeAt(); addFx(ui, 'splash', p.x, p.y, p.z); addFx(ui, 'text', p.x, p.y, p.z + 10, { text: '+' + S.settings.fallPenalty + ' s', color: '#f87171', life: 1.8 }); ui.shakeUntil = ui.now + 0.6; }
+      else if (e.kind === 'held') { for (const id of S.support.holders.keys()) { const a = actorAt(id); addFx(ui, 'ring', a.x, a.y, 0, { color: '#22c55e', size: 14 }); } }
+      else if (e.kind === 'stands') { const p = bridgeAt(); addFx(ui, 'confetti', p.x, p.y, p.z, { n: 90 }); addFx(ui, 'text', p.x, p.y, p.z + 14, { text: 'It stands!', color: '#4ade80', life: 2 }); }
+      else if (e.kind === 'done') { const p = bridgeAt(); addFx(ui, 'confetti', p.x, p.y, p.z, { n: 200 }); addFx(ui, 'text', p.x, p.y, p.z + 16, { text: 'BUILT!', color: '#facc15', life: 2.4 }); }
+    };
+    // Sounds that repeat while something keeps happening.
+    const loops = { ratchet: 0, hammer: 0, alarm: 0, step: 0 };
+    const loopSounds = (dt) => {
+      const every = (name, on, period) => { if (!on) { loops[name] = 0; return; } loops[name] -= dt; if (loops[name] <= 0) { SFX[name](); loops[name] = period; } };
+      every('ratchet', S.actors.some((a) => a.work?.kind === 'fasten'), 0.09);
+      every('hammer', S.actors.some((a) => a.work?.kind === 'assemble'), 0.39);
+      every('alarm', S.support.needed && !S.support.holders.size && !S.support.fallen && !S.support.standing, 0.5);
+      every('step', S.actors.some((a) => !a.npc && a.moving), 0.27);
+    };
 
     const frame = (ts) => {
       const W = canvas.clientWidth, H = canvas.clientHeight, dpr = window.devicePixelRatio || 1;
@@ -60,27 +81,31 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart }) {
       last = ts;
       ui.now += dtReal;
       ui.paused = pausedRef.current;
+      ui.muted = isMuted();
       if (!pausedRef.current && !finished) {
         acc += dtReal;
         let stepped = false;
         while (acc >= DT) { stepGame(S, inputs, DT); acc -= DT; stepped = true; }
         if (stepped) endFrame(); // (a tap waits for the next step)
+        if (stepped) loopSounds(dtReal);
         for (const e of S.events.splice(0)) {
-          SOUNDS[e.kind]?.();
+          SFX[e.kind]?.();
+          effect(e);
           const text = e.kind === 'fall' ? `Bridge fell! +${S.settings.fallPenalty} s` : e.kind === 'stands' ? 'The bridge stands on its own!' : e.kind === 'ready' && e.made ? itemLabel(e.item) + ' is ready' : e.kind === 'held' ? 'Holding again: back to work' : null;
           if (text) ui.banners.push({ text, color: e.kind === 'fall' ? '#dc2626' : e.kind === 'ready' ? '#2563eb' : '#16a34a', t0: ui.now });
-          if (e.kind === 'done') finished = true;
+          if (e.kind === 'done') { finished = true; finishedAt = ui.now; }
         }
         if (ui.banners.length > 6) ui.banners.splice(0, ui.banners.length - 6);
       }
       g.setTransform(dpr, 0, 0, dpr, 0, 0);
       draw(g, S, makeView(S, W, H), ui);
-      if (finished) { cancelAnimationFrame(raf); setTimeout(() => onFinish(results(S)), 1200); return; }
+      // Let the confetti fly for a moment before the results.
+      if (finished && ui.now - finishedAt > 2.8) { onFinish(results(S)); return; }
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
     window.__oeGame = S; // for debugging in the console
-    return () => cancelAnimationFrame(raf);
+    return () => { cancelAnimationFrame(raf); window.removeEventListener('keydown', onKey); };
   }, []);
 
   return html`<div class="oe-play">
@@ -89,6 +114,7 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart }) {
       <div class="oe-pause-card">
         <h2>Paused</h2>
         <button class="oe-go" onClick=${() => setPaused(false)}>Resume</button>
+        <button onClick=${() => { setMuted(!isMuted()); setSoundOn(!isMuted()); }}>Sound: ${soundOn ? 'on' : 'off'} (M)</button>
         <button onClick=${onRestart}>Restart</button>
         <button onClick=${() => onFinish(results(stateRef.current))}>End and see results</button>
         <button onClick=${onQuit}>Back to setup</button>

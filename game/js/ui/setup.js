@@ -4,7 +4,7 @@ import { bridgeToSite, footingRanges } from '../../../js/model/geometry.js';
 import { membersArea, sideOf } from '../../../js/model/plan.js';
 import { downloadJSON, pickFile, readJSONFile, safeFilename } from '../../../js/model/storage.js';
 import { createExampleProject } from '../../../js/model/example.js';
-import { assemblyTime, deleteSavedOrder, itemName, orderFile, orderProblems, readOrderFile, saveOrder, savedOrders, startFooting } from '../order.js';
+import { gameAssemblyTime, deleteSavedOrder, itemName, orderFile, orderProblems, readOrderFile, saveOrder, savedOrders, startFooting } from '../order.js';
 import { deviceHelp, deviceName, endFrame, pressedDevices } from '../input.js';
 
 export const PLAYER_COLORS = ['#e11d48', '#2563eb', '#16a34a', '#d97706'];
@@ -143,6 +143,7 @@ export function Setup({ project, model, from, order, setOrder, setup, setSetup, 
       <section class="oe-card">
         <h2>3 · Times</h2>
         <${Num} label="Fasten one nut (hold X)" unit="s" value=${setup.settings.fastenTime} onChange=${(v) => setS({ fastenTime: v })} />
+        <${Num} label="Assembly times, share of the sequencer's" unit="×" value=${setup.settings.assemblyScale ?? 1} onChange=${(v) => setS({ assemblyScale: v })} />
         <${Num} label="Penalty when the bridge falls" unit="s" value=${setup.settings.fallPenalty} onChange=${(v) => setS({ fallPenalty: v })} />
         <${Num} label="Time to take hold of the bridge" unit="s" value=${setup.settings.grace} onChange=${(v) => setS({ grace: v })} />
         <${Num} label="Unfastened bolts flash after" unit="s" value=${setup.settings.neglect} onChange=${(v) => setS({ neglect: v })} />
@@ -150,7 +151,7 @@ export function Setup({ project, model, from, order, setOrder, setup, setSetup, 
         <${Num} label="Carrying speed" unit="in/s" value=${setup.settings.carrySpeed} onChange=${(v) => setS({ carrySpeed: v })} />
         <${Num} label="Reach" unit="in" value=${setup.settings.reach} onChange=${(v) => setS({ reach: v })} />
         <${Num} label="Reach to pass a piece" unit="in" value=${setup.settings.passReach} onChange=${(v) => setS({ passReach: v })} />
-        <p class="oe-hint">Assembly times are set per assembly in the order editor.</p>
+        <p class="oe-hint">An assembly's own time can be set in the order editor. Defaults keep the game moving: quicker nuts and assemblies, brisker walking.</p>
         <details class="oe-how">
           <summary>How to play</summary>
           <ul>
@@ -181,7 +182,7 @@ function OrderSummary({ project, model, order, settings }) {
       <span class="n">${i + 1}</span>
       <span class="nm">${itemName(it, model)}</span>
       ${it.buddy && html`<span class="buddy" title="Needs a buddy to bolt it">★</span>`}
-      ${it.memberIds.length > 1 && html`<span class="tm">${assemblyTime(it, project, model, settings.fastenTime)} s</span>`}
+      ${it.memberIds.length > 1 && html`<span class="tm">${gameAssemblyTime(it, project, model, settings)} s</span>`}
     </li>`)}
   </ol>`;
 }

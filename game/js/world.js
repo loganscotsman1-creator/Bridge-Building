@@ -1,8 +1,8 @@
 // Over Engineered: the game's rules, kept apart from drawing and input so they can be tested.
 //
 // The site is the year's layout (inches, x west → east, y north → south). The staging yard with
-// the members is split in half: an assembly area anyone can work in, and a ready area on the half
-// facing the bridge where finished items wait. Builders can't cross the river or leave the site.
+// the members is split in half, north and south: a ready area where finished items wait at full
+// size, and an assembly area anyone can work in. Builders can't cross the river or leave the site.
 //
 // Rules, in short:
 //   - Items (assemblies and single pieces) appear in the ready area in the build order: an
@@ -20,7 +20,7 @@
 //   - Done when every piece is in, every nut is fastened and everyone is back in a staging yard.
 import { buildModel, bridgeToSite, distToSegment2, footingRanges, pointInPoly } from '../../js/model/geometry.js';
 import { membersArea } from '../../js/model/plan.js';
-import { assemblyTime, isAssembly, startFooting } from './order.js';
+import { gameAssemblyTime, isAssembly, startFooting } from './order.js';
 
 export const R = 8; // builder radius (in)
 const HOLD_SNAP = 80; // how far away a builder can be to take hold of the bridge
@@ -38,11 +38,12 @@ export function defaultSettings(project, fastenTime) {
   const tm = project.timing;
   return {
     fastenTime, // s to fasten one nut (hold X)
-    fallPenalty: 30, // s added when the bridge falls
+    assemblyScale: 0.4, // assemblies take this share of the sequencer's time (a game moves quicker)
+    fallPenalty: 20, // s added when the bridge falls
     grace: 3, // s to take hold once the bridge needs holding
     neglect: 6, // s before an unfastened bolt starts flashing
-    walkSpeed: tm.walkSpeed || 54,
-    carrySpeed: tm.carrySpeed || 36,
+    walkSpeed: Math.round((tm.walkSpeed || 54) * 1.35),
+    carrySpeed: Math.round((tm.carrySpeed || 36) * 1.5),
     reach: tm.maxReach || 40,
     passReach: tm.passReach || 90,
   };
@@ -69,15 +70,14 @@ export function createGame({ project, order, settings, players, npcs = {} }) {
     : { west: [R, site.width / 2], east: [site.width / 2, site.width - R] };
   const sideOfX = (x) => (river ? (x < river.x + river.w / 2 ? 'west' : 'east') : x < site.width / 2 ? 'west' : 'east');
 
-  // Staging: the yard with the members is split in half, the ready area on the half facing the
-  // bridge and the assembly area behind it. Both are open ground: walk in and out freely.
+  // Staging: the yard with the members is split in half across its depth, the ready area to the
+  // north and the assembly area to the south. Both are open ground: walk in and out freely.
   const area = membersArea(site);
   const cx = area.x + area.w / 2, cy = area.y + area.h / 2;
   const yard = site.zones.find((z) => z.type === 'staging' && cx >= z.x && cx <= z.x + z.w && cy >= z.y && cy <= z.y + z.h) || area;
-  const facesWest = yard.x + yard.w / 2 > site.width / 2;
-  const half = yard.w / 2;
-  const ready = { x: facesWest ? yard.x : yard.x + half, y: yard.y, w: half, h: yard.h };
-  const assembly = { x: facesWest ? yard.x + half : yard.x, y: yard.y, w: half, h: yard.h };
+  const half = yard.h / 2;
+  const ready = { x: yard.x, y: yard.y, w: yard.w, h: half };
+  const assembly = { x: yard.x, y: yard.y + half, w: yard.w, h: yard.h - half };
   const stagingSide = sideOfX(yard.x + yard.w / 2);
   const obstacles = [];
   const stageZones = site.zones.filter((z) => z.type === 'staging');
@@ -93,7 +93,7 @@ export function createGame({ project, order, settings, players, npcs = {} }) {
 
   const items = order.map((it, i) => ({
     ...it, idx: i, multi: isAssembly(it), status: 'waiting', progress: 0,
-    time: assemblyTime(it, project, model, settings.fastenTime), loose: null,
+    time: gameAssemblyTime(it, project, model, settings), loose: null,
   }));
   const itemOf = new Map();
   for (const it of items) for (const id of it.memberIds) itemOf.set(id, it);
@@ -121,8 +121,9 @@ export function createGame({ project, order, settings, players, npcs = {} }) {
   const spawn = (side, i, n) => {
     const yards = stageZones.filter((z) => sideOfX(z.x + z.w / 2) === side);
     const z = yards[0] || { x: side === 'west' ? sides.west[0] : sides.east[0], y: 0, w: 60, h: site.depth };
-    const x = z === yard ? yard.x + half : z.x + z.w / 2; // between the ready and assembly areas
-    return clampPos(S, side, x, z.y + ((i + 1) * z.h) / (n + 1));
+    // In the yard, spread out along the line between the ready and assembly areas.
+    if (z === yard) return clampPos(S, side, z.x + ((i + 1) * z.w) / (n + 1), yard.y + half);
+    return clampPos(S, side, z.x + z.w / 2, z.y + ((i + 1) * z.h) / (n + 1));
   };
   const bySide = { west: players.filter((p) => p.side === 'west'), east: players.filter((p) => p.side === 'east') };
   for (const p of players) {
@@ -131,7 +132,7 @@ export function createGame({ project, order, settings, players, npcs = {} }) {
     S.actors.push(newActor(p, pos));
   }
   if (npcs.assembler) {
-    S.actors.push(newActor({ id: 'npc-assembler', name: 'Assembler (NPC)', color: '#64748b', side: stagingSide, npc: 'assembler' }, clampPos(S, stagingSide, assembly.x + assembly.w / 2, assembly.y + assembly.h * 0.75)));
+    S.actors.push(newActor({ id: 'npc-assembler', name: 'Assembler (NPC)', color: '#64748b', side: stagingSide, npc: 'assembler' }, clampPos(S, stagingSide, assembly.x + assembly.w * 0.8, assembly.y + assembly.h * 0.5)));
   }
   if (npcs.holder) {
     const side = F.length ? sideOfX(toSite((F[sf][0] + F[sf][1]) / 2, 0)[0]) : 'west';
@@ -188,22 +189,63 @@ export function releaseItems(S) {
   }
 }
 export const shelfItems = (S) => S.items.filter((it) => it.status === 'shelf');
-// Where an item sits in an area: a grid in build order, squeezed together if there are many.
-function gridSlot(r, i, n) {
-  const cell = 22, cols = Math.max(1, Math.floor((r.w - 8) / cell));
-  const rows = Math.max(1, Math.ceil(n / cols));
-  const dy = Math.min(cell, (r.h - 16) / rows);
-  return { x: r.x + 4 + cell * ((i % cols) + 0.5), y: r.y + 12 + dy * (Math.floor(i / cols) + 0.5) };
+// An item at full size: its outline as it sits in the bridge, as a box on the site (in, z up).
+export function itemBox(S, it) {
+  if (it.box) return it.box;
+  const b = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity, z0: Infinity, z1: -Infinity };
+  for (const id of it.memberIds) {
+    const mm = S.members.get(id);
+    if (!mm) continue;
+    const h = mm.m.thick / 2, lat = mm.m.plane === 'L';
+    for (const c of mm.m.corners3) {
+      for (const sg of [-1, 1]) {
+        const [x, y] = mm.toSite(c[0], c[1] + (lat ? 0 : sg * h));
+        const z = c[2] + (lat ? sg * h : 0);
+        b.x0 = Math.min(b.x0, x); b.x1 = Math.max(b.x1, x);
+        b.y0 = Math.min(b.y0, y); b.y1 = Math.max(b.y1, y);
+        b.z0 = Math.min(b.z0, z); b.z1 = Math.max(b.z1, z);
+      }
+    }
+  }
+  return (it.box = b);
 }
-export function shelfSlot(S, item) {
-  const list = shelfItems(S);
-  return gridSlot(S.ready, list.indexOf(item), list.length);
+// Roughly how much ground depth one inch of height covers on screen.
+const LIFT = 1.2;
+// Lay items out at full size, the way they'd stand in the bridge, in build order in rows across an
+// area. Rows are squeezed together (overlapping) if they don't all fit. Each item gets the shift
+// to draw it there ({dx, dy, dz}) and where its middle is on the ground ({x, y}).
+function layout(S, area, list) {
+  const pad = 4, out = new Map(), rows = [];
+  let row = null;
+  for (const it of list) {
+    const b = itemBox(S, it), w = b.x1 - b.x0, h = b.y1 - b.y0 + (b.z1 - b.z0) * LIFT;
+    if (!row || (row.items.length && row.w + w > area.w - 2 * pad)) { row = { items: [], w: 0, h: 0 }; rows.push(row); }
+    row.items.push({ it, b, w });
+    row.w += w + pad;
+    row.h = Math.max(row.h, h);
+  }
+  const avail = area.h - 2 * pad - 12; // leave room for the area's name
+  const last = rows.length ? rows[rows.length - 1].h : 0;
+  const total = rows.reduce((t, r) => t + r.h + pad, -pad);
+  const squeeze = rows.length > 1 && total > avail ? Math.max(0.15, (avail - last) / (total - last)) : 1;
+  let y = area.y + pad;
+  for (const r of rows) {
+    let x = area.x + pad + Math.max(0, (area.w - 2 * pad - (r.w - pad)) / 2);
+    const ground = y + r.h; // everything in a row stands on the same line
+    for (const q of r.items) {
+      const dx = x - q.b.x0, dy = ground - q.b.y1;
+      out.set(q.it, { dx, dy, dz: -q.b.z0, x: x + q.w / 2, y: ground - (q.b.y1 - q.b.y0) / 2 });
+      x += q.w + pad;
+    }
+    y += (r.h + pad) * squeeze;
+  }
+  return out;
 }
+export const readyLayout = (S) => layout(S, S.ready, shelfItems(S));
 export const buildingItems = (S) => S.items.filter((it) => it.status === 'building');
-export function benchSlot(S, item) {
-  const list = buildingItems(S);
-  return gridSlot(S.assembly, list.indexOf(item), list.length);
-}
+export const benchLayout = (S) => layout(S, S.assembly, buildingItems(S));
+export const shelfSlot = (S, item) => readyLayout(S).get(item);
+export const benchSlot = (S, item) => benchLayout(S).get(item);
 
 // ---------- the bridge ----------
 const isOn = (S, b) => b.memberIds.filter((id) => S.installed.has(id)).length >= 2;
@@ -652,7 +694,7 @@ export function stepGame(S, inputs, dt) {
   for (const b of S.bolts) {
     if (b.state !== 'placed') continue;
     const f = S.t - b.workedAt > S.settings.neglect;
-    if (f && !b.flashing) S.neglected++;
+    if (f && !b.flashing) { S.neglected++; S.events.push({ kind: 'flash', bolt: b.id }); }
     b.flashing = f;
   }
 
@@ -680,7 +722,7 @@ function npcThink(S, a, dt) {
   const none = { mx: 0, my: 0, a: false, x: false, lb: false };
   if (a.npc === 'assembler') {
     const z = S.assembly;
-    const spot = clampPos(S, a.side, z.x + z.w / 2, z.y + z.h * 0.75);
+    const spot = clampPos(S, a.side, z.x + z.w * 0.8, z.y + z.h * 0.5);
     const g = goTo(S, a, spot.x, spot.y);
     if (!g.there) return { ...none, ...g };
     return { ...none, x: !!assemblyFor(S, a) };
