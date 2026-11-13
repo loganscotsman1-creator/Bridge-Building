@@ -190,8 +190,30 @@ const SONGS = {
   },
 };
 
+// Music only plays while the page is actually on screen. A hidden tab, a minimized window or a
+// frozen preview stops the browser drawing frames; when frames stop, the music holds (and the
+// audio is suspended while the page is hidden), then picks up where it left off.
+// "Drawing" means at least 8 frames in the last half second, so a page throttled to a frame now
+// and then (a hidden preview, a background tab) counts as stopped rather than stuttering along.
+const frames = [];
+let held = false, watching = false;
+const drawing = () => { const now = performance.now(); return frames.filter((t) => now - t < 500).length >= 8; };
+function watchFrames() {
+  if (watching || typeof requestAnimationFrame === 'undefined') return;
+  watching = true;
+  const beat = () => { frames.push(performance.now()); if (frames.length > 20) frames.shift(); requestAnimationFrame(beat); };
+  requestAnimationFrame(beat);
+  document.addEventListener('visibilitychange', () => {
+    if (!ctx) return;
+    if (document.hidden) ctx.suspend(); else ctx.resume();
+  });
+}
 function tick() {
   if (!ctx || !song) return;
+  watchFrames();
+  held = document.hidden || !drawing();
+  if (held) return;
+  if (nextAt < ctx.currentTime) nextAt = ctx.currentTime + 0.05; // back on screen: no catch-up burst
   while (nextAt < ctx.currentTime + 0.25) { song.play(step, nextAt); step++; nextAt += song.step; }
 }
 const levelNow = () => (!musicOn || !song ? 0 : ducked ? song.level * 0.35 : song.level);
@@ -235,6 +257,8 @@ export function playSong(name) {
 }
 export function stopMusic() { fadeOut(); songName = null; }
 export const nowPlaying = () => (timer ? songName : null);
+// For checking: is the music holding because the page isn't drawing?
+export const musicHeld = () => held;
 // Countdown: three beeps then a higher one for GO.
 SFX.count = () => tone(660, 0.18, { type: 'square', vol: 0.09 });
 SFX.go = () => { tone(1320, 0.4, { type: 'square', vol: 0.1 }); tone(990, 0.4, { type: 'triangle', vol: 0.08 }); };
