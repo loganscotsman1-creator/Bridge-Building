@@ -1226,6 +1226,19 @@ await test('game: computers build the whole bridge by themselves, working down t
   assert(holder.stats.holdTotal > 5 && holder.stats.boltsPlaced + holder.stats.nutsFastened > 0, 'the holder held the bridge and bolted while holding');
 });
 
+await test('game: pieces set on the far footing, not yet joined on, do not make the bridge longer', () => {
+  const { S, place, hold, tick, put } = game({ players: [['p1', 'west'], ['p2', 'west'], ['p3', 'east']] });
+  place('p1', S.items[0]);
+  const pt = holdPoints(S)[0];
+  put('p2', pt.x, pt.y); hold('p2', 'lb', true); tick();
+  place('p1', S.items[1]);
+  assert(S.support.grown === 1 && S.support.holders.get('p2').stale === 1, 'both trusses reach out: grown once');
+  const byName = (n) => S.items.find((it) => it.memberIds.length === 1 && S.members.get(it.memberIds[0]).m.name === n);
+  for (const n of ['A-P2', 'B-P2']) place('p3', byName(n));
+  assert(byName('A-P2').status === 'placed' && byName('B-P2').status === 'placed', 'both far piers are in');
+  assert(S.support.grown === 1 && !S.falls.length, 'the far end standing on its own footing is not growth, and nothing falls: ' + JSON.stringify({ grown: S.support.grown, falls: S.falls }));
+});
+
 await test('game: NPCs make assemblies at their set time and hold the bridge until it stands', () => {
   const { S, tick } = game({ players: [['p1', 'west']], npcs: { assembler: true } });
   const t0 = S.items[0].time;

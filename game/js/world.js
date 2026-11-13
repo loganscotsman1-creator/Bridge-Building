@@ -361,23 +361,48 @@ export function bridgeDist(S, x, y) {
 // How far out along the bridge (from the starting footing) a point on the site is.
 const outAt = (S, x, y) => S.out(siteToBridge(S.site, x, y).x);
 
+// Installed pieces joined to the starting end (the first item, or anything resting on the starting
+// footing, so each truss counts before a lateral ties them), through pieces touching each other.
+function joinedToStart(S) {
+  if (!S.adj) {
+    S.adj = new Map();
+    for (const c of S.model.contacts) {
+      if (!S.adj.has(c.a)) S.adj.set(c.a, []);
+      if (!S.adj.has(c.b)) S.adj.set(c.b, []);
+      S.adj.get(c.a).push(c.b); S.adj.get(c.b).push(c.a);
+    }
+  }
+  const seen = new Set([...(S.items[0]?.memberIds || []), ...[...S.members].filter(([, mm]) => mm.foot === S.startFooting).map(([id]) => id)].filter((id) => S.installed.has(id)));
+  const queue = [...seen];
+  while (queue.length) {
+    for (const o of S.adj.get(queue.pop()) || []) if (S.installed.has(o) && !seen.has(o)) { seen.add(o); queue.push(o); }
+  }
+  return seen;
+}
+
 // Recompute what holds the bridge up after anything changes.
 function updateBridge(S) {
   const sup = S.support;
   // How far each truss reaches from the starting footing; the bridge is as long as the shorter.
+  // Only pieces joined (through other installed pieces) to the first one count: a piece standing
+  // on its own on the far footing doesn't make the bridge any longer.
+  const joined = joinedToStart(S);
   const reach = { A: 0, B: 0 };
   let hasB = false;
   for (const [id, mm] of S.members) {
     if (mm.m.plane === 'B') hasB = true;
-    if (mm.m.plane === 'L' || !S.installed.has(id)) continue;
+    if (mm.m.plane === 'L' || !joined.has(id)) continue;
     const far = Math.max(S.out(mm.xs[0]), S.out(mm.xs[1]));
     reach[mm.m.plane] = Math.max(reach[mm.m.plane], far);
   }
   const length = hasB ? Math.min(reach.A, reach.B) : reach.A;
+  // Once each truss's joined pieces rest on another footing, the span has landed: growing onto it
+  // isn't hanging farther out, so it doesn't count against the holders.
+  const landed = ['A', ...(hasB ? ['B'] : [])].every((pl) => [...joined].some((id) => { const mm = S.members.get(id); return mm.m.plane === pl && mm.foot >= 0 && mm.foot !== S.startFooting; }));
   if (length > sup.length + GROW_MIN) {
     sup.length = length;
     sup.grown++;
-    for (const h of sup.holders.values()) h.stale++;
+    if (!landed) for (const h of sup.holders.values()) h.stale++;
   }
   if (!sup.standing && standsAlone(S)) {
     sup.standing = true;
