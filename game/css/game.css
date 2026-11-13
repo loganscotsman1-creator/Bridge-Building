@@ -109,3 +109,19 @@ body.playing { overflow: hidden; }
 
 .oe-music-btn { position: fixed; right: 14px; bottom: 14px; z-index: 50; background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 999px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
 .oe-music-btn:hover { background: #273449; }
+
+.oe-brief { z-index: 20; overflow: auto; padding: 20px; }
+.oe-brief-card { background: #0f172a; border: 1px solid #334155; border-radius: 18px; padding: 22px 26px; color: #e2e8f0; max-width: 980px; width: 100%; box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
+.oe-brief-card h2 { margin: 0 0 14px; font: 900 24px system-ui; color: #facc15; letter-spacing: 0.5px; }
+.oe-brief-players { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.oe-brief-player { border: 2px solid; border-radius: 12px; padding: 10px 12px; background: rgba(30,41,59,0.6); }
+.oe-brief-player .who { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.oe-brief-player .num { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font: 900 12px system-ui; color: #fff; }
+.oe-brief-player small { color: #94a3b8; width: 100%; }
+.oe-brief-player table { border-collapse: collapse; font-size: 13px; width: 100%; }
+.oe-brief-player td { padding: 3px 4px; vertical-align: top; }
+.oe-brief-player td:first-child { white-space: nowrap; width: 1%; }
+.oe-brief kbd { display: inline-block; background: #1e293b; border: 1px solid #475569; border-bottom-width: 3px; border-radius: 6px; padding: 1px 7px; font: 700 12px system-ui; color: #fff; }
+.oe-brief-tips { margin: 14px 0 0; padding-left: 18px; color: #cbd5e1; font-size: 13px; line-height: 1.6; }
+.oe-brief-go { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 16px; color: #94a3b8; font-size: 13px; }
+.oe-brief-back { margin-top: 10px; background: none; border: none; color: #94a3b8; text-decoration: underline; cursor: pointer; padding: 0; font-size: 13px; }

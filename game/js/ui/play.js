@@ -1,4 +1,5 @@
-// The game itself: a full-window canvas, a fixed-step loop, controllers in, sounds out.
+// The game itself: a full-window canvas, a fixed-step loop, controllers in, sounds out. A run
+// opens with everyone's controls; Start (or Enter, or the button) begins the 3-2-1 countdown.
 import { html, useEffect, useRef, useState } from '../../../js/lib/preact.js';
 import { createGame, results, shelfSlot, stepGame } from '../world.js';
 import { addFx, draw, makeView } from '../render.js';
@@ -16,6 +17,8 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart }) {
   const stateRef = useRef(null);
   const [soundOn, setSoundOn] = useState(!isMuted());
   const [musicState, setMusicState] = useState(isMusicOn());
+  const [briefing, setBriefing] = useState(true);
+  const beginRef = useRef(null);
 
   useEffect(() => {
     const players = setup.players.map((p, i) => ({ id: 'p' + (i + 1), name: p.name, color: p.color, side: p.side, device: p.device }));
@@ -23,15 +26,25 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart }) {
     stateRef.current = S;
     const devOf = new Map(players.map((p) => [p.id, p.device]));
     const numOf = new Map(players.map((p, i) => [p.id, i + 1]));
-    const ui = { now: 0, banners: [], fx: [], shakeUntil: 0, muted: isMuted(), countdown: 3, paused: false, numberOf: (a) => numOf.get(a.id) || '', deviceOf: (a) => deviceName(devOf.get(a.id) || ''), keysOf: (a) => KEYBOARDS[devOf.get(a.id)]?.caps || null };
+    const ui = { now: 0, banners: [], fx: [], shakeUntil: 0, muted: isMuted(), countdown: 3, briefing: true, paused: false, numberOf: (a) => numOf.get(a.id) || '', deviceOf: (a) => deviceName(devOf.get(a.id) || ''), keysOf: (a) => KEYBOARDS[devOf.get(a.id)]?.caps || null };
     const canvas = canvasRef.current;
     const g = canvas.getContext('2d');
     let raf, last = performance.now(), acc = 0, startWas = false, finished = false, finishedAt = 0;
     const itemLabel = (id) => '#' + (S.items.find((x) => x.id === id).idx + 1);
     unlock();
-    playSong('game');
     let lastCount = 4;
+    // Leave the controls window: the game song starts and the countdown runs.
+    const begin = () => {
+      if (!ui.briefing) return;
+      ui.briefing = false;
+      setBriefing(false);
+      unlock();
+      playSong('game');
+      ui.countdown = 3; lastCount = 4;
+    };
+    beginRef.current = begin;
     const onKey = (e) => {
+      if (ui.briefing && (e.key === 'Enter' || e.code === 'Enter' || e.code === 'NumpadEnter')) { e.preventDefault(); begin(); return; }
       if (e.code === 'KeyM' || e.key === 'm' || e.key === 'M') { setMuted(!isMuted()); ui.muted = isMuted(); }
       if (e.code === 'KeyN' || e.key === 'n' || e.key === 'N') setMusicOn(!isMusicOn());
     };
@@ -80,9 +93,9 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart }) {
       const inputs = new Map();
       let start = false;
       for (const p of players) { const d = readDevice(p.device); inputs.set(p.id, d); if (d.start) start = true; }
-      if (start && !startWas && !finished) setPaused((x) => !x);
+      if (start && !startWas && !finished) { if (ui.briefing) begin(); else setPaused((x) => !x); }
       startWas = start;
-      if (pausedRef.current || finished || ui.countdown > 0) endFrame();
+      if (pausedRef.current || finished || ui.briefing || ui.countdown > 0) endFrame();
       const dtReal = Math.min(0.1, (ts - last) / 1000);
       last = ts;
       ui.now += dtReal;
@@ -91,12 +104,12 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart }) {
       ui.music = isMusicOn();
       duckMusic(ui.paused);
       // 3, 2, 1, GO! Nothing moves until it's done.
-      if (ui.countdown > -1 && !ui.paused) {
+      if (ui.countdown > -1 && !ui.paused && !ui.briefing) {
         ui.countdown -= dtReal;
         const n = Math.ceil(ui.countdown);
         if (n !== lastCount && n >= 0) { lastCount = n; n > 0 ? SFX.count() : SFX.go(); }
       }
-      if (!pausedRef.current && !finished && ui.countdown <= 0) {
+      if (!pausedRef.current && !finished && !ui.briefing && ui.countdown <= 0) {
         acc += dtReal;
         let stepped = false;
         while (acc >= DT) { stepGame(S, inputs, DT); acc -= DT; stepped = true; }
@@ -124,6 +137,7 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart }) {
 
   return html`<div class="oe-play">
     <canvas ref=${canvasRef} class="oe-canvas"></canvas>
+    ${briefing && html`<${Controls} players=${setup.players} onStart=${() => beginRef.current?.()} onBack=${onQuit} />`}
     ${paused && html`<div class="oe-pause">
       <div class="oe-pause-card">
         <h2>Paused</h2>
@@ -135,5 +149,41 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart }) {
         <button onClick=${onQuit}>Back to setup</button>
       </div>
     </div>`}
+  </div>`;
+}
+
+// Each player's controls, for the controller or keyboard they joined with.
+function controlsFor(device) {
+  const k = KEYBOARDS[device];
+  if (k) {
+    const c = k.caps;
+    return [[c.move, 'Move'], [c.A, 'Grab a piece, place it, put in a bolt'], ['Hold ' + c.A, 'While carrying: hold a piece out to pass it across the river'],
+      ['Hold ' + c.X, 'Fasten a nut, or make an assembly'], ['Hold ' + c.LB, 'Hold the bridge up'], [c.start, 'Pause']];
+  }
+  return [['Left stick', 'Move'], ['A', 'Grab a piece, place it, put in a bolt'], ['Hold A', 'While carrying: hold a piece out to pass it across the river'],
+    ['Hold X', 'Fasten a nut, or make an assembly'], ['Hold LB', 'Hold the bridge up'], ['Start', 'Pause']];
+}
+
+function Controls({ players, onStart, onBack }) {
+  return html`<div class="oe-pause oe-brief">
+    <div class="oe-brief-card">
+      <h2>Controls</h2>
+      <div class="oe-brief-players">
+        ${players.map((p, i) => html`<div class="oe-brief-player" style=${{ borderColor: p.color }}>
+          <div class="who"><span class="num" style=${{ background: p.color }}>${i + 1}</span><b>${p.name}</b><small>${deviceName(p.device)} · ${p.side} side</small></div>
+          <table>${controlsFor(p.device).map(([key, what]) => html`<tr><td><kbd>${key}</kbd></td><td>${what}</td></tr>`)}</table>
+        </div>`)}
+      </div>
+      <ul class="oe-brief-tips">
+        <li>Grab pieces from the <b>ready</b> area in order and set them where they glow on the bridge.</li>
+        <li>Once anything hangs past a footing, someone must <b>hold the bridge</b> at a lateral, or it falls.</li>
+        <li>Fasten every nut, then everyone back to a staging yard to finish.</li>
+      </ul>
+      <div class="oe-brief-go">
+        <button class="oe-go" onClick=${onStart}>Start</button>
+        <span>or press <kbd>Start</kbd> on a controller, <kbd>Enter</kbd>, or your pause key</span>
+      </div>
+      <button class="oe-brief-back" onClick=${onBack}>Back to setup</button>
+    </div>
   </div>`;
 }

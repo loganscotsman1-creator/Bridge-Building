@@ -19,8 +19,8 @@ if (typeof window !== 'undefined') {
 }
 
 export const KEYBOARDS = {
-  kb1: { name: 'Keyboard left', up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD', a: 'Space', x: 'KeyE', lb: 'KeyQ', start: 'Escape', caps: { A: 'Space', X: 'E', LB: 'Q' }, help: 'WASD move · Space = A · E = X · Q = hold bridge' },
-  kb2: { name: 'Keyboard right', up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', a: 'Slash', x: 'Period', lb: 'Comma', start: 'Backspace', caps: { A: '/', X: '.', LB: ',' }, help: 'Arrows move · / = A · . = X · , = hold bridge' },
+  kb1: { name: 'Keyboard left', up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD', a: 'Space', x: 'KeyE', lb: 'KeyQ', start: 'Escape', caps: { A: 'Space', X: 'E', LB: 'Q', move: 'W A S D', start: 'Esc' }, help: 'WASD move · Space = A · E = X · Q = hold bridge' },
+  kb2: { name: 'Keyboard right', up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', a: 'Slash', x: 'Period', lb: 'Comma', start: 'Backspace', caps: { A: '/', X: '.', LB: ',', move: 'Arrow keys', start: 'Backspace' }, help: 'Arrows move · / = A · . = X · , = hold bridge' },
 };
 const KEY_CODES = new Set(Object.values(KEYBOARDS).flatMap((k) => [k.up, k.down, k.left, k.right, k.a, k.x, k.lb]));
 

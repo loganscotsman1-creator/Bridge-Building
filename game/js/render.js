@@ -782,7 +782,7 @@ function drawHud(g, S, V, ui) {
     yb += 34;
   }
   // 3, 2, 1, GO!
-  if (ui.countdown > -0.8) {
+  if (ui.countdown > -0.8 && !ui.briefing) {
     const n = Math.ceil(ui.countdown);
     const frac = ui.countdown > 0 ? ui.countdown - Math.floor(ui.countdown) : 1 + ui.countdown / 0.8;
     const text = n > 0 ? String(n) : 'GO!';
