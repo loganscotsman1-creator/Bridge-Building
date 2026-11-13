@@ -71,7 +71,9 @@ takes to fasten.
   order: hold the bridge if nobody is, take a piece someone is passing across, deliver what it
   carries (passing it over the river if it goes in on the other side), put in and fasten bolts,
   run the next ready piece, help make assemblies. The holder bolts what it can reach while it
-  holds; the assembler runs pieces once every assembly is made.
+  holds; the assembler runs pieces once every assembly is made. Roaming computers (COMs always,
+  the holder and assembler once their main job is done) work at the computer speed factor in setup
+  (80% of the players' walking, carrying, fastening and assembling speeds by default).
 - **Score:** the construction cost from this year's rules (6.2.5 in 2027): minutes (with
   penalties) × builders (players and computers) × $ per builder-minute, × the crew factor with
   enough builders; over the time limit counts as 180 minutes. Lower is better. It shows live

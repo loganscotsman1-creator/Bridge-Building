@@ -20,6 +20,7 @@ const TIMES = [
   { key: 'carrySpeed', label: 'Carrying speed', unit: 'in/s', step: 2 },
   { key: 'reach', label: 'Reach', unit: 'in', step: 2 },
   { key: 'passReach', label: 'Reach to pass a piece', unit: 'in', step: 5 },
+  { key: 'comSpeed', label: 'Computer speed factor', unit: '%', step: 5, title: "How fast computers walk, carry, fasten and assemble, as a share of the speeds above, while they're roaming: COMs always, and the holder and assembler once their main job is done." },
 ];
 // The on-screen keyboard for typing a name with a controller.
 const KEYS = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', ' ', '-', '⌫', '✓'];
@@ -297,7 +298,7 @@ export function Setup({ project, model, from, order, setOrder, setup, setSetup, 
 
       <section class="oe-card">
         <h2>3 · Times</h2>
-        ${TIMES.map((t) => html`<${Num} label=${t.label} unit=${t.unit} title=${t.title} focused=${navId === t.key} value=${setup.settings[t.key] ?? (t.key === 'assemblyTime' ? 4 : 0)} onChange=${(v) => setS({ [t.key]: Math.max(0, v) })} />`)}
+        ${TIMES.map((t) => html`<${Num} label=${t.label} unit=${t.unit} title=${t.title} focused=${navId === t.key} value=${setup.settings[t.key] ?? (t.key === 'assemblyTime' ? 4 : t.key === 'comSpeed' ? 80 : 0)} onChange=${(v) => setS({ [t.key]: Math.max(0, v) })} />`)}
         <p class="oe-hint">An assembly's own time can be set in the order editor. Defaults keep the game moving: quicker nuts and assemblies, brisker walking.</p>
         <details class="oe-how">
           <summary>How to play</summary>

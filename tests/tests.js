@@ -13,7 +13,7 @@ import { stateAt } from '../js/sim/playback.js';
 import { TOURS, dueTour } from '../js/ui/Tour.js';
 import { feetInches, parseLength, snapZoneEdge, snapZoneMove } from '../js/model/zonesnap.js';
 import { defaultOrder, orderProblems } from '../game/js/order.js';
-import { bridgeDist, clampPos, constructionCost, createGame, defaultSettings, holdPoints, itemBox, itemDist, readyLayout, results as gameResults, shelfItems, shelfSlot, stepGame } from '../game/js/world.js';
+import { bridgeDist, clampPos, constructionCost, pace, createGame, defaultSettings, holdPoints, itemBox, itemDist, readyLayout, results as gameResults, shelfItems, shelfSlot, stepGame } from '../game/js/world.js';
 import { npcList } from '../game/js/ui/setup.js';
 import { applyAssembly, connectionChoices, dissolveAssembly, dropSlot, insertAtSlot, onStagingSide, pieceChoices, planChecks, removeTask, taskBlocks, taskGroup } from '../js/model/timeline.js';
 
@@ -1224,6 +1224,24 @@ await test('game: computers build the whole bridge by themselves, working down t
   assert(com.some((a) => a.stats.piecesPlaced > 0) && com.some((a) => a.stats.handoffs > 0), 'COMs placed pieces and passed them across the river');
   const holder = S.actors.find((a) => a.npc === 'holder');
   assert(holder.stats.holdTotal > 5 && holder.stats.boltsPlaced + holder.stats.nutsFastened > 0, 'the holder held the bridge and bolted while holding');
+});
+
+await test('game: roaming computers work at the computer speed factor (80% by default)', () => {
+  const { S, tick } = game({ players: [['p1', 'west']], npcs: { assembler: true, helpers: [{ side: 'east' }] } });
+  assert(S.settings.comSpeed === 80, 'default 80%');
+  const com = S.actors.find((a) => a.npc === 'helper'), asm = S.actors.find((a) => a.npc === 'assembler');
+  assert(pace(S, com) === 0.8 && pace(S, asm) === 1 && pace(S, S.actors[0]) === 1, 'COMs at 80%; the assembler at full speed on its main job; players at full speed');
+  for (const it of S.items) if (it.multi) it.status = 'shelf';
+  assert(pace(S, asm) === 0.8, 'every assembly made: the assembler roams at 80%');
+  S.settings.comSpeed = 50;
+  const x0 = com.x, y0 = com.y;
+  com.task = null;
+  const inp = new Map([['p1', { mx: 0, my: 0 }]]);
+  // Walk the COM straight for one second by hand.
+  const v = S.settings.walkSpeed * pace(S, com);
+  assert(Math.abs(v - S.settings.walkSpeed * 0.5) < 1e-9, 'half speed at 50%');
+  tick(0);
+  assert(x0 === com.x && y0 === com.y, 'no time, no movement');
 });
 
 await test('game: pieces set on the far footing, not yet joined on, do not make the bridge longer', () => {

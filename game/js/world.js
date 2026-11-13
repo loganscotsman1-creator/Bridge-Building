@@ -47,6 +47,7 @@ export function defaultSettings(project, fastenTime) {
     walkSpeed: Math.round((tm.walkSpeed || 54) * 1.35),
     carrySpeed: Math.round((tm.carrySpeed || 36) * 1.5),
     reach: tm.maxReach || 40,
+    comSpeed: 80, // % of players' speeds that computers work at once they're roaming (see pace)
     passReach: tm.passReach || 90,
   };
 }
@@ -588,7 +589,7 @@ function work(S, a, dt) {
   a.lastWork = w.kind;
   if (w.kind === 'fasten') {
     const b = w.target;
-    b.progress += dt;
+    b.progress += dt * pace(S, a);
     b.workedAt = S.t;
     if (b.progress >= S.settings.fastenTime) {
       b.state = 'fastened'; b.flashing = false; a.stats.nutsFastened++; a.work = null;
@@ -599,7 +600,7 @@ function work(S, a, dt) {
   // Several builders on one assembly make it faster together.
   const it = w.target;
   if (it.status === 'waiting') it.status = 'building';
-  it.progress += dt;
+  it.progress += dt * pace(S, a);
   if (it.progress >= it.time) {
     it.status = 'shelf';
     a.work = null;
@@ -609,6 +610,17 @@ function work(S, a, dt) {
   }
   return true;
 }
+
+// How fast someone works, as a share of the speed settings: 1 for players and for computers on
+// their main job (the holder until the bridge stands, the assembler while assemblies are left);
+// the computer speed factor for computers roaming (COMs always, the others once that job is done).
+export function roaming(S, a) {
+  if (!a.npc) return false;
+  if (a.npc === 'holder') return S.support.standing;
+  if (a.npc === 'assembler') return !S.items.some((it) => it.multi && (it.status === 'waiting' || it.status === 'building'));
+  return true;
+}
+export const pace = (S, a) => (roaming(S, a) ? Math.max(0.05, (S.settings.comSpeed ?? 80) / 100) : 1);
 
 // ---------- moving ----------
 function move(S, a, mx, my, dt) {
@@ -620,14 +632,15 @@ function move(S, a, mx, my, dt) {
     // Holding a piece in place: shuffle along it, but stay within reach of it.
     if (!a.moving) return;
     const item = S.items.find((it) => it.id === a.anchor.itemId);
-    const p = clampPos(S, a.side, a.x + mx * S.settings.carrySpeed * dt, a.y + my * S.settings.carrySpeed * dt);
+    const v = S.settings.carrySpeed * pace(S, a);
+    const p = clampPos(S, a.side, a.x + mx * v * dt, a.y + my * v * dt);
     if (!item || itemDist(S, item, p.x, p.y) <= S.settings.reach) { a.x = p.x; a.y = p.y; }
     return;
   }
   if (a.anchor?.kind === 'bridge') {
     // Holding the bridge: walk along it (slowly), anywhere on your side, staying right next to it.
     if (!a.moving) return;
-    const v = S.settings.carrySpeed * 0.8;
+    const v = S.settings.carrySpeed * 0.8 * pace(S, a);
     const tryAt = (x, y) => {
       const p = clampPos(S, a.side, x, y);
       if (bridgeDist(S, p.x, p.y) > HOLD_REACH) return false;
@@ -647,7 +660,7 @@ function move(S, a, mx, my, dt) {
     return;
   }
   if (!a.moving) return;
-  const v = a.carrying ? S.settings.carrySpeed : S.settings.walkSpeed;
+  const v = (a.carrying ? S.settings.carrySpeed : S.settings.walkSpeed) * pace(S, a);
   let x = a.x + mx * v * dt, y = a.y + my * v * dt;
   for (const o of S.obstacles) {
     const qx = Math.max(o.x, Math.min(o.x + o.w, x)), qy = Math.max(o.y, Math.min(o.y + o.h, y));
