@@ -12,7 +12,7 @@ import { Play } from './ui/play.js';
 import { Results } from './ui/results.js';
 
 const SETUP_KEY = 'oe.setup.v1';
-const SETTINGS_VERSION = 2;
+const SETTINGS_VERSION = 3;
 const CURRENT_KEY = 'oe.current.v1';
 
 function loadProject() {

@@ -32,15 +32,16 @@ takes to fasten.
 - **Build order:** click pieces on the 3D bridge in the order they come in, grouping up to three
   into an assembly. The first item must be a three-piece assembly. Mark large or awkward items
   as needing a buddy, and set each assembly's time. Orders can be saved, downloaded and loaded.
-- **Staging** is the yard split in half, north and south: a ready area where items wait at
-  their real size, standing as they will in the bridge, and an assembly area (hold X; several
-  builders can work there at once, on different assemblies or together on one). An assembly
+- **Staging** is the yard split in half: an assembly area to the north (hold X; several
+  builders can work there at once, on different assemblies or together on one) and a ready
+  area to the south where items wait at their real size, standing as they will in the bridge. An assembly
   appears in the ready area when it's made; a single piece as soon as every assembly before it
   is made. Grabbing from anywhere in the ready area always takes the next item in the order
   (marked NEXT). Keyboard players see their keys over their heads instead of controller buttons.
 - **Pace:** the game runs quicker than real life by default: nuts take 60% of the sequencer's
-  time, assemblies 40%, builders walk and carry faster, and a fall costs 20 s. All of these are
-  in the setup screen.
+  time, every assembly takes 4 s (set it in the setup screen; 0 uses the sequencer's times),
+  builders walk and carry faster, and a fall costs 20 s. A 3-2-1 countdown starts each run.
+- **Music:** an upbeat loop plays during a run. Press N, or use the pause menu, to turn it off.
 - **Sound:** every action has a sound (grab, pass, the clank of placing steel, bolt, ratchet,
   hammer, alarms, falls, fanfares). Press M, or use the pause menu, to turn sound off.
 - **Controls:** A grabs, places a piece where it goes (with its first bolt), places bolts, and,

@@ -2,7 +2,7 @@
 import { html, useEffect, useRef, useState } from '../../../js/lib/preact.js';
 import { createGame, results, shelfSlot, stepGame } from '../world.js';
 import { addFx, draw, makeView } from '../render.js';
-import { SFX, isMuted, setMuted, unlock } from '../sound.js';
+import { SFX, duckMusic, isMusicOn, isMuted, setMusicOn, setMuted, startMusic, stopMusic, unlock } from '../sound.js';
 import { KEYBOARDS, deviceName, endFrame, readDevice } from '../input.js';
 import { npcList } from './setup.js';
 
@@ -15,6 +15,7 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart }) {
   pausedRef.current = paused;
   const stateRef = useRef(null);
   const [soundOn, setSoundOn] = useState(!isMuted());
+  const [musicState, setMusicState] = useState(isMusicOn());
 
   useEffect(() => {
     const players = setup.players.map((p, i) => ({ id: 'p' + (i + 1), name: p.name, color: p.color, side: p.side, device: p.device }));
@@ -22,13 +23,18 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart }) {
     stateRef.current = S;
     const devOf = new Map(players.map((p) => [p.id, p.device]));
     const numOf = new Map(players.map((p, i) => [p.id, i + 1]));
-    const ui = { now: 0, banners: [], fx: [], shakeUntil: 0, muted: isMuted(), paused: false, numberOf: (a) => numOf.get(a.id) || '', deviceOf: (a) => deviceName(devOf.get(a.id) || ''), keysOf: (a) => KEYBOARDS[devOf.get(a.id)]?.caps || null };
+    const ui = { now: 0, banners: [], fx: [], shakeUntil: 0, muted: isMuted(), countdown: 3, paused: false, numberOf: (a) => numOf.get(a.id) || '', deviceOf: (a) => deviceName(devOf.get(a.id) || ''), keysOf: (a) => KEYBOARDS[devOf.get(a.id)]?.caps || null };
     const canvas = canvasRef.current;
     const g = canvas.getContext('2d');
     let raf, last = performance.now(), acc = 0, startWas = false, finished = false, finishedAt = 0;
     const itemLabel = (id) => '#' + (S.items.find((x) => x.id === id).idx + 1);
     unlock();
-    const onKey = (e) => { if (e.code === 'KeyM' || e.key === 'm' || e.key === 'M') { setMuted(!isMuted()); ui.muted = isMuted(); } };
+    startMusic();
+    let lastCount = 4;
+    const onKey = (e) => {
+      if (e.code === 'KeyM' || e.key === 'm' || e.key === 'M') { setMuted(!isMuted()); ui.muted = isMuted(); }
+      if (e.code === 'KeyN' || e.key === 'n' || e.key === 'N') setMusicOn(!isMusicOn());
+    };
     window.addEventListener('keydown', onKey);
 
     // Where an event happened, for its effect.
@@ -76,13 +82,21 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart }) {
       for (const p of players) { const d = readDevice(p.device); inputs.set(p.id, d); if (d.start) start = true; }
       if (start && !startWas && !finished) setPaused((x) => !x);
       startWas = start;
-      if (pausedRef.current || finished) endFrame();
+      if (pausedRef.current || finished || ui.countdown > 0) endFrame();
       const dtReal = Math.min(0.1, (ts - last) / 1000);
       last = ts;
       ui.now += dtReal;
       ui.paused = pausedRef.current;
       ui.muted = isMuted();
-      if (!pausedRef.current && !finished) {
+      ui.music = isMusicOn();
+      duckMusic(ui.paused);
+      // 3, 2, 1, GO! Nothing moves until it's done.
+      if (ui.countdown > -1 && !ui.paused) {
+        ui.countdown -= dtReal;
+        const n = Math.ceil(ui.countdown);
+        if (n !== lastCount && n >= 0) { lastCount = n; n > 0 ? SFX.count() : SFX.go(); }
+      }
+      if (!pausedRef.current && !finished && ui.countdown <= 0) {
         acc += dtReal;
         let stepped = false;
         while (acc >= DT) { stepGame(S, inputs, DT); acc -= DT; stepped = true; }
@@ -105,7 +119,7 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart }) {
     };
     raf = requestAnimationFrame(frame);
     window.__oeGame = S; // for debugging in the console
-    return () => { cancelAnimationFrame(raf); window.removeEventListener('keydown', onKey); };
+    return () => { cancelAnimationFrame(raf); window.removeEventListener('keydown', onKey); stopMusic(); };
   }, []);
 
   return html`<div class="oe-play">
@@ -115,6 +129,7 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart }) {
         <h2>Paused</h2>
         <button class="oe-go" onClick=${() => setPaused(false)}>Resume</button>
         <button onClick=${() => { setMuted(!isMuted()); setSoundOn(!isMuted()); }}>Sound: ${soundOn ? 'on' : 'off'} (M)</button>
+        <button onClick=${() => { setMusicOn(!isMusicOn()); setMusicState(isMusicOn()); }}>Music: ${musicState ? 'on' : 'off'} (N)</button>
         <button onClick=${onRestart}>Restart</button>
         <button onClick=${() => onFinish(results(stateRef.current))}>End and see results</button>
         <button onClick=${onQuit}>Back to setup</button>

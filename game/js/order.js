@@ -75,13 +75,13 @@ export function assemblyTime(item, project, model, fastenTime) {
 }
 
 // Default time to fasten one nut: the first fastening tool's time, else by hand.
-// Seconds for an assembly in the game: its own time if set, else the sequencer's time scaled by
-// the game's pace (settings.assemblyScale), never under 3 s.
+// Seconds for an assembly in the game: its own time if set (order editor), else
+// the setup's assembly time (settings.assemblyTime), or the sequencer's time if that is 0.
 export function gameAssemblyTime(item, project, model, settings) {
   if (item.time != null) return item.time;
   if (!isAssembly(item)) return 0;
-  const base = assemblyTime({ ...item, time: null }, project, model, defaultFastenTime(project));
-  return Math.max(3, Math.round(base * (settings.assemblyScale ?? 1)));
+  if (settings.assemblyTime > 0) return settings.assemblyTime;
+  return assemblyTime({ ...item, time: null }, project, model, defaultFastenTime(project));
 }
 
 // The game's default nut time: quicker than the sequencer's (a game should keep moving).

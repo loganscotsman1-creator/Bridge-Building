@@ -1035,9 +1035,9 @@ await test('game: assemblies come out when made, single pieces once every assemb
   assert(S.actors.find((a) => a.id === 'p2').stats.assemblies === 2);
 });
 
-await test('game: staging is split north and south, and ready items stand at full size inside the ready area', () => {
+await test('game: staging is split, assembly north and ready south, and ready items stand at full size inside the ready area', () => {
   const { S } = game();
-  assert(S.ready.x === S.assembly.x && S.ready.w === S.assembly.w && S.ready.y + S.ready.h === S.assembly.y, 'north/south halves: ' + JSON.stringify([S.ready, S.assembly]));
+  assert(S.ready.x === S.assembly.x && S.ready.w === S.assembly.w && S.assembly.y + S.assembly.h === S.ready.y, 'assembly north, ready south: ' + JSON.stringify([S.ready, S.assembly]));
   for (const it of S.items.slice(0, 8)) it.status = 'shelf';
   const lay = readyLayout(S);
   assert(lay.size === 8, 'every ready item has a place');

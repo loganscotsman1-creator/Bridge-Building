@@ -17,11 +17,11 @@ const BTN = { A: '#16a34a', X: '#2563eb', LB: '#d97706' };
 
 export function makeView(S, W, H) {
   const site = S.site;
-  const lift = 48; // room above the ground for the bridge and builders
+  const lift = 50; // room above the ground for the bridge and builders
   const availH = H - HUD_TOP - HUD_BOTTOM - 16;
   const kw = (W - 30) / site.width;
   YF = Math.max(1, Math.min(2.4, availH / kw / (site.depth + 1.15 * lift)));
-  ZF = 1.35 * Math.max(1, YF * 0.85);
+  ZF = 1.6 * Math.max(1, YF * 0.8);
   const k = Math.min(kw, availH / (site.depth * YF + lift * ZF));
   const ox = (W - site.width * k) / 2;
   const used = (site.depth * YF + lift * ZF) * k;
@@ -62,6 +62,114 @@ function speckleFor(g) {
   }
   speckle = g.createPattern(c, 'repeat');
   return speckle;
+}
+
+// ---------- scenery ----------
+// A box on the ground; this view shows its top and its south face.
+function box(g, P, x0, y0, x1, y1, z0, z1, top, front) {
+  poly(g, [P(x0, y1, z0), P(x1, y1, z0), P(x1, y1, z1), P(x0, y1, z1)]); g.fillStyle = front; g.fill();
+  poly(g, [P(x0, y0, z1), P(x1, y0, z1), P(x1, y1, z1), P(x0, y1, z1)]); g.fillStyle = top; g.fill();
+  g.strokeStyle = 'rgba(0,0,0,0.2)'; g.lineWidth = 1; g.stroke();
+}
+// A low brick wall along x, broken where the river runs through.
+function wallRun(g, P, x0, x1, y0, y1, h, gaps) {
+  let segs = [[x0, x1]];
+  for (const [a, b] of gaps) segs = segs.flatMap(([p, q]) => (b <= p || a >= q ? [[p, q]] : [[p, a], [b, q]].filter(([u, v]) => v - u > 0.5)));
+  for (const [a, b] of segs) {
+    box(g, P, a, y0, b, y1, 0, h, '#e0936b', '#b4593a');
+    // Mortar lines on the face.
+    g.strokeStyle = 'rgba(80,30,15,0.35)'; g.lineWidth = 1;
+    for (let z = 2; z < h; z += 2) { g.beginPath(); g.moveTo(...P(a, y1, z)); g.lineTo(...P(b, y1, z)); g.stroke(); }
+    for (let z = 0, row = 0; z < h; z += 2, row++) for (let x = a + (row % 2 ? 3 : 6); x < b; x += 6) { g.beginPath(); g.moveTo(...P(x, y1, z)); g.lineTo(...P(x, y1, Math.min(h, z + 2))); g.stroke(); }
+  }
+}
+let hazard = null;
+function hazardFor(g) {
+  if (hazard) return hazard;
+  const c = document.createElement('canvas');
+  c.width = c.height = 16;
+  const x = c.getContext('2d');
+  x.fillStyle = '#facc15'; x.fillRect(0, 0, 16, 16);
+  x.fillStyle = '#1f2937';
+  x.beginPath(); x.moveTo(0, 0); x.lineTo(8, 0); x.lineTo(0, 8); x.closePath(); x.fill();
+  x.beginPath(); x.moveTo(16, 0); x.lineTo(16, 8); x.lineTo(8, 16); x.lineTo(0, 16); x.closePath(); x.fill();
+  hazard = g.createPattern(c, 'repeat');
+  return hazard;
+}
+let grass = null;
+function grassFor(g) {
+  if (grass) return grass;
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const x = c.getContext('2d');
+  x.fillStyle = '#7fb85a'; x.fillRect(0, 0, 64, 64);
+  let seed = 3;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (let i = 0; i < 140; i++) { x.fillStyle = rnd() < 0.5 ? 'rgba(52,110,40,0.35)' : 'rgba(190,230,140,0.35)'; x.fillRect(rnd() * 64, rnd() * 64, 1.5, 2.5 + rnd() * 2); }
+  grass = g.createPattern(c, 'repeat');
+  return grass;
+}
+// Grass out to the edges of the screen and a few things standing around: trees, bushes, cones,
+// a pile of steel. Returns the props in front of the site, to draw after it.
+function drawSurround(g, S, V, now) {
+  const { P, k, W, H, ox, oy } = V;
+  const site = S.site;
+  const x0 = -ox / k - 10, x1 = (W - ox) / k + 10, y0 = (0 - oy) / (YF * k) - 10, y1 = (H - oy) / (YF * k) + 60;
+  poly(g, [P(x0, y0), P(x1, y0), P(x1, y1), P(x0, y1)]);
+  g.fillStyle = grassFor(g); g.fill();
+  // A gravel path along the back.
+  poly(g, [P(x0, -20), P(x1, -20), P(x1, -8), P(x0, -8)]); g.fillStyle = '#d6cdb8'; g.fill();
+  if (!S.props) {
+    let seed = 11;
+    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    const back = [], front = [];
+    for (let x = -60; x < site.width + 60; x += 46 + rnd() * 30) {
+      const kind = rnd() < 0.55 ? 'tree' : 'bush';
+      back.push({ kind, x: x + rnd() * 10, y: -32 - rnd() * 14, s: 0.8 + rnd() * 0.5 });
+    }
+    back.push({ kind: 'steel', x: site.width - 60, y: -14, s: 1 });
+    back.push({ kind: 'cone', x: (S.river ? S.river.x : site.width / 2) - 8, y: -12, s: 1 }, { kind: 'cone', x: (S.river ? S.river.x + S.river.w : site.width / 2) + 8, y: -12, s: 1 });
+    for (let x = -40; x < site.width + 40; x += 70 + rnd() * 40) front.push({ kind: rnd() < 0.7 ? 'bush' : 'cone', x: x + rnd() * 20, y: site.depth + 14 + rnd() * 8, s: 0.7 + rnd() * 0.4 });
+    S.props = { back: back.sort((a, b) => a.y - b.y), front: front.sort((a, b) => a.y - b.y) };
+  }
+  for (const pr of S.props.back) drawProp(g, P, k, pr, now);
+  return S.props;
+}
+function drawProp(g, P, k, pr, now) {
+  const [sx, sy] = P(pr.x, pr.y, 0);
+  g.fillStyle = 'rgba(15,23,42,0.2)';
+  g.beginPath(); g.ellipse(sx + 4 * k, sy + 1, 9 * k * pr.s, 3.5 * k * pr.s, 0, 0, 7); g.fill();
+  if (pr.kind === 'tree') {
+    const [tx, ty] = P(pr.x, pr.y, 14 * pr.s);
+    g.fillStyle = '#7c4a26'; g.fillRect(sx - 1.6 * k, ty, 3.2 * k, sy - ty);
+    const sway = Math.sin(now * 1.3 + pr.x) * 0.6 * k;
+    for (const [dx, dz, r] of [[-5, 18, 8], [5, 19, 8], [0, 26, 9]]) {
+      const [cx, cy] = P(pr.x + dx * pr.s, pr.y, dz * pr.s);
+      const rr = r * k * pr.s;
+      const gr = g.createRadialGradient(cx - rr * 0.35 + sway, cy - rr * 0.4, rr * 0.2, cx + sway, cy, rr);
+      gr.addColorStop(0, '#9be070'); gr.addColorStop(1, '#3f8a2c');
+      g.beginPath(); g.arc(cx + sway, cy, rr, 0, 7); g.fillStyle = gr; g.fill();
+      g.strokeStyle = 'rgba(30,70,20,0.5)'; g.lineWidth = 1; g.stroke();
+    }
+  } else if (pr.kind === 'bush') {
+    for (const [dx, r] of [[-4, 5], [4, 5], [0, 6]]) {
+      const [cx, cy] = P(pr.x + dx * pr.s, pr.y, 4 * pr.s);
+      const rr = r * k * pr.s;
+      const gr = g.createRadialGradient(cx - rr * 0.3, cy - rr * 0.4, rr * 0.2, cx, cy, rr);
+      gr.addColorStop(0, '#8fd468'); gr.addColorStop(1, '#3b7d2a');
+      g.beginPath(); g.arc(cx, cy, rr, 0, 7); g.fillStyle = gr; g.fill();
+    }
+  } else if (pr.kind === 'cone') {
+    const [tx, ty] = P(pr.x, pr.y, 9 * pr.s);
+    g.fillStyle = '#1f2937'; g.fillRect(sx - 4 * k * pr.s, sy - 1.5 * k, 8 * k * pr.s, 2 * k);
+    g.beginPath(); g.moveTo(sx - 3.2 * k * pr.s, sy - 1 * k); g.lineTo(tx, ty); g.lineTo(sx + 3.2 * k * pr.s, sy - 1 * k); g.closePath();
+    g.fillStyle = '#f97316'; g.fill();
+    g.fillStyle = '#fff'; g.fillRect(sx - 1.8 * k * pr.s, (sy + ty) / 2 - 0.8 * k, 3.6 * k * pr.s, 1.6 * k);
+  } else if (pr.kind === 'steel') {
+    // A stack of spare steel on timber bearers.
+    for (let i = 0; i < 3; i++) box(g, P, pr.x - 30, pr.y - 10 + i * 4, pr.x + 30, pr.y - 7 + i * 4, i * 2.5, i * 2.5 + 2.5, '#9aa7ba', '#5f6b7d');
+    box(g, P, pr.x - 26, pr.y - 11, pr.x - 22, pr.y + 2, 0, 1.2, '#a16207', '#713f12');
+  }
 }
 
 // ---------- effects ----------
@@ -138,19 +246,17 @@ export function draw(g, S, V, ui) {
   const now = ui.now;
   ui.fx = ui.fx || [];
 
-  // Backdrop
-  const bg = g.createRadialGradient(W / 2, H * 0.55, 50, W / 2, H * 0.55, Math.max(W, H) * 0.75);
-  bg.addColorStop(0, '#24324a'); bg.addColorStop(1, '#0d1420');
-  g.fillStyle = bg; g.fillRect(0, 0, W, H);
-
+  g.fillStyle = '#0d1420'; g.fillRect(0, 0, W, H);
   g.save();
   if (ui.shakeUntil > now) { const m = 6 * (ui.shakeUntil - now); g.translate((Math.random() - 0.5) * m * 2, (Math.random() - 0.5) * m * 2); }
 
-  // Ground: a slab with a front edge, so the site reads as a board.
+  // The world around the site: grass, trees and bits of a job site, then a low brick wall.
   const site = S.site;
   const ground = (x, y, w, h) => [P(x, y), P(x + w, y), P(x + w, y + h), P(x, y + h)];
-  poly(g, [P(0, site.depth, 0), P(site.width, site.depth, 0), P(site.width, site.depth, -7), P(0, site.depth, -7)]);
-  g.fillStyle = '#5b4632'; g.fill();
+  const props = drawSurround(g, S, V, now);
+  const gaps = S.river ? [[S.river.x, S.river.x + S.river.w]] : [];
+  wallRun(g, P, 0, site.width, -5, 0, 8, gaps); // back wall (north)
+  for (const [x0, x1] of [[-5, 0], [site.width, site.width + 5]]) box(g, P, x0, -5, x1, site.depth + 5, 0, 8, '#e0936b', '#b4593a');
   poly(g, ground(0, 0, site.width, site.depth));
   g.fillStyle = '#eef1f5'; g.fill();
   const zones = [...site.zones].sort((a, b) => (a.type === 'footing') - (b.type === 'footing'));
@@ -195,16 +301,23 @@ export function draw(g, S, V, ui) {
     g.fillText(z.name.toUpperCase(), x, y);
   }
 
-  // Staging: the ready area (north) and the assembly area (south).
-  for (const [r, fill, edge, name] of [[S.ready, 'rgba(250,204,21,0.2)', '#ca8a04', 'READY'], [S.assembly, 'rgba(37,99,235,0.14)', '#2563eb', 'ASSEMBLY']]) {
-    poly(g, ground(r.x + 2, r.y + 2, r.w - 4, r.h - 4));
-    g.fillStyle = fill; g.fill();
-    g.setLineDash([7, 5]); g.strokeStyle = edge; g.lineWidth = 2; g.stroke(); g.setLineDash([]);
-    const [x, y] = P(r.x + r.w / 2, r.y + r.h - 5);
-    g.fillStyle = edge; g.globalAlpha = 0.55; g.textAlign = 'center';
-    g.font = `900 ${Math.max(11, k * 4.6)}px system-ui`;
-    g.fillText(name, x, y);
-    g.globalAlpha = 1;
+  // Staging: a workshop floor with hazard stripes for assembling, a timber deck for what's ready.
+  {
+    const a = S.assembly, rd = S.ready;
+    poly(g, ground(a.x + 2, a.y + 2, a.w - 4, a.h - 4)); g.fillStyle = '#b9c4d3'; g.fill();
+    g.beginPath();
+    for (const [x0, y0, w, h] of [[a.x + 2, a.y + 2, a.w - 4, a.h - 4], [a.x + 6, a.y + 6, a.w - 12, a.h - 12]]) { const q = ground(x0, y0, w, h); g.moveTo(...q[0]); q.slice(1).forEach((pt) => g.lineTo(...pt)); g.closePath(); }
+    g.fillStyle = hazardFor(g); g.fill('evenodd');
+    poly(g, ground(rd.x + 2, rd.y + 2, rd.w - 4, rd.h - 4)); g.fillStyle = '#c99a62'; g.fill();
+    g.strokeStyle = 'rgba(92,58,24,0.45)'; g.lineWidth = 1;
+    for (let yy = rd.y + 2 + 7; yy < rd.y + rd.h - 2; yy += 7) { g.beginPath(); g.moveTo(...P(rd.x + 2, yy)); g.lineTo(...P(rd.x + rd.w - 2, yy)); g.stroke(); }
+    for (let yy = rd.y + 2, row = 0; yy < rd.y + rd.h - 2; yy += 7, row++) for (let xx = rd.x + 2 + (row % 2 ? 18 : 36); xx < rd.x + rd.w - 2; xx += 36) { g.beginPath(); g.moveTo(...P(xx, yy)); g.lineTo(...P(xx, Math.min(yy + 7, rd.y + rd.h - 2))); g.stroke(); }
+    box(g, P, rd.x + 2, rd.y + rd.h - 4, rd.x + rd.w - 2, rd.y + rd.h - 2, 0, 1.5, '#d8aa70', '#8a5a2b');
+    g.textAlign = 'center'; g.font = `900 ${Math.max(11, k * 4.6)}px system-ui`;
+    for (const [r, c, name] of [[a, '#1e3a8a', 'ASSEMBLY'], [rd, '#7c4a14', 'READY']]) {
+      const [x, y] = P(r.x + r.w / 2, r.y + r.h - 9);
+      g.fillStyle = c; g.globalAlpha = 0.55; g.fillText(name, x, y); g.globalAlpha = 1;
+    }
   }
 
   // The bridge still to build, faintly; a carried piece's spot glows in its carrier's color.
@@ -226,9 +339,13 @@ export function draw(g, S, V, ui) {
   for (const id of S.installed) drawShadow(g, P, S.members.get(id), null, sag);
   for (const [it, sl] of [...ready, ...building]) for (const id of it.memberIds) drawShadow(g, P, S.members.get(id), sl, 0);
   for (const a of S.actors) {
+    const it = a.carrying && S.items.find((q) => q.id === a.carrying);
+    if (it) for (const id of it.memberIds) drawShadow(g, P, S.members.get(id), carriedShift(S, a, it), 0);
+  }
+  for (const a of S.actors) {
     const [sx, sy] = P(a.x, a.y, 0);
     g.fillStyle = 'rgba(15,23,42,0.22)';
-    g.beginPath(); g.ellipse(sx + 2 * k, sy + 1, R * k * 1.1, R * k * 0.5 * YF, 0, 0, 7); g.fill();
+    g.beginPath(); g.ellipse(sx + 2 * k, sy + 1, R * k * 1.15, R * k * 0.5 * YF, 0, 0, 7); g.fill();
   }
 
   const list = [];
@@ -320,6 +437,21 @@ export function draw(g, S, V, ui) {
     }
   }
 
+  // The front (south) wall and things in front of it, then warm light over everything.
+  wallRun(g, P, -5, site.width + 5, site.depth, site.depth + 5, 5, gaps);
+  poly(g, [P(-5, site.depth + 5, 0), P(site.width + 5, site.depth + 5, 0), P(site.width + 5, site.depth + 5, -8), P(-5, site.depth + 5, -8)]);
+  g.fillStyle = '#5b4632'; g.fill();
+  for (const pr of props.front) drawProp(g, P, k, pr, now);
+  g.save();
+  g.globalCompositeOperation = 'soft-light';
+  const light = g.createLinearGradient(0, 0, W, H);
+  light.addColorStop(0, 'rgba(255,214,150,0.7)'); light.addColorStop(1, 'rgba(60,80,140,0.45)');
+  g.fillStyle = light; g.fillRect(-20, -20, W + 40, H + 40);
+  g.restore();
+  const vig = g.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.max(W, H) * 0.75);
+  vig.addColorStop(0, 'rgba(0,0,0,0)'); vig.addColorStop(1, 'rgba(0,0,0,0.35)');
+  g.fillStyle = vig; g.fillRect(-20, -20, W + 40, H + 40);
+
   drawFx(g, V, ui);
   // Prompts and labels on top of everything.
   for (const a of S.actors) drawActorTop(g, S, V, a, ui);
@@ -406,67 +538,118 @@ function drawPieceIcon(g, x, y, it, k, color) {
   chip(g, x, y - 13, '#' + (it.idx + 1) + (it.buddy ? '★' : ''), it.buddy ? '#b45309' : '#0f172a', k);
 }
 
-// A builder: boots, a body in their color with a hi-vis stripe, a face, and a hard hat.
+// A builder: short and round, like a cartoon: little boots, a round body in their color with a
+// hi-vis stripe, a big head with eyes that look where they're going, rosy cheeks and a hard hat.
 function drawActor(g, S, V, a, ui) {
   const { P, k } = V;
+  const now = ui.now;
   const [sx, sy] = P(a.x, a.y, 0);
-  const step = a.moving ? Math.sin(ui.now * 14 + a.x) : 0;
-  const bob = a.moving ? Math.abs(step) * 1.5 : 0;
-  const w = R * k * 1.5;
-  // Boots
-  g.fillStyle = '#1f2937';
-  for (const s of [-1, 1]) { const lift = a.moving ? Math.max(0, s * step) * 2 * k : 0; rrect(g, sx + s * w * 0.22 - w * 0.17, sy - 3 * k - lift, w * 0.34, 3.2 * k, 1.5); g.fill(); }
-  const top = P(a.x, a.y, 25 + bob), head = P(a.x, a.y, 32 + bob);
+  const step = a.moving ? Math.sin(now * 16 + a.x) : 0;
+  const bob = a.moving ? Math.abs(step) * 1.4 : Math.sin(now * 2.5 + a.y) * 0.3;
   const body = a.npc ? '#64748b' : a.color;
-  rrect(g, sx - w / 2, top[1], w, sy - top[1] - 2 * k, w / 2.4);
-  const bg = g.createLinearGradient(sx - w / 2, 0, sx + w / 2, 0);
-  bg.addColorStop(0, shade(body, 1.25)); bg.addColorStop(1, shade(body, 0.8));
-  g.fillStyle = bg; g.fill();
-  g.strokeStyle = shade(body, 0.5); g.lineWidth = 1.5; g.stroke();
-  // Hi-vis stripe
-  const sty = top[1] + (sy - top[1]) * 0.42;
-  g.fillStyle = 'rgba(253,224,71,0.9)'; g.fillRect(sx - w / 2 + 1, sty, w - 2, Math.max(2, k * 1.2));
-  // Arms up holding the bridge or a piece.
-  if (a.anchor) {
-    const hz = a.anchor.kind === 'bridge' ? 18 : 22;
-    g.strokeStyle = shade(body, 0.75); g.lineWidth = Math.max(2.5, k * 1.4); g.lineCap = 'round';
-    for (const s of [-1, 1]) { const p = P(a.x + s * 4, a.y, hz + bob); g.beginPath(); g.moveTo(sx + s * w / 2.4, top[1] + 4); g.lineTo(p[0], p[1]); g.stroke(); }
-    g.lineCap = 'butt';
+  const ink = 'rgba(30,20,20,0.85)';
+  const bw = R * k * 1.0; // body half-width
+  // Boots
+  for (const sd of [-1, 1]) {
+    const lift = a.moving ? Math.max(0, sd * step) * 2.2 * k : 0;
+    g.beginPath(); g.ellipse(sx + sd * bw * 0.45, sy - 1.2 * k - lift, bw * 0.38, 1.8 * k, 0, 0, 7);
+    g.fillStyle = '#3f2a1d'; g.fill(); g.strokeStyle = ink; g.lineWidth = 1.5; g.stroke();
   }
-  // Head and face, looking the way they last moved.
-  const hr = R * k * 0.72;
-  g.beginPath(); g.arc(head[0], head[1], hr, 0, 7);
-  g.fillStyle = '#fcd9b6'; g.fill(); g.strokeStyle = '#b07a54'; g.lineWidth = 1; g.stroke();
-  const fx = (a.face?.[0] || 0) * hr * 0.35, fy = (a.face?.[1] || 0) * hr * 0.15;
-  g.fillStyle = '#1f2937';
-  for (const s of [-1, 1]) { g.beginPath(); g.arc(head[0] + fx + s * hr * 0.32, head[1] + fy + hr * 0.1, Math.max(1, hr * 0.12), 0, 7); g.fill(); }
-  if (a.work) { g.strokeStyle = '#7c2d12'; g.lineWidth = 1; g.beginPath(); g.arc(head[0] + fx, head[1] + fy + hr * 0.42, hr * 0.18, 0, Math.PI); g.stroke(); }
-  // Hard hat
+  // A carried piece, at full size, held at waist height (pushed out in front while passing).
+  const carried = a.carrying && S.items.find((q) => q.id === a.carrying);
+  const sh = carried && carriedShift(S, a, carried);
+  // Body: a round blob.
+  const [bx, by] = P(a.x, a.y, 7 + bob);
+  const bh = 6.5 * ZF * k;
+  const bg = g.createRadialGradient(bx - bw * 0.35, by - bh * 0.4, bw * 0.1, bx, by, bw * 1.2);
+  bg.addColorStop(0, shade(body, 1.35)); bg.addColorStop(1, shade(body, 0.8));
+  g.beginPath(); g.ellipse(bx, by, bw, bh, 0, 0, 7); g.fillStyle = bg; g.fill();
+  g.save(); g.clip();
+  g.fillStyle = 'rgba(253,224,71,0.95)'; g.fillRect(bx - bw, by - bh * 0.05, bw * 2, Math.max(2, bh * 0.22));
+  g.fillStyle = 'rgba(255,255,255,0.7)'; g.fillRect(bx - bw, by + bh * 0.06, bw * 2, Math.max(1, bh * 0.06));
+  g.restore();
+  g.beginPath(); g.ellipse(bx, by, bw, bh, 0, 0, 7); g.strokeStyle = ink; g.lineWidth = 2; g.stroke();
+  if (carried) {
+    const ms = carried.memberIds.map((id) => S.members.get(id)).filter(Boolean).sort((p, q) => p.m.centroid[1] - q.m.centroid[1]);
+    for (const mm of ms) drawMember(g, P, mm, { color: a.extending ? '#d97706' : PLANE[mm.m.plane], shift: sh, outline: shade(a.npc ? '#64748b' : a.color, 1) });
+  }
+  // Hands: up on the bridge or a piece, holding what they carry, or swinging at the sides.
+  const hand = (hx, hy) => { g.beginPath(); g.arc(hx, hy, Math.max(2.2, k * 1.7), 0, 7); g.fillStyle = '#fcd9b6'; g.fill(); g.strokeStyle = ink; g.lineWidth = 1.5; g.stroke(); };
+  if (a.anchor) {
+    const hz = a.anchor.kind === 'bridge' ? 18 : 21;
+    for (const sd of [-1, 1]) {
+      const [hx, hy] = P(a.x + sd * 4.5, a.y, hz + bob);
+      g.strokeStyle = shade(body, 0.7); g.lineWidth = Math.max(3, k * 2); g.lineCap = 'round';
+      g.beginPath(); g.moveTo(bx + sd * bw * 0.8, by - bh * 0.2); g.lineTo(hx, hy); g.stroke(); g.lineCap = 'butt';
+      hand(hx, hy);
+    }
+  } else if (carried) {
+    const [cx, cy] = P(a.x + (a.extending ? a.face[0] * 14 : 0), a.y + (a.extending ? a.face[1] * 14 : 0), CARRY_Z + 1);
+    hand(cx - bw * 0.9, cy); hand(cx + bw * 0.9, cy);
+  } else if (a.work) {
+    const sw = Math.sin(now * 18) * 1.5 * k;
+    hand(bx - bw * 0.95, by + sw); hand(bx + bw * 0.95, by - sw);
+  } else {
+    hand(bx - bw * 1.02, by + bh * 0.15 + step * k); hand(bx + bw * 1.02, by + bh * 0.15 - step * k);
+  }
+  // Head
+  const [hx, hy] = P(a.x, a.y, 17 + bob);
+  const hr = R * k * 0.82;
+  const hg = g.createRadialGradient(hx - hr * 0.3, hy - hr * 0.3, hr * 0.1, hx, hy, hr);
+  hg.addColorStop(0, '#ffe6cc'); hg.addColorStop(1, '#f2b98c');
+  g.beginPath(); g.arc(hx, hy, hr, 0, 7); g.fillStyle = hg; g.fill(); g.strokeStyle = ink; g.lineWidth = 2; g.stroke();
+  // Face, looking the way they last moved; a blink now and then.
+  const fx = (a.face?.[0] || 0) * hr * 0.3, fy = (a.face?.[1] || 0) * hr * 0.12 + hr * 0.12;
+  const blink = (now + a.x * 0.37) % 3.7 < 0.12;
+  for (const sd of [-1, 1]) {
+    const ex = hx + fx + sd * hr * 0.33, ey = hy + fy;
+    if (blink) { g.strokeStyle = ink; g.lineWidth = 1.5; g.beginPath(); g.moveTo(ex - hr * 0.13, ey); g.lineTo(ex + hr * 0.13, ey); g.stroke(); continue; }
+    g.beginPath(); g.ellipse(ex, ey, hr * 0.17, hr * 0.22, 0, 0, 7); g.fillStyle = '#fff'; g.fill(); g.strokeStyle = ink; g.lineWidth = 1; g.stroke();
+    g.beginPath(); g.arc(ex + (a.face?.[0] || 0) * hr * 0.06, ey + hr * 0.04, hr * 0.1, 0, 7); g.fillStyle = '#1f2937'; g.fill();
+    g.beginPath(); g.arc(ex + hr * 0.03, ey - hr * 0.04, hr * 0.035, 0, 7); g.fillStyle = '#fff'; g.fill();
+  }
+  g.fillStyle = 'rgba(244,114,182,0.45)';
+  for (const sd of [-1, 1]) { g.beginPath(); g.ellipse(hx + fx + sd * hr * 0.55, hy + fy + hr * 0.3, hr * 0.15, hr * 0.09, 0, 0, 7); g.fill(); }
+  g.strokeStyle = ink; g.lineWidth = 1.5;
+  const fell = S.support.fallen;
+  if (fell || a.work) { g.beginPath(); g.ellipse(hx + fx, hy + fy + hr * 0.45, hr * 0.12, hr * (fell ? 0.14 : 0.08), 0, 0, 7); g.fillStyle = '#7f1d1d'; g.fill(); }
+  else { g.beginPath(); g.arc(hx + fx, hy + fy + hr * 0.28, hr * 0.22, 0.15 * Math.PI, 0.85 * Math.PI); g.stroke(); }
+  // Hard hat: a shiny dome with a brim and a ridge in their color.
   const hat = a.npc ? '#e2e8f0' : '#facc15';
-  g.beginPath(); g.ellipse(head[0], head[1] - hr * 0.15, hr * 1.25, hr * 0.32, 0, 0, 7); g.fillStyle = shade(hat, 0.85); g.fill();
-  g.beginPath(); g.arc(head[0], head[1] - hr * 0.2, hr * 0.95, Math.PI, 0); g.closePath();
-  const hg = g.createLinearGradient(0, head[1] - hr * 1.2, 0, head[1]);
-  hg.addColorStop(0, shade(hat, 1.15)); hg.addColorStop(1, shade(hat, 0.85));
-  g.fillStyle = hg; g.fill(); g.strokeStyle = shade(hat, 0.55); g.lineWidth = 1; g.stroke();
-  g.fillStyle = a.npc ? '#475569' : a.color; g.fillRect(head[0] - hr * 0.12, head[1] - hr * 1.1, hr * 0.24, hr * 0.9);
-  // Player number on the chest
-  g.fillStyle = '#fff'; g.font = `900 ${Math.max(9, k * 3.4)}px system-ui`; g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.lineWidth = 2.5; g.strokeStyle = 'rgba(15,23,42,0.6)';
+  g.beginPath(); g.ellipse(hx, hy - hr * 0.22, hr * 1.22, hr * 0.3, 0, 0, 7); g.fillStyle = shade(hat, 0.82); g.fill(); g.strokeStyle = ink; g.lineWidth = 1.5; g.stroke();
+  g.beginPath(); g.arc(hx, hy - hr * 0.28, hr * 0.98, Math.PI, 0); g.closePath();
+  const hh = g.createLinearGradient(hx - hr, hy - hr * 1.3, hx + hr, hy);
+  hh.addColorStop(0, shade(hat, 1.2)); hh.addColorStop(1, shade(hat, 0.82));
+  g.fillStyle = hh; g.fill(); g.stroke();
+  g.beginPath(); g.ellipse(hx - hr * 0.35, hy - hr * 0.85, hr * 0.22, hr * 0.1, -0.5, 0, 7); g.fillStyle = 'rgba(255,255,255,0.6)'; g.fill();
+  g.fillStyle = a.npc ? '#475569' : a.color; g.fillRect(hx - hr * 0.13, hy - hr * 1.24, hr * 0.26, hr * 0.96);
+  // Player number on the tummy.
   const label = a.npc ? 'AI' : String(ui.numberOf(a));
-  const ly = top[1] + (sy - top[1]) * 0.7;
-  g.strokeText(label, sx, ly); g.fillText(label, sx, ly);
+  g.font = `900 ${Math.max(9, k * 3.6)}px system-ui`; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.lineWidth = 3; g.strokeStyle = 'rgba(15,23,42,0.7)'; g.strokeText(label, bx, by + bh * 0.48);
+  g.fillStyle = '#fff'; g.fillText(label, bx, by + bh * 0.48);
   g.textBaseline = 'alphabetic';
+}
+
+// Where a carried piece is drawn: centered on its carrier, its lowest point at waist height.
+const CARRY_Z = 9;
+function carriedShift(S, a, it) {
+  const b = itemBox(S, it);
+  const ex = a.extending ? a.face[0] * 14 : 0, ey = a.extending ? a.face[1] * 14 : 0;
+  return { dx: a.x + ex - (b.x0 + b.x1) / 2, dy: a.y + ey - (b.y0 + b.y1) / 2, dz: CARRY_Z - b.z0 };
 }
 
 function drawActorTop(g, S, V, a, ui) {
   const { P, k } = V;
-  let [x, y] = P(a.x, a.y, 46);
+  let [x, y] = P(a.x, a.y, 36);
   if (a.carrying) {
+    // Just its number: the piece itself is in their hands.
     const it = S.items.find((q) => q.id === a.carrying);
-    const ex = a.extending ? a.face[0] * 14 : 0, ey = a.extending ? a.face[1] * 14 : 0;
-    const [ix, iy] = P(a.x + ex, a.y + ey, a.extending ? 30 : 44);
-    drawPieceIcon(g, ix, iy, it, k, a.extending ? '#b45309' : '#475569');
-    y -= 20;
+    const b = itemBox(S, it);
+    const [, iy] = P(a.x, a.y, CARRY_Z + (b.z1 - b.z0) + 4);
+    y = Math.min(y, iy);
+    chip(g, x, y, '#' + (it.idx + 1) + (it.buddy ? '★' : ''), a.extending ? '#b45309' : '#334155', k);
+    y -= 14;
   }
   // Holding the bridge: how many times it has grown since moving out (two drops it).
   const h = S.support.holders.get(a.id);
@@ -480,7 +663,7 @@ function drawActorTop(g, S, V, a, ui) {
   }
   if (a.work?.kind === 'assemble') {
     const it = a.work.target;
-    const [wx, wy] = P(a.x, a.y, 50);
+    const [wx, wy] = P(a.x, a.y, 40);
     g.strokeStyle = 'rgba(15,23,42,0.5)'; g.lineWidth = 5; g.beginPath(); g.arc(wx, wy - 6, 9, 0, 7); g.stroke();
     g.strokeStyle = '#22c55e'; g.lineWidth = 4; g.lineCap = 'round';
     g.beginPath(); g.arc(wx, wy - 6, 9, -Math.PI / 2, -Math.PI / 2 + (Math.PI * 2 * it.progress) / it.time); g.stroke();
@@ -548,7 +731,7 @@ function drawHud(g, S, V, ui) {
   g.textAlign = 'right'; g.font = '700 14px system-ui'; g.fillStyle = '#e2e8f0';
   g.fillText(`🧱 ${placed}/${S.items.length}   🔩 ${fastened}/${nuts.length}   💥 ${S.falls.length}`, W - 16, 24);
   g.font = '500 12px system-ui'; g.fillStyle = '#94a3b8';
-  g.fillText(ui.paused ? 'Paused' : `Esc / Start: pause · M: sound ${ui.muted ? 'off' : 'on'}`, W - 16, 46);
+  g.fillText(ui.paused ? 'Paused' : `Esc / Start: pause · M: sound ${ui.muted ? 'off' : 'on'} · N: music ${ui.music ? 'on' : 'off'}`, W - 16, 46);
 
   // The build order
   const n = S.items.length;
@@ -597,6 +780,22 @@ function drawHud(g, S, V, ui) {
     const pop = age < 0.15 ? 0.8 + (age / 0.15) * 0.2 : 1;
     banner(g, W, yb, b.text, b.color, Math.min(1, (2.6 - age) / 0.5), pop);
     yb += 34;
+  }
+  // 3, 2, 1, GO!
+  if (ui.countdown > -0.8) {
+    const n = Math.ceil(ui.countdown);
+    const frac = ui.countdown > 0 ? ui.countdown - Math.floor(ui.countdown) : 1 + ui.countdown / 0.8;
+    const text = n > 0 ? String(n) : 'GO!';
+    g.save();
+    if (n > 0) { g.fillStyle = 'rgba(8,12,20,0.35)'; g.fillRect(0, 0, W, H); }
+    const sc = n > 0 ? 0.7 + 0.6 * frac : 1 + 0.6 * (1 - frac);
+    g.globalAlpha = n > 0 ? Math.min(1, 0.3 + frac * 1.5) : Math.max(0, frac);
+    g.translate(W / 2, H / 2); g.scale(sc, sc);
+    g.font = `900 ${Math.min(W, H) * 0.22}px system-ui`; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.lineWidth = 14; g.strokeStyle = '#0f172a'; g.strokeText(text, 0, 6);
+    g.fillStyle = n > 0 ? '#facc15' : '#4ade80'; g.fillText(text, 0, 0);
+    if (n > 0) { g.font = `800 ${Math.min(W, H) * 0.04}px system-ui`; g.fillStyle = '#fff'; g.globalAlpha = 0.9; g.fillText('Get ready…', 0, Math.min(W, H) * 0.17); }
+    g.restore();
   }
   g.textBaseline = 'alphabetic';
 }

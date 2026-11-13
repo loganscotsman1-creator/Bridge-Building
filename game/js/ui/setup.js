@@ -143,7 +143,7 @@ export function Setup({ project, model, from, order, setOrder, setup, setSetup, 
       <section class="oe-card">
         <h2>3 · Times</h2>
         <${Num} label="Fasten one nut (hold X)" unit="s" value=${setup.settings.fastenTime} onChange=${(v) => setS({ fastenTime: v })} />
-        <${Num} label="Assembly times, share of the sequencer's" unit="×" value=${setup.settings.assemblyScale ?? 1} onChange=${(v) => setS({ assemblyScale: v })} />
+        <${Num} label="Make an assembly (hold X)" unit="s" title="Every assembly takes this long. 0 uses each assembly's time from the sequencer." value=${setup.settings.assemblyTime ?? 4} onChange=${(v) => setS({ assemblyTime: Math.max(0, v) })} />
         <${Num} label="Penalty when the bridge falls" unit="s" value=${setup.settings.fallPenalty} onChange=${(v) => setS({ fallPenalty: v })} />
         <${Num} label="Time to take hold of the bridge" unit="s" value=${setup.settings.grace} onChange=${(v) => setS({ grace: v })} />
         <${Num} label="Unfastened bolts flash after" unit="s" value=${setup.settings.neglect} onChange=${(v) => setS({ neglect: v })} />
@@ -171,8 +171,8 @@ export function Setup({ project, model, from, order, setOrder, setup, setSetup, 
   </div>`;
 }
 
-function Num({ label, unit, value, onChange }) {
-  return html`<label class="oe-num"><span>${label}</span><input type="number" min="0" step="any" value=${value}
+function Num({ label, unit, value, onChange, title }) {
+  return html`<label class="oe-num" title=${title}><span>${label}</span><input type="number" min="0" step="any" value=${value}
     onInput=${(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v) && v >= 0) onChange(v); }} /><em>${unit}</em></label>`;
 }
 

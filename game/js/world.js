@@ -1,8 +1,8 @@
 // Over Engineered: the game's rules, kept apart from drawing and input so they can be tested.
 //
 // The site is the year's layout (inches, x west → east, y north → south). The staging yard with
-// the members is split in half, north and south: a ready area where finished items wait at full
-// size, and an assembly area anyone can work in. Builders can't cross the river or leave the site.
+// the members is split in half, north and south: an assembly area anyone can work in, and a
+// ready area where finished items wait at full size. Builders can't cross the river or leave the site.
 //
 // Rules, in short:
 //   - Items (assemblies and single pieces) appear in the ready area in the build order: an
@@ -38,7 +38,7 @@ export function defaultSettings(project, fastenTime) {
   const tm = project.timing;
   return {
     fastenTime, // s to fasten one nut (hold X)
-    assemblyScale: 0.4, // assemblies take this share of the sequencer's time (a game moves quicker)
+    assemblyTime: 4, // s to make any assembly (hold X); 0 = use each one's time from the sequencer
     fallPenalty: 20, // s added when the bridge falls
     grace: 3, // s to take hold once the bridge needs holding
     neglect: 6, // s before an unfastened bolt starts flashing
@@ -70,14 +70,14 @@ export function createGame({ project, order, settings, players, npcs = {} }) {
     : { west: [R, site.width / 2], east: [site.width / 2, site.width - R] };
   const sideOfX = (x) => (river ? (x < river.x + river.w / 2 ? 'west' : 'east') : x < site.width / 2 ? 'west' : 'east');
 
-  // Staging: the yard with the members is split in half across its depth, the ready area to the
-  // north and the assembly area to the south. Both are open ground: walk in and out freely.
+  // Staging: the yard with the members is split in half across its depth, the assembly area to
+  // the north and the ready area to the south. Both are open ground: walk in and out freely.
   const area = membersArea(site);
   const cx = area.x + area.w / 2, cy = area.y + area.h / 2;
   const yard = site.zones.find((z) => z.type === 'staging' && cx >= z.x && cx <= z.x + z.w && cy >= z.y && cy <= z.y + z.h) || area;
   const half = yard.h / 2;
-  const ready = { x: yard.x, y: yard.y, w: yard.w, h: half };
-  const assembly = { x: yard.x, y: yard.y + half, w: yard.w, h: yard.h - half };
+  const assembly = { x: yard.x, y: yard.y, w: yard.w, h: half };
+  const ready = { x: yard.x, y: yard.y + half, w: yard.w, h: yard.h - half };
   const stagingSide = sideOfX(yard.x + yard.w / 2);
   const obstacles = [];
   const stageZones = site.zones.filter((z) => z.type === 'staging');
