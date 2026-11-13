@@ -1,7 +1,7 @@
 // Drawing the game: a tilted top-down view of the site, with heights shown by lifting things up the
 // screen, so top chords, bottom chords and laterals read as above or below each other. Also the
 // little effects (sparks, dust, confetti, floating text, a shake when the bridge falls).
-import { benchLayout, buildingItems, holdPoints, itemBox, readyLayout, shelfItems, R } from './world.js';
+import { benchLayout, buildingItems, constructionCost, holdPoints, itemBox, readyLayout, shelfItems, R } from './world.js';
 
 // Screen units per inch of ground depth (y) and of height (z). The ground stretches to fill a
 // tall screen; heights are exaggerated a little so above and below are easy to tell apart.
@@ -46,6 +46,7 @@ function rrect(g, x, y, w, h, r) {
 }
 const fmt = (t) => { const m = Math.floor(t / 60), s = t - m * 60; return m + ':' + (s < 10 ? '0' : '') + s.toFixed(1); };
 export { fmt as fmtTime };
+export const fmtMoney = (v) => '$' + Math.round(v).toLocaleString('en-US');
 
 // A faint speckle laid over the ground so it reads as dirt and grass, not flat paper.
 let speckle = null;
@@ -428,7 +429,7 @@ export function draw(g, S, V, ui) {
   const sup = S.support;
   if ((sup.needed || sup.fallen) && !sup.standing) {
     for (const p of holdPoints(S)) {
-      const held = [...sup.holders.values()].some((h) => h.key === p.key);
+      const held = S.actors.some((a) => sup.holders.has(a.id) && Math.hypot(a.x - p.x, a.y - p.y) < 30);
       const [x, y] = P(p.x, p.y, p.z + 4);
       const s = 7 + (held ? 0 : 2 * Math.sin(now * 6));
       if (!held) { g.fillStyle = 'rgba(250,204,21,0.25)'; g.beginPath(); g.arc(x, y, s * 2, 0, 7); g.fill(); }
@@ -624,7 +625,7 @@ function drawActor(g, S, V, a, ui) {
   g.beginPath(); g.ellipse(hx - hr * 0.35, hy - hr * 0.85, hr * 0.22, hr * 0.1, -0.5, 0, 7); g.fillStyle = 'rgba(255,255,255,0.6)'; g.fill();
   g.fillStyle = a.npc ? '#475569' : a.color; g.fillRect(hx - hr * 0.13, hy - hr * 1.24, hr * 0.26, hr * 0.96);
   // Player number on the tummy.
-  const label = a.npc ? 'AI' : String(ui.numberOf(a));
+  const label = a.npc ? a.label || 'AI' : String(ui.numberOf(a));
   g.font = `900 ${Math.max(9, k * 3.6)}px system-ui`; g.textAlign = 'center'; g.textBaseline = 'middle';
   g.lineWidth = 3; g.strokeStyle = 'rgba(15,23,42,0.7)'; g.strokeText(label, bx, by + bh * 0.48);
   g.fillStyle = '#fff'; g.fillText(label, bx, by + bh * 0.48);
@@ -723,7 +724,11 @@ function drawHud(g, S, V, ui) {
   rrect(g, W / 2 - 78, 6, 156, 38, 12); g.fillStyle = 'rgba(255,255,255,0.06)'; g.fill();
   g.fillStyle = '#fff'; g.font = '800 30px ui-monospace, monospace';
   g.fillText(fmt(S.t), W / 2, 26);
-  if (S.penalties) { g.fillStyle = '#f87171'; g.font = '700 13px system-ui'; g.fillText('+' + S.penalties + ' s penalties', W / 2, 52); }
+  // The score so far: construction cost from the rules, at the time (with penalties) so far.
+  const cost = constructionCost(S.project.site.rules, S.t + S.penalties, S.actors.length);
+  g.font = '700 13px system-ui';
+  if (cost != null) { g.fillStyle = '#86efac'; g.fillText(fmtMoney(cost) + (S.penalties ? '  (+' + S.penalties + ' s penalties)' : ''), W / 2, 52); }
+  else if (S.penalties) { g.fillStyle = '#f87171'; g.fillText('+' + S.penalties + ' s penalties', W / 2, 52); }
 
   const placed = S.items.filter((it) => it.status === 'placed').length;
   const nuts = S.bolts.filter((b) => b.state !== 'internal');
@@ -763,7 +768,7 @@ function drawHud(g, S, V, ui) {
     g.fillStyle = '#cbd5e1'; g.font = '500 12px system-ui';
     g.fillText(activityText(S, a), x + 14, y + 36);
     g.fillStyle = '#64748b'; g.font = '500 11px system-ui';
-    g.fillText(a.npc ? (a.npc === 'holder' ? 'Holds the bridge, then bolts buddy pieces' : 'Makes every assembly') : ui.deviceOf(a), x + 14, y + 54);
+    g.fillText(a.npc ? (a.npc === 'holder' ? 'Holds the bridge, then does the nearest job' : a.npc === 'assembler' ? 'Makes assemblies, then runs pieces' : 'Computer: does the nearest job') : ui.deviceOf(a), x + 14, y + 54);
   });
 
   // Messages

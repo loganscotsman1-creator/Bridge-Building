@@ -56,16 +56,29 @@ takes to fasten.
 - **Stability:** a piece touching the bridge in one place is stable with one bolt; in two or
   more places, with two bolts in different places. Until then whoever placed it holds it (and
   can walk along it). A buddy piece's carrier can only hold it; someone else bolts it.
-- **Holding the bridge:** once anything hangs past a footing, someone must hold the bridge at a
-  lateral (before the first lateral, at the outer end of the first assembly). Pushing the stick
-  along the bridge moves the holder to the next lateral. The bridge falls (a time penalty, and it
-  must be held again before work goes on) if nobody takes hold within a few seconds, the last
-  holder lets go, or the bridge grows longer twice while every holder stays put. The bridge grows
-  when both trusses reach farther; laterals don't count, nor do a few inches. It stands on its own
-  once it reaches both footings with the trusses tied together.
+- **Holding the bridge:** once anything hangs past a footing, someone must hold it up (LB next to
+  the bridge). While holding, a builder can walk along any part of the bridge on their side of the
+  river (slowly, staying right next to it), and still put in and fasten bolts in reach. The bridge
+  falls (a time penalty, and it must be held again before work goes on) if nobody takes hold
+  within a few seconds, the last holder lets go, or the bridge grows longer twice while every
+  holder stays put (walking a foot farther out counts as keeping up). The bridge grows when both
+  trusses reach farther; laterals don't count, nor do a few inches. It stands on its own once it
+  reaches both footings with the trusses tied together.
+- **Computers:** any builder spot not taken by a player is a computer (COM), up to the number of
+  builders chosen; each COM's side is set on its player card. With 5 builders one computer has a
+  main job (holding the bridge or making assemblies), with 6 both do. Once its main job is done,
+  or for a COM always, a computer takes the nearest job going on its side, working down the build
+  order: hold the bridge if nobody is, take a piece someone is passing across, deliver what it
+  carries (passing it over the river if it goes in on the other side), put in and fasten bolts,
+  run the next ready piece, help make assemblies. The holder bolts what it can reach while it
+  holds; the assembler runs pieces once every assembly is made.
+- **Score:** the construction cost from this year's rules (6.2.5 in 2027): minutes (with
+  penalties) × builders (players and computers) × $ per builder-minute, × the crew factor with
+  enough builders; over the time limit counts as 180 minutes. Lower is better. It shows live
+  under the clock.
 - **Finish:** every piece in, every nut fastened, everyone back in a staging yard. Bolts left
-  unfastened flash after 6 s. The results show each builder's time fastening, assembling,
-  holding, carrying, walking and waiting, plus recent runs to compare.
+  unfastened flash after 6 s. The results show the cost, each builder's time fastening,
+  assembling, holding, carrying, walking and waiting, plus recent runs to compare.
 
 The game's code is in [`game/`](game/): the rules in `game/js/world.js` (no drawing, so they are
 tested in `tests/`), drawing in `render.js`, controllers in `input.js`.

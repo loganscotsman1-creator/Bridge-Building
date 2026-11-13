@@ -31,6 +31,7 @@ function navList(setup) {
   return [
     { id: 'builders' },
     ...(setup.builders === 5 ? [{ id: 'npcRole' }] : []),
+    ...npcList(setup).helpers.map((_, k) => ({ id: 'com' + k })),
     ...TIMES.map((t) => ({ id: t.key, time: t })),
     { id: 'start' },
   ];
@@ -39,6 +40,12 @@ function navList(setup) {
 function nudge(setup, id, dir) {
   if (id === 'builders') return { ...setup, builders: Math.max(4, Math.min(6, setup.builders + dir)) };
   if (id === 'npcRole') return { ...setup, npcRole: setup.npcRole === 'holder' ? 'assembler' : 'holder' };
+  if (id.startsWith('com')) {
+    const k = +id.slice(3), hs = npcList(setup).helpers;
+    const cs = hs.map((h) => h.side);
+    cs[k] = cs[k] === 'west' ? 'east' : 'west';
+    return { ...setup, comSides: cs };
+  }
   const t = TIMES.find((x) => x.key === id);
   if (!t) return setup;
   const v = Math.max(0, Math.round(((setup.settings[id] ?? 0) + dir * t.step) * 100) / 100);
@@ -64,10 +71,21 @@ export function npcSides(project, model, order) {
   return { holder: holder || 'west', assembler: assembler || 'east' };
 }
 
+// The computer builders: the role NPCs (5 builders: one, holding or assembling; 6: both), plus a
+// COM in every player spot left empty, up to the number of builders chosen. Each COM has a side.
 export function npcList(setup) {
-  if (setup.builders === 6) return { holder: true, assembler: true };
-  if (setup.builders === 5) return { [setup.npcRole]: true };
-  return {};
+  const roles = setup.builders === 6 ? { holder: true, assembler: true } : setup.builders === 5 ? { [setup.npcRole]: true } : {};
+  const n = Math.max(0, Math.min(4 - setup.players.length, setup.builders - setup.players.length - Object.keys(roles).length));
+  return { ...roles, helpers: Array.from({ length: n }, (_, k) => ({ side: comSide(setup, k) })) };
+}
+export const npcCount = (npcs) => (npcs.holder ? 1 : 0) + (npcs.assembler ? 1 : 0) + (npcs.helpers?.length || 0);
+// A COM's side: as set, else whichever side has fewer builders so far.
+export function comSide(setup, k) {
+  if (setup.comSides?.[k]) return setup.comSides[k];
+  const on = { west: 0, east: 0 };
+  for (const p of setup.players) on[p.side]++;
+  for (let j = 0; j < k; j++) on[comSide(setup, j)]++;
+  return on.west <= on.east ? 'west' : 'east';
 }
 
 export function setupProblems(project, model, order, setup) {
@@ -77,9 +95,11 @@ export function setupProblems(project, model, order, setup) {
   const sides = npcSides(project, model, order);
   const on = { west: 0, east: 0 };
   for (const p of setup.players) on[p.side]++;
-  for (const k of Object.keys(npcs)) on[sides[k]]++;
+  if (npcs.holder) on[sides.holder]++;
+  if (npcs.assembler) on[sides.assembler]++;
+  for (const h of npcs.helpers) on[h.side]++;
   if (setup.players.length && (!on.west || !on.east)) out.push('Put at least one builder on each side of the river.');
-  if (setup.players.length + Object.keys(npcs).length > (project.site.rules?.maxBuilders || 6)) out.push('Too many builders for the rules.');
+  if (setup.players.length + npcCount(npcs) > (project.site.rules?.maxBuilders || 6)) out.push('Too many builders for the rules.');
   return out;
 }
 
@@ -232,6 +252,18 @@ export function Setup({ project, model, from, order, setOrder, setup, setSetup, 
         <div class="oe-players">
           ${[0, 1, 2, 3].map((i) => {
             const p = setup.players[i];
+            const k = i - setup.players.length;
+            if (!p && k < npcs.helpers.length) {
+              const side = npcs.helpers[k].side;
+              const setSide = (v) => { const cs = [...(setup.comSides || [])]; for (let j = 0; j < npcs.helpers.length; j++) cs[j] = cs[j] || npcs.helpers[j].side; cs[k] = v; setSetup({ ...setup, comSides: cs }); };
+              return html`<div class=${'oe-slot com' + (navId === 'com' + k ? ' oe-navfocus' : '')} style=${{ '--c': '#64748b' }}>
+                <div class="row"><span class="oe-com-badge">C${k + 1}</span><b>COM ${k + 1}</b><small class="oe-dev">computer</small></div>
+                <div class="oe-side">
+                  ${['west', 'east'].map((s2) => html`<button class=${side === s2 ? 'on' : ''} onClick=${() => setSide(s2)}>${s2 === 'west' ? 'West side' : 'East side'}</button>`)}
+                </div>
+                <small class="oe-padhint">Does the nearest job. Press <kbd>A</kbd> to take this spot.</small>
+              </div>`;
+            }
             if (!p) return html`<div class="oe-slot empty">Player ${i + 1}<br /><small>press A to join</small></div>`;
             return html`<div class=${'oe-slot' + (flash === p.device ? ' joined' : '')} style=${{ '--c': p.color }}>
               <div class="row">
@@ -254,13 +286,13 @@ export function Setup({ project, model, from, order, setOrder, setup, setSetup, 
         <div class=${'oe-side' + (navId === 'builders' ? ' oe-navfocus' : '')}>
           ${[4, 5, 6].map((n) => html`<button class=${setup.builders === n ? 'on' : ''} onClick=${() => setSetup({ ...setup, builders: n })}>${n}</button>`)}
         </div>
-        ${setup.builders === 4 && html`<p class="oe-hint">Players do everything: assemblies, running pieces, holding the bridge.</p>`}
+        <p class="oe-hint">Spots not taken by a player are filled by computer builders (COM) up to this number. COMs take whatever job is nearest on their side.</p>
         ${setup.builders === 5 && html`<div class=${'oe-side' + (navId === 'npcRole' ? ' oe-navfocus' : '')}>
           <button class=${setup.npcRole === 'holder' ? 'on' : ''} onClick=${() => setSetup({ ...setup, npcRole: 'holder' })}>NPC holds the bridge</button>
           <button class=${setup.npcRole === 'assembler' ? 'on' : ''} onClick=${() => setSetup({ ...setup, npcRole: 'assembler' })}>NPC makes assemblies</button>
         </div>`}
-        ${npcs.holder && html`<p class="oe-hint">The holder (${sides.holder} side) holds the bridge at the newest lateral until it stands, then bolts the buddy pieces.</p>`}
-        ${npcs.assembler && html`<p class="oe-hint">The assembler (${sides.assembler} side) makes every assembly at its set time. Players can make assemblies alongside it to get ahead.</p>`}
+        ${npcs.holder && html`<p class="oe-hint">The holder (${sides.holder} side) holds the bridge, walking out along it as it grows and bolting what it can reach, until it stands; then it does the nearest job.</p>`}
+        ${npcs.assembler && html`<p class="oe-hint">The assembler (${sides.assembler} side) makes every assembly at its set time, then runs pieces. Players can make assemblies alongside it to get ahead.</p>`}
       </section>
 
       <section class="oe-card">
@@ -272,7 +304,7 @@ export function Setup({ project, model, from, order, setOrder, setup, setSetup, 
           <ul>
             <li><b>A</b>: grab the next item from the ready area (from anywhere in it) or from a teammate, place a piece where it goes (puts in its first bolt), place a bolt. Hold A while carrying to pass a piece across.</li>
             <li><b>X</b> (hold): fasten a nut, or make an assembly in the assembly area. Several builders can work there at once, on different assemblies or together on one.</li>
-            <li><b>LB</b> (hold): hold the bridge up at a lateral. Push the stick along the bridge to move out to the next lateral. Let go with nobody else holding and it falls.</li>
+            <li><b>LB</b> (hold): hold the bridge up. While holding you can walk along the bridge on your side, and still bolt what's in reach; walk out as it grows. Let go with nobody else holding and it falls.</li>
             <li>A piece touching the bridge in one place needs one bolt; in two or more places, two bolts in different places. Until then whoever placed it holds it. ★ pieces need a buddy to bolt them.</li>
             <li>The bridge stands on its own once it reaches both footings with the trusses tied together. Then fasten everything and get back to a staging yard.</li>
           </ul>
@@ -280,7 +312,7 @@ export function Setup({ project, model, from, order, setOrder, setup, setSetup, 
       </section>
     </div>
     <footer class="oe-start">
-      ${problems.length ? html`<ul class="oe-problems">${problems.map((p) => html`<li>${p}</li>`)}</ul>` : html`<span class="oe-ready">Ready: ${setup.players.length} player${setup.players.length === 1 ? '' : 's'}${Object.keys(npcs).length ? ' + ' + Object.keys(npcs).length + ' NPC' : ''}</span>`}
+      ${problems.length ? html`<ul class="oe-problems">${problems.map((p) => html`<li>${p}</li>`)}</ul>` : html`<span class="oe-ready">Ready: ${setup.players.length} player${setup.players.length === 1 ? '' : 's'}${npcCount(npcs) ? ' + ' + npcCount(npcs) + ' computer' : ''}</span>`}
       <button class=${'oe-go' + (navId === 'start' ? ' oe-navfocus' : '')} disabled=${problems.length > 0} onClick=${onStart}>Start building</button>
     </footer>
   </div>`;

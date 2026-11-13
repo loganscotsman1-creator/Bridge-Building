@@ -178,7 +178,8 @@ function Controls({ players, onStart, onBack }) {
       </div>
       <ul class="oe-brief-tips">
         <li>Grab pieces from the <b>ready</b> area in order and set them where they glow on the bridge.</li>
-        <li>Once anything hangs past a footing, someone must <b>hold the bridge</b> at a lateral, or it falls.</li>
+        <li>Once anything hangs past a footing, someone must <b>hold the bridge</b> (and walk out along it as it grows), or it falls.</li>
+        <li>Your score is the <b>construction cost</b>: minutes × builders × $ per builder-minute. Lower is better.</li>
         <li>Fasten every nut, then everyone back to a staging yard to finish.</li>
       </ul>
       <div class="oe-brief-go">

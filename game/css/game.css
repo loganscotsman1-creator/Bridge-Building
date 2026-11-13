@@ -107,7 +107,7 @@ body.playing { overflow: hidden; }
   .oe-players { grid-template-columns: 1fr; }
 }
 
-.oe-music-btn { position: fixed; right: 14px; bottom: 14px; z-index: 50; background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 999px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
+.oe-music-btn { position: fixed; right: 14px; bottom: 76px; z-index: 50; background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 999px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
 .oe-music-btn:hover { background: #273449; }
 
 .oe-brief { z-index: 20; overflow: auto; padding: 20px; }
@@ -135,3 +135,7 @@ body.playing { overflow: hidden; }
 .oe-osk .k.wide { font-size: 10px; }
 .oe-osk .k.on { background: #facc15; color: #1c1917; }
 .oe-osk small { grid-column: 1 / -1; color: #64748b; font-size: 10px; text-align: center; }
+
+.oe-slot.com { border-style: dashed; background: #0b1222; }
+.oe-slot.com b { color: #cbd5e1; }
+.oe-com-badge { width: 24px; height: 24px; border-radius: 50%; background: #64748b; color: #fff; display: grid; place-items: center; font: 900 10px system-ui; }

@@ -13,22 +13,24 @@
 //     more. Placing it puts in the first bolt. Until it has its bolts, whoever placed it holds it.
 //     A "buddy" piece can only be held by the one who placed it; someone else bolts it.
 //   - Until the bridge reaches both footings with the trusses tied together, it must be held up
-//     (hold LB) once anything hangs past a footing. Holders hold at a lateral (or, before the
-//     first lateral, at the outer end of the first assembly). Letting go with nobody else holding,
-//     nobody taking hold in time, or every holder staying put while the bridge grows longer twice
-//     drops the bridge: a time penalty, and someone has to hold it again before work goes on.
+//     (hold LB) once anything hangs past a footing. A holder can walk along any part of the bridge
+//     on their side of the river while holding it. Letting go with nobody else holding, nobody
+//     taking hold in time, or every holder staying put while the bridge grows longer twice drops
+//     the bridge: a time penalty, and someone has to hold it again before work goes on.
 //   - Done when every piece is in, every nut is fastened and everyone is back in a staging yard.
-import { buildModel, bridgeToSite, distToSegment2, footingRanges, pointInPoly } from '../../js/model/geometry.js';
+//   - The score is the construction cost from the rules: minutes x builders x $ per builder-minute,
+//     with the crew discount (lower is better).
+//   - NPCs press the same buttons players do (see the end of this file).
+import { buildModel, bridgeToSite, distToSegment2, footingRanges, pointInPoly, siteToBridge } from '../../js/model/geometry.js';
 import { membersArea } from '../../js/model/plan.js';
 import { gameAssemblyTime, isAssembly, startFooting } from './order.js';
 
 export const R = 8; // builder radius (in)
 const HOLD_SNAP = 80; // how far away a builder can be to take hold of the bridge
 const STATION_REACH = 12; // how close to the assembly or ready area counts as in it
-const ANCHOR_BRIDGE = 16; // how far a holder can lean while holding the bridge
+const HOLD_REACH = 26; // a holder stays within this of the bridge while walking along it (in)
+const HOLD_RESET = 12; // moving this much farther out along the bridge counts as moving out (in)
 const ANCHOR_PIECE = 12;
-const SNAP_PUSH = 0.6; // stick push (0..1) that moves a holder to the next lateral...
-const SNAP_TIME = 0.4; // ...when held this long (s)
 const GROW_MIN = 4; // the bridge has grown when it reaches at least this much farther (in)
 
 export const ACTIVITIES = ['fasten', 'assemble', 'hold', 'brace', 'pass', 'carry', 'walk', 'idle'];
@@ -139,13 +141,20 @@ export function createGame({ project, order, settings, players, npcs = {} }) {
     const fx = F.length ? toSite(dir > 0 ? F[sf][0] - 20 : F[sf][1] + 20, 0)[0] : 100;
     S.actors.push(newActor({ id: 'npc-holder', name: 'Holder (NPC)', color: '#475569', side, npc: 'holder' }, clampPos(S, side, fx, site.depth - 30)));
   }
+  // Extra computer builders filling empty player spots: they take whatever job is nearest.
+  (npcs.helpers || []).forEach((h, k) => {
+    const same = (npcs.helpers || []).filter((q) => q.side === h.side);
+    const pos = spawn(h.side, same.indexOf(h) + (bySide[h.side]?.length || 0), same.length + (bySide[h.side]?.length || 0));
+    S.actors.push(newActor({ id: 'npc-com-' + (k + 1), name: 'COM ' + (k + 1), color: COM_COLORS[k % COM_COLORS.length], side: h.side, npc: 'helper', label: 'C' + (k + 1) }, pos));
+  });
   releaseItems(S);
   return S;
 }
+const COM_COLORS = ['#94a3b8', '#7c8aa0', '#a3b1c4', '#6b7a90'];
 
 function newActor(p, pos) {
   return {
-    id: p.id, name: p.name, color: p.color, side: p.side, npc: p.npc || null, x: pos.x, y: pos.y, face: [1, 0],
+    id: p.id, name: p.name, color: p.color, side: p.side, npc: p.npc || null, label: p.label || null, task: null, x: pos.x, y: pos.y, face: [1, 0],
     carrying: null, extending: false, anchor: null, work: null, prev: { a: false, x: false, lb: false }, push: { dir: 0, t: 0 },
     moving: false, activity: 'idle', prompt: null,
     stats: { time: Object.fromEntries(ACTIVITIES.map((k) => [k, 0])), holdTotal: 0, boltsPlaced: 0, nutsFastened: 0, piecesPlaced: 0, assemblies: 0, handoffs: 0, drops: 0 },
@@ -343,6 +352,15 @@ export function standAt(S, a, pt) {
   return dist(p.x, p.y, pt.x, pt.y) <= S.settings.reach ? p : null;
 }
 
+// How far a point on the site is from the nearest installed piece of the bridge.
+export function bridgeDist(S, x, y) {
+  let best = Infinity;
+  for (const id of S.installed) { const mm = S.members.get(id); if (mm) best = Math.min(best, distToPoly(x, y, mm.poly)); }
+  return best;
+}
+// How far out along the bridge (from the starting footing) a point on the site is.
+const outAt = (S, x, y) => S.out(siteToBridge(S.site, x, y).x);
+
 // Recompute what holds the bridge up after anything changes.
 function updateBridge(S) {
   const sup = S.support;
@@ -370,14 +388,6 @@ function updateBridge(S) {
   }
   const overhang = [...S.installed].some((id) => !S.members.get(id)?.over);
   sup.needed = !sup.standing && overhang;
-  // The first lateral is in: anyone holding the first assembly moves to it.
-  const pts = holdPoints(S);
-  for (const [id, h] of sup.holders) {
-    if (pts.some((p) => p.key === h.key)) continue;
-    const a = S.actors.find((x) => x.id === id);
-    const best = pts.map((p) => ({ p, s: a && standAt(S, a, p) })).filter((q) => q.s).sort((p, q) => dist(p.s.x, p.s.y, a.x, a.y) - dist(q.s.x, q.s.y, a.x, a.y))[0];
-    if (best) { h.key = best.p.key; a.anchor = { ...a.anchor, x: best.s.x, y: best.s.y }; }
-  }
 }
 
 // Self-supporting: secure pieces, bolted together, reach both footings on each truss, and the
@@ -427,29 +437,16 @@ function fall(S, why) {
   S.events.push({ kind: 'fall', why });
 }
 
+// Take hold where you stand (next to the bridge), or step to a nearby hold point.
 export function takeHold(S, a, pt) {
-  const s = standAt(S, a, pt);
+  const s = pt.here ? { x: a.x, y: a.y } : standAt(S, a, pt);
   if (!s) return false;
-  a.anchor = { kind: 'bridge', x: s.x, y: s.y, r: ANCHOR_BRIDGE };
+  a.anchor = { kind: 'bridge', x: s.x, y: s.y };
   a.x = s.x; a.y = s.y;
   a.work = null;
-  S.support.holders.set(a.id, { key: pt.key, stale: 0 });
+  S.support.holders.set(a.id, { stale: 0, best: outAt(S, s.x, s.y) });
   if (S.support.fallen) { S.support.fallen = false; S.events.push({ kind: 'held' }); }
   S.support.grace = 0;
-  return true;
-}
-function moveHold(S, a, step) {
-  const h = S.support.holders.get(a.id);
-  const pts = holdPoints(S).filter((p) => standAt(S, a, p));
-  const i = pts.findIndex((p) => p.key === h.key);
-  const cur = pts[i];
-  const next = pts[i + step];
-  if (!next) return false;
-  const s = standAt(S, a, next);
-  if (cur && next.out > cur.out) h.stale = 0;
-  h.key = next.key;
-  a.anchor = { ...a.anchor, x: s.x, y: s.y };
-  a.x = s.x; a.y = s.y;
   return true;
 }
 function letGo(S, a) {
@@ -526,6 +523,7 @@ export function actionLB(S, a) {
   const sup = S.support;
   if (sup.holders.has(a.id)) return { kind: 'holding', label: 'Holding' };
   if (a.anchor || !(sup.needed || sup.fallen) || sup.standing) return null;
+  if (bridgeDist(S, a.x, a.y) <= HOLD_REACH) return { kind: 'hold', label: 'Hold bridge', target: { here: true } };
   let best = null, bd = HOLD_SNAP;
   for (const p of holdPoints(S)) {
     const s = standAt(S, a, p);
@@ -601,8 +599,22 @@ function move(S, a, mx, my, dt) {
     if (!item || itemDist(S, item, p.x, p.y) <= S.settings.reach) { a.x = p.x; a.y = p.y; }
     return;
   }
+  if (a.anchor?.kind === 'bridge') {
+    // Holding the bridge: walk along it (slowly), anywhere on your side, staying right next to it.
+    if (!a.moving) return;
+    const v = S.settings.carrySpeed * 0.8;
+    const tryAt = (x, y) => {
+      const p = clampPos(S, a.side, x, y);
+      if (bridgeDist(S, p.x, p.y) > HOLD_REACH) return false;
+      a.x = p.x; a.y = p.y; a.anchor.x = p.x; a.anchor.y = p.y;
+      return true;
+    };
+    const nx = a.x + mx * v * dt, ny = a.y + my * v * dt;
+    if (!tryAt(nx, ny) && !tryAt(nx, a.y)) tryAt(a.x, ny);
+    return;
+  }
   if (a.anchor) {
-    // Lean a little around where you're holding.
+    // Holding a buddy piece: lean a little around it.
     a.x = a.anchor.x + mx * a.anchor.r;
     a.y = a.anchor.y + my * a.anchor.r;
     const p = clampPos(S, a.side, a.x, a.y);
@@ -646,14 +658,9 @@ export function stepGame(S, inputs, dt) {
     a.npcInput = a.npc ? inp : null;
     move(S, a, inp.mx || 0, inp.my || 0, dt);
 
-    // Pushing the stick along the bridge while holding it moves to the next lateral.
-    if (S.support.holders.has(a.id)) {
-      const along = (inp.mx || 0) * S.dir;
-      const d = Math.abs(along) >= SNAP_PUSH ? Math.sign(along) : 0;
-      if (d && d === a.push.dir) a.push.t += dt; else a.push = { dir: d, t: 0 };
-      if (d && a.push.t >= SNAP_TIME) { moveHold(S, a, d); a.push = { dir: d, t: -1 }; }
-    }
-    if (inp.snap) moveHold(S, a, inp.snap);
+    // A holder who walks out along the bridge keeps up with it.
+    const hd = S.support.holders.get(a.id);
+    if (hd) { const o = outAt(S, a.x, a.y); if (o > hd.best + HOLD_RESET) { hd.best = o; hd.stale = 0; } }
 
     // A: tap to grab, place or bolt; hold while carrying to pass.
     if (inp.a && !a.prev.a) doA(S, a, actionA(S, a));
@@ -713,69 +720,258 @@ export function stepGame(S, inputs, dt) {
 }
 
 // ---------- NPCs ----------
+// NPCs press the same buttons players do. Each has a main job: the holder holds the bridge (and
+// puts in and fastens bolts it can reach while holding) until it stands; the assembler makes
+// assemblies. Otherwise, and for the extra COM builders always, an NPC takes the nearest job going
+// on its side of the river, working down the build order: hold the bridge if nobody is, take a
+// piece being passed across, deliver what it carries (passing it over the river if it goes on the
+// other side), put in and fasten bolts, run the next ready piece, help make assemblies. When
+// everything is built it walks back to a staging yard.
 function goTo(S, a, x, y, tol = 4) {
   const dx = x - a.x, dy = y - a.y, d = Math.hypot(dx, dy);
   if (d <= tol) return { mx: 0, my: 0, there: true };
   return { mx: dx / d, my: dy / d, there: false };
 }
-function npcThink(S, a, dt) {
-  const none = { mx: 0, my: 0, a: false, x: false, lb: false };
-  if (a.npc === 'assembler') {
-    const z = S.assembly;
-    const spot = clampPos(S, a.side, z.x + z.w * 0.8, z.y + z.h * 0.5);
-    const g = goTo(S, a, spot.x, spot.y);
-    if (!g.there) return { ...none, ...g };
-    return { ...none, x: !!assemblyFor(S, a) };
+const NONE = { mx: 0, my: 0, a: false, x: false, lb: false };
+const tapA = (a) => !a.prev.a; // press A this frame (a tap needs A up the frame before)
+// Where on its side an NPC can stand to reach a point, if anywhere.
+function reachSpot(S, side, x, y, reach) {
+  const q = clampPos(S, side, x, y);
+  return dist(q.x, q.y, x, y) <= reach ? q : null;
+}
+// Where on a side an NPC can stand to place an item, nearest to `from`, if anywhere.
+function itemSpot(S, side, item, from) {
+  const reach = S.settings.reach - 3;
+  let best = null, bd = Infinity;
+  for (const id of item.memberIds) {
+    const mm = S.members.get(id);
+    if (!mm) continue;
+    const c = mm.poly.reduce((t, q) => [t[0] + q[0] / mm.poly.length, t[1] + q[1] / mm.poly.length], [0, 0]);
+    for (const [x, y] of [c, ...mm.poly]) {
+      for (const dy of [0, -14, 14]) {
+        const q = clampPos(S, side, x, y + dy);
+        if (itemDist(S, item, q.x, q.y) > reach) continue;
+        const d = dist(q.x, q.y, from.x, from.y);
+        if (d < bd) { bd = d; best = q; }
+      }
+    }
   }
-  // Holder: holds the bridge at the newest lateral it can reach until it stands, then bolts and
-  // fastens the buddy pieces.
+  return best;
+}
+// Could this item go in now (it stands on a footing or touches something already in)?
+const placeableNow = (S, item) => item.memberIds.some((id) => S.members.get(id)?.m.bearing) || contactsWithBridge(S, item).length > 0;
+// The river-edge spot on a side facing a point.
+function edgeSpot(S, side, y) {
+  const [x0, x1] = S.sides[side];
+  return clampPos(S, side, side === 'west' ? x1 : x0, y);
+}
+// The farthest-out spot along the bridge an NPC holding it can reach on its side (worked out
+// again only when pieces go in).
+function farHoldSpot(S, a) {
+  const key = a.side + ':' + S.installed.size;
+  S.farHold = S.farHold || new Map();
+  if (S.farHold.has(key)) return S.farHold.get(key);
+  let best = null, bo = -Infinity;
+  for (const id of S.installed) {
+    const mm = S.members.get(id);
+    for (const [x, y] of mm.poly) {
+      const q = clampPos(S, a.side, x, y);
+      if (bridgeDist(S, q.x, q.y) > HOLD_REACH - 4) continue;
+      const o = outAt(S, q.x, q.y);
+      if (o > bo) { bo = o; best = q; }
+    }
+  }
+  S.farHold.set(key, best);
+  return best;
+}
+// Is a job an NPC picked a moment ago still there to do?
+function stillOn(S, a, job) {
+  switch (job.kind) {
+    case 'deliver': case 'pass': return a.carrying === job.item.id;
+    case 'take': return !a.carrying && !!job.from.carrying;
+    case 'bolt': return !a.carrying && job.bolt.state === 'needed' && !S.support.fallen;
+    case 'fasten': return !a.carrying && job.bolt.state === 'placed' && !S.support.fallen;
+    case 'grab': return !a.carrying && shelfItems(S).length > 0;
+    case 'hold': return !S.support.holders.size && (S.support.needed || S.support.fallen) && !S.support.standing;
+    case 'assemble': return !a.carrying && S.items.some((it) => it.multi && (it.status === 'waiting' || it.status === 'building'));
+  }
+  return false;
+}
+
+// Bolt jobs on this side: put in needed bolts and fasten placed ones, nearest first.
+function boltJob(S, a, taken, near = null) {
+  if (S.support.fallen) return null;
+  const reach = S.settings.reach - 3;
+  let best = null, bd = Infinity;
+  for (const b of S.bolts) {
+    if (b.state !== 'needed' && b.state !== 'placed') continue;
+    if (taken.has('bolt:' + b.id)) continue;
+    if (near && !near(b)) continue;
+    const q = reachSpot(S, a.side, b.x, b.y, reach);
+    if (!q) continue;
+    const d = dist(q.x, q.y, a.x, a.y) + (b.flashing ? -40 : 0);
+    if (d < bd) { bd = d; best = { kind: b.state === 'needed' ? 'bolt' : 'fasten', key: 'bolt:' + b.id, bolt: b, spot: q, cost: d }; }
+  }
+  return best;
+}
+// Do a bolt job: walk there, then tap A (put in) or hold X (fasten).
+function doBolt(S, a, job, base = NONE) {
+  const b = job.bolt;
+  const close = dist(b.x, b.y, a.x, a.y) <= S.settings.reach - 1;
+  if (!close) return { ...base, ...goTo(S, a, job.spot.x, job.spot.y, 2) };
+  if (job.kind === 'bolt') return { ...base, a: tapA(a) };
+  return { ...base, x: true };
+}
+
+// All the jobs an NPC could do now on its side, cheapest first (cost ~ distance, minus urgency).
+function jobs(S, a) {
+  const out = [];
   const sup = S.support;
-  if (!sup.standing) {
-    const pts = holdPoints(S).filter((p) => standAt(S, a, p));
-    const far = pts[pts.length - 1];
-    if (sup.holders.has(a.id)) {
-      const h = sup.holders.get(a.id);
-      const cur = pts.findIndex((p) => p.key === h.key);
-      return { ...none, lb: true, snap: far && cur >= 0 && cur < pts.length - 1 ? 1 : 0 };
+  const taken = new Set(S.actors.filter((o) => o !== a && o.npc && o.task).map((o) => o.task.key));
+  const item = a.carrying && S.items.find((it) => it.id === a.carrying);
+  if (item) {
+    // Deliver it: to its spot if it goes in on this side, else to the river to pass it over.
+    const spot = itemSpot(S, a.side, item, a);
+    if (spot) out.push({ kind: 'deliver', key: 'item:' + item.id, item, spot, cost: -500 });
+    else out.push({ kind: 'pass', key: 'item:' + item.id, item, spot: edgeSpot(S, a.side, itemBox(S, item) ? (itemBox(S, item).y0 + itemBox(S, item).y1) / 2 : a.y), cost: -500 });
+    return out;
+  }
+  // Hold the bridge up if it needs it and nobody (or no other NPC on its way) is.
+  if ((sup.needed || sup.fallen) && !sup.standing && !sup.holders.size && !taken.has('hold')) {
+    const q = farHoldSpot(S, a);
+    if (q) out.push({ kind: 'hold', key: 'hold', spot: q, cost: dist(q.x, q.y, a.x, a.y) - 2000 });
+  }
+  // Take a piece someone across the river is holding out, or is bringing to the river for this side.
+  for (const o of S.actors) {
+    if (o === a || o.side === a.side || !o.carrying) continue;
+    const it = S.items.find((x) => x.id === o.carrying);
+    if (!o.extending && (itemSpot(S, o.side, it, o) || !itemSpot(S, a.side, it, a))) continue;
+    const q = edgeSpot(S, a.side, o.y);
+    if (!taken.has('take:' + o.id)) out.push({ kind: 'take', key: 'take:' + o.id, from: o, spot: q, cost: dist(q.x, q.y, a.x, a.y) - 300 });
+  }
+  const bj = boltJob(S, a, taken);
+  if (bj) out.push(bj);
+  // Run the next ready piece, in build order, if it can go in now (or it's simply next).
+  if (a.side === S.stagingSide && !taken.has('grab')) {
+    const next = shelfItems(S)[0];
+    const firstOpen = S.items.find((it) => it.status !== 'placed' && it.status !== 'carried');
+    if (next && (placeableNow(S, next) || next === firstOpen)) {
+      const r0 = S.ready;
+      const q = clampPos(S, a.side, Math.max(r0.x + 6, Math.min(r0.x + r0.w - 6, a.x)), Math.max(r0.y + 6, Math.min(r0.y + r0.h - 6, a.y)));
+      out.push({ kind: 'grab', key: 'grab', spot: q, cost: dist(q.x, q.y, a.x, a.y) + 30 });
     }
-    if ((sup.needed || sup.fallen) && far) {
-      const s = standAt(S, a, far);
-      const g = goTo(S, a, s.x, s.y, 10);
-      return { ...none, mx: g.mx, my: g.my, lb: g.there && !a.prev.lb ? true : false };
+  }
+  // Make assemblies (the assembler's main job; others pitch in when nothing's closer).
+  if (a.side === S.stagingSide && S.items.some((it) => it.multi && (it.status === 'waiting' || it.status === 'building'))) {
+    const z = S.assembly;
+    const q = clampPos(S, a.side, Math.max(z.x + 8, Math.min(z.x + z.w - 8, a.x)), Math.max(z.y + 8, Math.min(z.y + z.h - 8, a.y)));
+    out.push({ kind: 'assemble', key: 'asm:' + a.id, spot: q, cost: dist(q.x, q.y, a.x, a.y) + (a.npc === 'assembler' ? -1000 : 60) });
+  }
+  return out.sort((p, q) => p.cost - q.cost);
+}
+
+// Where an NPC waits with nothing to do: a staging yard once it's all built, else somewhere handy.
+function idle(S, a) {
+  if (S.allBuilt || S.items.every((it) => it.status === 'placed')) {
+    const z = S.stageZones.filter((q) => S.sideOfX(q.x + q.w / 2) === a.side).sort((p, q) => Math.abs(p.x + p.w / 2 - a.x) - Math.abs(q.x + q.w / 2 - a.x))[0];
+    if (z) { const p = clampPos(S, a.side, Math.max(z.x + 10, Math.min(z.x + z.w - 10, a.x)), Math.max(z.y + 10, Math.min(z.y + z.h - 10, a.y))); return { ...NONE, ...goTo(S, a, p.x, p.y) }; }
+  }
+  // Wait by the river, ready to take pieces across, if the pieces come from the other side.
+  if (a.side !== S.stagingSide) { const q = edgeSpot(S, a.side, S.site.depth / 2); return { ...NONE, ...goTo(S, a, q.x, q.y, 10) }; }
+  return NONE;
+}
+
+function npcThink(S, a, dt) {
+  const sup = S.support;
+  a.task = null;
+  if (a.anchor?.locked) return NONE; // holding a buddy piece: someone else bolts it
+  // Holding a piece in place: put in its bolts.
+  if (a.anchor?.kind === 'piece') {
+    const it = S.items.find((x) => x.id === a.anchor.itemId);
+    const job = it && boltJob(S, a, new Set(), (b) => b.state === 'needed' && b.memberIds.some((id) => it.memberIds.includes(id)));
+    if (job) { a.task = job; return doBolt(S, a, job); }
+    return NONE;
+  }
+  // Holding the bridge: keep holding; move out when it grows, and bolt what's in reach meanwhile.
+  if (sup.holders.has(a.id)) {
+    const hold = { ...NONE, lb: true };
+    const h = sup.holders.get(a.id);
+    const far = farHoldSpot(S, a);
+    if (far && h.stale >= 1 && dist(far.x, far.y, a.x, a.y) > 6) return { ...hold, ...goTo(S, a, far.x, far.y, 4) };
+    let job = a.plan && S.t < a.planUntil && (a.plan.kind === 'bolt' || a.plan.kind === 'fasten') && stillOn(S, a, a.plan) ? a.plan : null;
+    if (!job) {
+      job = boltJob(S, a, new Set(S.actors.filter((o) => o !== a && o.npc && o.task).map((o) => o.task.key)),
+        (b) => { const q = clampPos(S, a.side, b.x, b.y); return bridgeDist(S, q.x, q.y) <= HOLD_REACH - 2; });
+      a.plan = job; a.planUntil = S.t + 0.3;
     }
-    // Wait near the starting footing.
+    if (job) { a.task = job; return doBolt(S, a, job, hold); }
+    if (far && dist(far.x, far.y, a.x, a.y) > 6) return { ...hold, ...goTo(S, a, far.x, far.y, 4) };
+    return hold;
+  }
+  // The holder's main job until the bridge stands: be there to hold it.
+  if (a.npc === 'holder' && !sup.standing) {
+    if (sup.needed || sup.fallen) {
+      const q = farHoldSpot(S, a);
+      if (q) {
+        a.task = { kind: 'hold', key: 'hold' };
+        const g = goTo(S, a, q.x, q.y, 8);
+        return { ...NONE, mx: g.mx, my: g.my, lb: g.there && !a.prev.lb };
+      }
+    }
     const fx = S.F.length ? S.toSite((S.F[S.startFooting][0] + S.F[S.startFooting][1]) / 2 + S.dir * 30, 0)[0] : a.x;
     const p = clampPos(S, a.side, fx, S.site.depth - 30);
-    return { ...none, ...goTo(S, a, p.x, p.y, 8) };
+    return { ...NONE, ...goTo(S, a, p.x, p.y, 8) };
   }
-  // Buddy pieces' bolts within its side.
-  const buddyIds = new Set(S.items.filter((it) => it.buddy && it.status === 'placed').flatMap((it) => it.memberIds));
-  const jobs = S.bolts.filter((b) => (b.state === 'needed' || b.state === 'placed') && b.memberIds.some((id) => buddyIds.has(id)));
-  let best = null, bd = Infinity;
-  for (const b of jobs) {
-    const s = clampPos(S, a.side, b.x, b.y);
-    if (dist(s.x, s.y, b.x, b.y) > S.settings.reach - 2) continue;
-    const d = dist(s.x, s.y, a.x, a.y);
-    if (d < bd) { bd = d; best = { b, s }; }
+  // Everyone else (and the holder once the bridge stands): the nearest job going, chosen again a
+  // few times a second (or as soon as the one in hand is done).
+  let job = a.plan && S.t < a.planUntil && stillOn(S, a, a.plan) ? a.plan : null;
+  if (!job) { job = jobs(S, a)[0] || null; a.plan = job; a.planUntil = S.t + 0.3; }
+  if (!job) return idle(S, a);
+  a.task = job;
+  const there = (tol = 3) => dist(job.spot.x, job.spot.y, a.x, a.y) <= tol;
+  switch (job.kind) {
+    case 'deliver':
+      if (canPlace(S, a, job.item)) return { ...NONE, a: tapA(a) };
+      return { ...NONE, ...goTo(S, a, job.spot.x, job.spot.y, 2) };
+    case 'pass':
+      // At the river, hold it out (hold A) until someone takes it.
+      // (right up to the water, so the pass reaches across)
+      if (!there(0.5)) return { ...NONE, ...goTo(S, a, job.spot.x, job.spot.y, 0.2) };
+      return { ...NONE, a: a.extending || tapA(a) };
+    case 'take':
+      if (passer(S, a)) return { ...NONE, a: tapA(a) }; // take whatever is held out to us
+      return { ...NONE, ...goTo(S, a, job.spot.x, job.spot.y, 0.2) };
+    case 'hold': {
+      const g = goTo(S, a, job.spot.x, job.spot.y, 8);
+      return { ...NONE, mx: g.mx, my: g.my, lb: g.there && !a.prev.lb };
+    }
+    case 'bolt': case 'fasten': return doBolt(S, a, job);
+    case 'grab':
+      if (inReady(S, a)) return { ...NONE, a: tapA(a) };
+      return { ...NONE, ...goTo(S, a, job.spot.x, job.spot.y, 3) };
+    case 'assemble':
+      if (distToRect(a.x, a.y, S.assembly) <= STATION_REACH - 2 && assemblyFor(S, a)) return { ...NONE, x: true };
+      return { ...NONE, ...goTo(S, a, job.spot.x, job.spot.y, 3) };
   }
-  if (best) {
-    const near = dist(best.b.x, best.b.y, a.x, a.y) <= S.settings.reach - 4;
-    if (!near) return { ...none, ...goTo(S, a, best.s.x, best.s.y, 2) };
-    if (best.b.state === 'needed') return { ...none, a: !a.prev.a };
-    return { ...none, x: true };
-  }
-  if (S.allBuilt) {
-    const z = S.stageZones.filter((q) => S.sideOfX(q.x + q.w / 2) === a.side).sort((p, q) => Math.abs(p.x + p.w / 2 - a.x) - Math.abs(q.x + q.w / 2 - a.x))[0];
-    if (z) { const p = clampPos(S, a.side, Math.max(z.x + 10, Math.min(z.x + z.w - 10, a.x)), Math.max(z.y + 10, Math.min(z.y + z.h - 10, a.y))); return { ...none, ...goTo(S, a, p.x, p.y) }; }
-  }
-  return none;
+  return NONE;
 }
 
 // ---------- results ----------
+// Construction cost from the rules (6.2.5 in 2027): minutes x builders x $ per builder-minute,
+// times the crew factor with enough builders; over the time limit counts as 180 minutes.
+export function constructionCost(rules, seconds, builders) {
+  const r = rules || {};
+  if (!r.costPerBuilderMin) return null;
+  const gamma = builders >= (r.crewFactorMinBuilders ?? Infinity) ? r.crewFactor ?? 1 : 1;
+  const minutes = r.timeLimitMin && seconds > r.timeLimitMin * 60 ? 180 : seconds / 60;
+  return minutes * builders * r.costPerBuilderMin * gamma;
+}
 export function results(S) {
   const time = S.finishT ?? S.t;
+  const total = time + S.penalties;
   return {
-    done: S.done, time, penalties: S.penalties, total: time + S.penalties, falls: S.falls, neglected: S.neglected,
+    done: S.done, time, penalties: S.penalties, total, falls: S.falls, neglected: S.neglected,
+    builders: S.actors.length, cost: constructionCost(S.project.site.rules, total, S.actors.length),
     players: S.actors.map((a) => ({ id: a.id, name: a.name, color: a.color, side: a.side, npc: a.npc, ...a.stats })),
   };
 }

@@ -13,7 +13,8 @@ import { stateAt } from '../js/sim/playback.js';
 import { TOURS, dueTour } from '../js/ui/Tour.js';
 import { feetInches, parseLength, snapZoneEdge, snapZoneMove } from '../js/model/zonesnap.js';
 import { defaultOrder, orderProblems } from '../game/js/order.js';
-import { clampPos, createGame, defaultSettings, holdPoints, itemBox, itemDist, readyLayout, shelfItems, shelfSlot, stepGame } from '../game/js/world.js';
+import { bridgeDist, clampPos, constructionCost, createGame, defaultSettings, holdPoints, itemBox, itemDist, readyLayout, results as gameResults, shelfItems, shelfSlot, stepGame } from '../game/js/world.js';
+import { npcList } from '../game/js/ui/setup.js';
 import { applyAssembly, connectionChoices, dissolveAssembly, dropSlot, insertAtSlot, onStagingSide, pieceChoices, planChecks, removeTask, taskBlocks, taskGroup } from '../js/model/timeline.js';
 
 const results = [];
@@ -1136,7 +1137,7 @@ await test('game: one place touching needs one bolt, two or more places need two
   assert(Math.hypot(actor('p1').x - far.x, actor('p1').y - far.y) <= S.settings.reach, 'reached the far bolt');
   press('p1', 'a');
   assert(!lat.loose && !actor('p1').anchor, 'second bolt: it stands, and they let go');
-  assert(S.support.holders.get('p2').key === lat.memberIds[0], 'the holder moved to the first lateral');
+  assert(S.support.holders.has('p2'), 'still holding');
   // A vertical touching one chord at one place.
   const v = S.items.find((it) => it.memberIds.length === 1 && S.members.get(it.memberIds[0]).m.name === 'A-V1');
   const c = buildModel(S.project).contacts.filter((x) => x.bolts && (x.a === v.memberIds[0] || x.b === v.memberIds[0]) && S.installed.has(x.a === v.memberIds[0] ? x.b : x.a));
@@ -1175,11 +1176,63 @@ await test('game: if the bridge grows twice and nobody moves out to hold it, it 
   assert(S.falls.length === 1 && /nobody moved out/.test(S.falls[0].why), JSON.stringify(S.falls));
 });
 
+await test('game: the score is the construction cost from the rules, for every builder', () => {
+  const rules = { costPerBuilderMin: 172500, crewFactor: 0.8, crewFactorMinBuilders: 4, timeLimitMin: 45 };
+  assert(Math.round(constructionCost(rules, 600, 4)) === 5520000, '10 min x 4 builders x $172,500 x 0.8');
+  assert(Math.round(constructionCost(rules, 600, 3)) === 5175000, 'no crew factor under 4 builders');
+  assert(Math.round(constructionCost(rules, 46 * 60, 4)) === 180 * 4 * 172500 * 0.8, 'over the limit counts as 180 minutes');
+  const { S, tick } = game({ npcs: { helpers: [{ side: 'east' }, { side: 'west' }] } });
+  tick(2);
+  const r = gameResults(S);
+  assert(r.builders === 4 && Math.abs(r.cost - constructionCost(S.project.site.rules, r.total, 4)) < 1e-6, 'players and computers both count: ' + JSON.stringify([r.builders, r.cost]));
+});
+
+await test('game: a holder can walk along the bridge on their side, but not away from it', () => {
+  const { S, place, hold, tick, put, input, actor } = game({ players: [['p1', 'west'], ['p2', 'west'], ['p3', 'east']] });
+  place('p1', S.items[0]);
+  const pt = holdPoints(S)[0];
+  put('p2', pt.x, pt.y); hold('p2', 'lb', true); tick();
+  assert(S.support.holders.has('p2'), 'holding');
+  place('p1', S.items[1]);
+  const x0 = actor('p2').x;
+  input.get('p2').mx = -S.dir; tick(1.5); input.get('p2').mx = 0; tick();
+  assert(Math.abs(actor('p2').x - x0) > 20 && S.support.holders.has('p2'), 'walked along the bridge, still holding: ' + (actor('p2').x - x0).toFixed(1));
+  input.get('p2').my = -1; tick(4); input.get('p2').my = 0; tick();
+  assert(bridgeDist(S, actor('p2').x, actor('p2').y) <= 26.01, 'stays right next to the bridge: ' + bridgeDist(S, actor('p2').x, actor('p2').y).toFixed(1));
+  assert(S.support.holders.has('p2') && !S.falls.length, 'and kept holding the whole time');
+});
+
+await test('game: empty player spots become computer builders, on a side each', () => {
+  const base = { builders: 5, npcRole: 'holder', players: [{ device: 'kb1', side: 'west' }] };
+  const n = npcList(base);
+  assert(n.holder && !n.assembler && n.helpers.length === 3, '1 player, 5 builders: the holder plus 3 COMs: ' + JSON.stringify(n));
+  assert(npcList({ ...base, builders: 4 }).helpers.length === 3, '1 player, 4 builders: 3 COMs');
+  assert(npcList({ ...base, builders: 6, players: [1, 2, 3, 4].map(() => ({ side: 'west' })) }).helpers.length === 0, '4 players: no COMs');
+  const sides = n.helpers.map((h) => h.side);
+  assert(sides.includes('east') && sides.includes('west'), 'COMs spread over both sides: ' + sides);
+  assert(npcList({ ...base, comSides: ['east', 'east', 'east'] }).helpers.every((h) => h.side === 'east'), 'sides can be chosen');
+});
+
+await test('game: computers build the whole bridge by themselves, working down the build order', () => {
+  // One player who does nothing (standing in their yard), the holder and three COMs.
+  const { S, tick } = game({ players: [['p1', 'west']], npcs: { holder: true, helpers: [{ side: 'east' }, { side: 'east' }, { side: 'west' }] } });
+  for (let i = 0; i < 300 && !S.done; i++) tick(5);
+  const placed = S.items.filter((it) => it.status === 'placed').length;
+  const left = S.bolts.filter((b) => b.state !== 'internal' && b.state !== 'fastened').length;
+  assert(S.done, `finished: ${placed}/${S.items.length} placed, ${left} bolts left, ${S.falls.length} falls, t=${S.t.toFixed(0)}, carrying ${S.actors.filter((a) => a.carrying).map((a) => a.id + ':' + a.carrying + (a.extending ? '(out)' : '')).join(' ')}`);
+  const com = S.actors.filter((a) => a.npc === 'helper');
+  assert(com.some((a) => a.stats.piecesPlaced > 0) && com.some((a) => a.stats.handoffs > 0), 'COMs placed pieces and passed them across the river');
+  const holder = S.actors.find((a) => a.npc === 'holder');
+  assert(holder.stats.holdTotal > 5 && holder.stats.boltsPlaced + holder.stats.nutsFastened > 0, 'the holder held the bridge and bolted while holding');
+});
+
 await test('game: NPCs make assemblies at their set time and hold the bridge until it stands', () => {
   const { S, tick } = game({ players: [['p1', 'west']], npcs: { assembler: true } });
   const t0 = S.items[0].time;
   tick(t0 + 6); // time to walk to the bench first
-  assert(S.items[0].status === 'shelf', 'assembler made the first one: ' + S.items[0].status + ' ' + S.items[0].progress);
+  assert(S.items[0].status !== 'waiting' && S.items[0].status !== 'building' && S.actors.find((a) => a.id === 'npc-assembler').stats.assemblies >= 1, 'assembler made the first one: ' + S.items[0].status + ' ' + S.items[0].progress);
+  tick(20);
+  assert(S.items.filter((it) => it.multi).every((it) => it.status !== 'waiting') && S.actors.find((a) => a.id === 'npc-assembler').stats.time.carry > 0, 'with every assembly made, the assembler runs pieces');
 
   const g = game({ players: [['p1', 'west'], ['p2', 'east']], npcs: { holder: true } });
   const holder = g.actor('npc-holder');
