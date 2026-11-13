@@ -106,3 +106,6 @@ body.playing { overflow: hidden; }
   .oe-edit-body { grid-template-columns: 1fr; grid-template-rows: 55vh auto; }
   .oe-players { grid-template-columns: 1fr; }
 }
+
+.oe-music-btn { position: fixed; right: 14px; bottom: 14px; z-index: 50; background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 999px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
+.oe-music-btn:hover { background: #273449; }

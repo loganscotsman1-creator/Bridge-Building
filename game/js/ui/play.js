@@ -2,7 +2,7 @@
 import { html, useEffect, useRef, useState } from '../../../js/lib/preact.js';
 import { createGame, results, shelfSlot, stepGame } from '../world.js';
 import { addFx, draw, makeView } from '../render.js';
-import { SFX, duckMusic, isMusicOn, isMuted, setMusicOn, setMuted, startMusic, stopMusic, unlock } from '../sound.js';
+import { SFX, duckMusic, isMusicOn, isMuted, playSong, setMusicOn, setMuted, unlock } from '../sound.js';
 import { KEYBOARDS, deviceName, endFrame, readDevice } from '../input.js';
 import { npcList } from './setup.js';
 
@@ -29,7 +29,7 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart }) {
     let raf, last = performance.now(), acc = 0, startWas = false, finished = false, finishedAt = 0;
     const itemLabel = (id) => '#' + (S.items.find((x) => x.id === id).idx + 1);
     unlock();
-    startMusic();
+    playSong('game');
     let lastCount = 4;
     const onKey = (e) => {
       if (e.code === 'KeyM' || e.key === 'm' || e.key === 'M') { setMuted(!isMuted()); ui.muted = isMuted(); }
@@ -119,7 +119,7 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart }) {
     };
     raf = requestAnimationFrame(frame);
     window.__oeGame = S; // for debugging in the console
-    return () => { cancelAnimationFrame(raf); window.removeEventListener('keydown', onKey); stopMusic(); };
+    return () => { cancelAnimationFrame(raf); window.removeEventListener('keydown', onKey); };
   }, []);
 
   return html`<div class="oe-play">

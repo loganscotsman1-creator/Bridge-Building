@@ -10,6 +10,7 @@ import { Setup } from './ui/setup.js';
 import { OrderEditor } from './ui/ordereditor.js';
 import { Play } from './ui/play.js';
 import { Results } from './ui/results.js';
+import { isMusicOn, playSong, setMusicOn, unlock } from './sound.js';
 
 const SETUP_KEY = 'oe.setup.v1';
 const SETTINGS_VERSION = 3;
@@ -60,17 +61,28 @@ function App() {
   };
 
   useEffect(() => { document.body.classList.toggle('playing', screen === 'play'); }, [screen]);
+  // Mellow music everywhere but the game itself (which plays its own). Browsers only let sound
+  // start after a click or key press, so the first one starts it.
+  const [musicOn, setMusicState] = useState(isMusicOn());
+  useEffect(() => { if (screen !== 'play') playSong('menu'); }, [screen]);
+  useEffect(() => {
+    const go = () => unlock();
+    window.addEventListener('pointerdown', go);
+    window.addEventListener('keydown', go);
+    return () => { window.removeEventListener('pointerdown', go); window.removeEventListener('keydown', go); };
+  }, []);
+  const musicButton = html`<button class="oe-music-btn" title="Music on or off (N during a run)" onClick=${() => { setMusicOn(!isMusicOn()); setMusicState(isMusicOn()); }}>${musicOn ? '♪ Music on' : '♪ Music off'}</button>`;
 
-  if (screen === 'order') return html`<${OrderEditor} project=${project} model=${model} order=${order} setOrder=${setOrder} settings=${setup.settings} onDone=${() => setScreen('setup')} />`;
+  if (screen === 'order') return html`${musicButton}<${OrderEditor} project=${project} model=${model} order=${order} setOrder=${setOrder} settings=${setup.settings} onDone=${() => setScreen('setup')} />`;
   if (screen === 'play') {
     return html`<${Play} key=${runKey} project=${project} order=${order} setup=${setup}
       onFinish=${(r) => { setResult(r); setScreen('results'); }} onQuit=${() => setScreen('setup')} onRestart=${() => setRunKey(runKey + 1)} />`;
   }
   if (screen === 'results') {
-    return html`<${Results} result=${result} project=${project} order=${order} setup=${setup}
+    return html`${musicButton}<${Results} result=${result} project=${project} order=${order} setup=${setup}
       onAgain=${() => { setRunKey(runKey + 1); setScreen('play'); }} onSetup=${() => setScreen('setup')} />`;
   }
-  return html`<${Setup} project=${project} model=${model} from=${from} order=${order} setOrder=${setOrder} setup=${setup} setSetup=${setSetup}
+  return html`${musicButton}<${Setup} project=${project} model=${model} from=${from} order=${order} setOrder=${setOrder} setup=${setup} setSetup=${setSetup}
     onProject=${useProject} onEditOrder=${() => setScreen('order')} onStart=${() => { setRunKey(runKey + 1); setScreen('play'); }} />`;
 }
 

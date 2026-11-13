@@ -41,7 +41,9 @@ takes to fasten.
 - **Pace:** the game runs quicker than real life by default: nuts take 60% of the sequencer's
   time, every assembly takes 4 s (set it in the setup screen; 0 uses the sequencer's times),
   builders walk and carry faster, and a fall costs 20 s. A 3-2-1 countdown starts each run.
-- **Music:** an upbeat loop plays during a run. Press N, or use the pause menu, to turn it off.
+- **Music:** an upbeat loop plays during a run, and a slower, mellow one on the setup, order and
+  results screens. Press N during a run, use the pause menu, or the ♪ button on the other screens
+  to turn music off.
 - **Sound:** every action has a sound (grab, pass, the clank of placing steel, bolt, ratchet,
   hammer, alarms, falls, fanfares). Press M, or use the pause menu, to turn sound off.
 - **Controls:** A grabs, places a piece where it goes (with its first bolt), places bolts, and,

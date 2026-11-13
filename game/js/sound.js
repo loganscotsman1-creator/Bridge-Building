@@ -104,16 +104,42 @@ export const SFX = {
 export const unlock = () => ac();
 
 // ---------- background music ----------
-// An upbeat chiptune loop, written out here and played by a small look-ahead scheduler: kick,
-// hi-hat, a bouncing bass and a lead tune over C, Am, F, G. N toggles it; the choice is remembered.
+// Two songs, written out here and played by a small look-ahead scheduler:
+//   game - an upbeat chiptune loop (kick, hi-hat, bouncing bass, a lead tune over C, Am, F, G)
+//   menu - a slow, mellow loop for setup and results (soft pads, a gentle arpeggio, a few bells)
+// Switching songs fades one out as the other starts. N toggles music; the choice is remembered.
 const MUSIC_KEY = 'oe.music';
 let musicOn = (() => { try { return localStorage.getItem(MUSIC_KEY) !== 'off'; } catch { return true; } })();
-let musicBus = null, timer = null, nextAt = 0, step = 0;
-const BPM = 132, STEP = 60 / BPM / 4; // sixteenth notes
+let musicBus = null, timer = null, nextAt = 0, step = 0, song = null, songName = null, ducked = false;
 const midi = (n) => 440 * Math.pow(2, (n - 69) / 12);
-const CHORDS = [[48, 52, 55], [45, 48, 52], [41, 45, 48], [43, 47, 50]]; // C, Am, F, G
+
+function note(freq, at, dur, type, vol, attack = 0.008) {
+  const o = ctx.createOscillator(), g = ctx.createGain();
+  o.type = type; o.frequency.setValueAtTime(freq, at);
+  g.gain.setValueAtTime(0.0001, at);
+  g.gain.exponentialRampToValueAtTime(vol, at + attack);
+  g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+  o.connect(g).connect(musicBus);
+  o.start(at); o.stop(at + dur + 0.02);
+}
+function drum(at, kind, vol = 1) {
+  if (kind === 'kick') {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.frequency.setValueAtTime(150, at); o.frequency.exponentialRampToValueAtTime(45, at + 0.12);
+    g.gain.setValueAtTime(0.5 * vol, at); g.gain.exponentialRampToValueAtTime(0.0001, at + 0.16);
+    o.connect(g).connect(musicBus); o.start(at); o.stop(at + 0.18);
+    return;
+  }
+  const s = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+  s.buffer = noiseBuf; f.type = 'highpass'; f.frequency.value = kind === 'snare' ? 1500 : 7000;
+  const dur = kind === 'snare' ? 0.12 : 0.04;
+  g.gain.setValueAtTime((kind === 'snare' ? 0.25 : 0.12) * vol, at); g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+  s.connect(f).connect(g).connect(musicBus); s.start(at, Math.random() * 0.5); s.stop(at + dur + 0.02);
+}
+
+const GAME_CHORDS = [[48, 52, 55], [45, 48, 52], [41, 45, 48], [43, 47, 50]]; // C, Am, F, G
 // Lead tune: one note (MIDI) or null per sixteenth, two 4-bar phrases.
-const LEAD = [
+const GAME_LEAD = [
   72, null, 76, null, 79, null, 76, 79, 81, null, 79, null, 76, null, 74, null,
   72, null, 76, null, 77, null, 76, null, 72, null, 69, null, 72, null, null, null,
   69, null, 72, null, 77, null, 76, 77, 81, null, 77, null, 76, null, 72, null,
@@ -123,67 +149,92 @@ const LEAD = [
   77, null, 81, null, 84, null, 81, null, 79, null, 77, null, 76, null, 74, null,
   74, null, 76, null, 77, null, 79, null, 83, null, 86, null, 84, null, null, null,
 ];
+const MENU_CHORDS = [[53, 57, 60, 64], [52, 55, 59, 62], [50, 53, 57, 60], [48, 52, 55, 59]]; // Fmaj7, Em7, Dm7, Cmaj7
+// A few soft bells, one per eighth note or null, over eight bars.
+const MENU_BELLS = [
+  76, null, null, null, 72, null, null, null, 74, null, null, null, null, null, null, null,
+  72, null, null, null, 69, null, null, null, 67, null, null, null, null, null, null, null,
+  76, null, 77, null, 79, null, null, null, 76, null, null, null, 74, null, null, null,
+  72, null, null, null, 71, null, 72, null, null, null, null, null, null, null, null, null,
+];
+const ARP = [0, 2, 1, 3, 2, 1, 3, 2];
 
-function note(freq, at, dur, type, vol) {
-  const o = ctx.createOscillator(), g = ctx.createGain();
-  o.type = type; o.frequency.setValueAtTime(freq, at);
-  g.gain.setValueAtTime(0.0001, at);
-  g.gain.exponentialRampToValueAtTime(vol, at + 0.008);
-  g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
-  o.connect(g).connect(musicBus);
-  o.start(at); o.stop(at + dur + 0.02);
-}
-function drum(at, kind) {
-  if (kind === 'kick') {
-    const o = ctx.createOscillator(), g = ctx.createGain();
-    o.frequency.setValueAtTime(150, at); o.frequency.exponentialRampToValueAtTime(45, at + 0.12);
-    g.gain.setValueAtTime(0.5, at); g.gain.exponentialRampToValueAtTime(0.0001, at + 0.16);
-    o.connect(g).connect(musicBus); o.start(at); o.stop(at + 0.18);
-    return;
-  }
-  const s = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
-  s.buffer = noiseBuf; f.type = 'highpass'; f.frequency.value = kind === 'snare' ? 1500 : 7000;
-  const dur = kind === 'snare' ? 0.12 : 0.04;
-  g.gain.setValueAtTime(kind === 'snare' ? 0.25 : 0.12, at); g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
-  s.connect(f).connect(g).connect(musicBus); s.start(at, Math.random() * 0.5); s.stop(at + dur + 0.02);
-}
-function playStep(i, at) {
-  const bar = Math.floor(i / 16) % 4, s = i % 16, ch = CHORDS[bar];
-  if (s % 4 === 0) drum(at, 'kick');
-  if (s === 4 || s === 12) drum(at, 'snare');
-  if (s % 2 === 1) drum(at, 'hat');
-  // Bass: root and fifth, bouncing.
-  if (s % 2 === 0) note(midi(ch[0] - 12 + (s % 8 === 4 ? 7 : 0)), at, STEP * 1.6, 'triangle', 0.32);
-  // Chord stabs on the off-beats.
-  if (s % 4 === 2) for (const n of ch) note(midi(n + 12), at, STEP * 0.9, 'square', 0.025);
-  const l = LEAD[i % LEAD.length];
-  if (l) note(midi(l), at, STEP * 1.8, 'square', 0.05);
-}
+const SONGS = {
+  game: {
+    level: 0.35, step: 60 / 132 / 4, // sixteenths at 132 bpm
+    play(i, at) {
+      const STEP = this.step, bar = Math.floor(i / 16) % 4, s = i % 16, ch = GAME_CHORDS[bar];
+      if (s % 4 === 0) drum(at, 'kick');
+      if (s === 4 || s === 12) drum(at, 'snare');
+      if (s % 2 === 1) drum(at, 'hat');
+      if (s % 2 === 0) note(midi(ch[0] - 12 + (s % 8 === 4 ? 7 : 0)), at, STEP * 1.6, 'triangle', 0.32);
+      if (s % 4 === 2) for (const n of ch) note(midi(n + 12), at, STEP * 0.9, 'square', 0.025);
+      const l = GAME_LEAD[i % GAME_LEAD.length];
+      if (l) note(midi(l), at, STEP * 1.8, 'square', 0.05);
+    },
+  },
+  menu: {
+    level: 0.4, step: 60 / 76 / 2, // eighths at 76 bpm
+    play(i, at) {
+      const STEP = this.step, bar = Math.floor(i / 8) % 4, s = i % 8, ch = MENU_CHORDS[bar];
+      if (s === 0) {
+        for (const n of ch) note(midi(n), at, STEP * 8.4, 'sine', 0.045, 0.35); // pad
+        note(midi(ch[0] - 12), at, STEP * 3.8, 'sine', 0.16, 0.05);
+      }
+      if (s === 4) note(midi(ch[0] - 12 + 7), at, STEP * 3.6, 'sine', 0.11, 0.05);
+      note(midi(ch[ARP[s]] + 12), at, STEP * 1.6, 'triangle', 0.03, 0.02); // arpeggio
+      if (s % 2 === 1) drum(at, 'hat', 0.25); // a soft shaker
+      const b = MENU_BELLS[i % MENU_BELLS.length];
+      if (b) { note(midi(b), at, STEP * 5, 'sine', 0.06, 0.01); note(midi(b + 12), at, STEP * 2, 'sine', 0.015, 0.01); }
+    },
+  },
+};
+
 function tick() {
-  if (!ctx) return;
-  while (nextAt < ctx.currentTime + 0.25) { playStep(step, nextAt); step++; nextAt += STEP; }
+  if (!ctx || !song) return;
+  while (nextAt < ctx.currentTime + 0.25) { song.play(step, nextAt); step++; nextAt += song.step; }
 }
+const levelNow = () => (!musicOn || !song ? 0 : ducked ? song.level * 0.35 : song.level);
 export const isMusicOn = () => musicOn;
 export function setMusicOn(on) {
   musicOn = on;
   try { localStorage.setItem(MUSIC_KEY, on ? 'on' : 'off'); } catch { /* private window */ }
-  if (musicBus) musicBus.gain.value = on ? 0.35 : 0;
+  if (musicBus) { musicBus.gain.cancelScheduledValues(ctx.currentTime); musicBus.gain.value = levelNow(); }
 }
 // Quieter while paused.
-export function duckMusic(d) { if (musicBus && musicOn) musicBus.gain.value = d ? 0.12 : 0.35; }
-export function startMusic() {
-  const c = ac(); if (!c || timer) return;
-  musicBus = musicBus || (() => { const g = c.createGain(); g.connect(master); return g; })();
-  musicBus.gain.value = musicOn ? 0.35 : 0;
+export function duckMusic(d) {
+  if (d === ducked) return;
+  ducked = d;
+  if (musicBus) musicBus.gain.setTargetAtTime(levelNow() || 0.0001, ctx.currentTime, 0.08);
+}
+function fadeOut() {
+  if (timer) clearInterval(timer);
+  timer = null;
+  if (musicBus) {
+    const g = musicBus;
+    g.gain.cancelScheduledValues(ctx.currentTime);
+    g.gain.setTargetAtTime(0, ctx.currentTime, 0.15);
+    musicBus = null;
+    setTimeout(() => g.disconnect(), 1200);
+  }
+}
+// Play a song ('game' or 'menu'); the one playing fades out. Asking again for the song that's
+// already playing does nothing.
+export function playSong(name) {
+  const c = ac(); if (!c) return;
+  if (songName === name && timer) return;
+  fadeOut();
+  song = SONGS[name]; songName = name; ducked = false;
+  musicBus = c.createGain(); musicBus.connect(master);
+  musicBus.gain.setValueAtTime(0.0001, c.currentTime);
+  if (musicOn) musicBus.gain.setTargetAtTime(levelNow(), c.currentTime, 0.3);
+  else musicBus.gain.value = 0;
   step = 0; nextAt = c.currentTime + 0.1;
   timer = setInterval(tick, 60);
   tick();
 }
-export function stopMusic() {
-  if (timer) clearInterval(timer);
-  timer = null;
-  if (musicBus) { const g = musicBus; g.gain.setTargetAtTime(0, ctx.currentTime, 0.1); musicBus = null; setTimeout(() => g.disconnect(), 600); }
-}
+export function stopMusic() { fadeOut(); songName = null; }
+export const nowPlaying = () => (timer ? songName : null);
 // Countdown: three beeps then a higher one for GO.
 SFX.count = () => tone(660, 0.18, { type: 'square', vol: 0.09 });
 SFX.go = () => { tone(1320, 0.4, { type: 'square', vol: 0.1 }); tone(990, 0.4, { type: 'triangle', vol: 0.08 }); };
