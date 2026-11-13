@@ -105,7 +105,7 @@ export const unlock = () => ac();
 
 // ---------- background music ----------
 // Two songs, written out here and played by a small look-ahead scheduler:
-//   game - an upbeat chiptune loop (kick, hi-hat, bouncing bass, a lead tune over C, Am, F, G)
+//   game - an upbeat chiptune loop (kick, hi-hat, bouncing bass, a lead tune over A, F#m, D, E)
 //   menu - a slow, mellow loop for setup and results (soft pads, a gentle arpeggio, a few bells)
 // Switching songs fades one out as the other starts. N toggles music; the choice is remembered.
 const MUSIC_KEY = 'oe.music';
@@ -137,6 +137,8 @@ function drum(at, kind, vol = 1) {
   s.connect(f).connect(g).connect(musicBus); s.start(at, Math.random() * 0.5); s.stop(at + dur + 0.02);
 }
 
+// The game song is written in C and played three semitones lower (in A), which sits warmer.
+const GAME_KEY = -3;
 const GAME_CHORDS = [[48, 52, 55], [45, 48, 52], [41, 45, 48], [43, 47, 50]]; // C, Am, F, G
 // Lead tune: one note (MIDI) or null per sixteenth, two 4-bar phrases.
 const GAME_LEAD = [
@@ -167,10 +169,10 @@ const SONGS = {
       if (s % 4 === 0) drum(at, 'kick');
       if (s === 4 || s === 12) drum(at, 'snare');
       if (s % 2 === 1) drum(at, 'hat');
-      if (s % 2 === 0) note(midi(ch[0] - 12 + (s % 8 === 4 ? 7 : 0)), at, STEP * 1.6, 'triangle', 0.32);
-      if (s % 4 === 2) for (const n of ch) note(midi(n + 12), at, STEP * 0.9, 'square', 0.025);
+      if (s % 2 === 0) note(midi(ch[0] - 12 + (s % 8 === 4 ? 7 : 0) + GAME_KEY), at, STEP * 1.6, 'triangle', 0.32);
+      if (s % 4 === 2) for (const n of ch) note(midi(n + 12 + GAME_KEY), at, STEP * 0.9, 'square', 0.025);
       const l = GAME_LEAD[i % GAME_LEAD.length];
-      if (l) note(midi(l), at, STEP * 1.8, 'square', 0.05);
+      if (l) note(midi(l + GAME_KEY), at, STEP * 1.8, 'square', 0.05);
     },
   },
   menu: {
