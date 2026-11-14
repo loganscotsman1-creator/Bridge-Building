@@ -163,7 +163,8 @@ function bubble(g, x, y, text, k) {
   g.textBaseline = 'alphabetic';
 }
 
-export function GameView({ project, model, sim, order, t, setT }) {
+// `bare`: no controls of its own (the Simulate tab drives the time), just a button to fill the window.
+export function GameView({ project, model, sim, order, t, setT, bare = false, outerPlaying = false, onPlay = null }) {
   const wrap = useRef(null), canvas = useRef(null);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(4);
@@ -172,7 +173,7 @@ export function GameView({ project, model, sim, order, t, setT }) {
   const end = Math.max(0, sim?.endTime || 0);
   const prep = useMemo(() => (sim ? prepare(project, sim, order) : null), [project, sim, order]);
   const live = useRef({});
-  live.current = { prep, sim, playing, speed, end, setT };
+  live.current = { prep, sim, playing, speed, end, setT, bare };
   const tRef = useRef(t);
   // Clicking the timeline moves the playback there.
   useEffect(() => { if (!live.current.playing) { tRef.current = Math.min(t, end); setShown(tRef.current); } }, [t]);
@@ -233,7 +234,7 @@ export function GameView({ project, model, sim, order, t, setT }) {
       const roomy = H >= 520;
       const V = makeView(S, W, H, { top: 92, bottom: roomy ? 86 : 4 });
       const owner = (key) => { let o = null; for (const m of P.toolMoves) { if (m.t > t) break; if (m.key === key) o = m.to; } return o; };
-      ui.hudRight = `Playback ${live.current.speed}× · ${fmt(t)} of ${fmt(E)}`;
+      ui.hudRight = live.current.bare ? `${fmt(t)} of ${fmt(E)}` : `Playback ${live.current.speed}× · ${fmt(t)} of ${fmt(E)}`;
       ui.activityOf = (a) => a.label || 'Idle';
       ui.deviceOf = (a) => `${a.side} side`;
       ui.readyLayout = () => {
@@ -284,6 +285,15 @@ export function GameView({ project, model, sim, order, t, setT }) {
   }, []);
 
   const scrub = (v) => { tRef.current = v; setShown(v); setT(v); };
+  if (bare) {
+    return html`<div ref=${wrap} class=${'gameview bare' + (big ? ' big' : '')} data-gameview>
+      <div class="gv-big">
+        ${onPlay && html`<button class="primary" onClick=${onPlay}>${outerPlaying ? '❚❚ Pause' : '▶ Play'}</button>`}
+        <button title=${big ? 'Back to the tab' : 'Fill the window'} onClick=${() => setBig(!big)}>${big ? '✕ Close' : '⛶ Big'}</button>
+      </div>
+      <canvas ref=${canvas} class="gv-canvas"></canvas>
+    </div>`;
+  }
   return html`<div ref=${wrap} class=${'gameview' + (big ? ' big' : '')} data-gameview>
     <div class="gv-bar">
       <button class="primary" data-gv-play onClick=${() => { if (tRef.current >= end) tRef.current = 0; setPlaying(!playing); }}>${playing ? '❚❚ Pause' : '▶ Play'}</button>

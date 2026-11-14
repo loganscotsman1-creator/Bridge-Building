@@ -3,7 +3,7 @@
 // happen next in that order are dragged onto a builder's row (a pop-up asks for anything else it
 // needs), and a step that has to wait for another lands where it can start. Each builder does their
 // steps in order, starting each as soon as they're free and what it needs is ready. The simulation
-// re-runs on every change, and plays back below in the game's look.
+// re-runs on every change; the Simulate tab plays it back in the game's look.
 import { html, useEffect, useMemo, useRef, useState } from '../lib/preact.js';
 import { updateProject } from '../model/store.js';
 import { uid } from '../model/ids.js';
@@ -12,7 +12,6 @@ import { autoOrderSteps, layOutAssembly, planUnits, sideOf, unitKey } from '../m
 import { ASM_COLORS, TASK_KINDS, applyAssembly, insertAtSlot, nextUp, planChecks, readyTime, removeTask, shortLabel, slotWhenReady, taskBlocks, taskGroup } from '../model/timeline.js';
 import { planOrder, setOrder } from '../model/buildorder.js';
 import { OrderPicker } from './OrderPicker.js';
-import { GameView } from './GameView.js';
 import { fmt, fmtCost, planTasks, simulate } from '../sim/simulate.js';
 import { stateAt } from '../sim/playback.js';
 import { IsoView } from './IsoView.js';
@@ -446,7 +445,8 @@ export function SequenceTab({ project, model, sim, onOrderOpen }) {
       </div>
       <div class="seq-bottom">
         <div class="seq-3d">
-          <${GameView} project=${project} model=${model} sim=${sim} order=${order} t=${t ?? 0} setT=${setT} />
+          <${IsoView} model=${model} styleOf=${styleOf} supports=${state?.supports || []}
+            label=${t != null ? `At ${fmt(t)}: blue = this step, gray = built, orange = held` : 'Click the time along the top of the timeline to see the bridge at that moment'} />
         </div>
         <div class="seq-problems"><${Problems} sim=${sim} nameOf=${nameOfStep} onPick=${(i) => i != null && tasks[i] && select(tasks[i].id)} /></div>
       </div>

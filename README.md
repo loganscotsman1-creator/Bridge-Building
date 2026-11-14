@@ -218,12 +218,19 @@ fetch a tool, so give each side its own.
   need). The Simulate tab counts them down and warns if someone runs out.
 
 ### 5 · Build sequence
-**Build order first.** Opening the tab brings up the build order window: click pieces on the 3D
-bridge in the order they go in. To make an assembly, select an item (in the list or on the bridge)
-and click up to three pieces into it; click one of its pieces again to take it out. Reorder with the
-arrows or by dragging, **Split** an assembly back into pieces, and tick **Needs a buddy** for large
-or awkward items (used by the game). **Automatic order** fills in footings first, west to east. The
-window flags pieces left out, pieces twice, and an assembly whose pieces aren't bolted together.
+**Build order first.** Opening the tab brings up the build order window (it covers only this tab,
+so the other tabs stay a click away). It has two steps, both on the 3D bridge:
+
+1. **Make assemblies:** click pieces to group them into an assembly (up to three). Clicking a piece
+   that's already in an assembly picks that assembly to change; click one of its pieces again to
+   take it out. **+ New assembly** starts another, and ✕ takes one apart.
+2. **Put in order:** click pieces in the order they go in; clicking any piece of an assembly puts
+   the whole assembly in. Assemblies and pieces not placed yet are listed underneath (click to add
+   at the end). Reorder with the arrows or by dragging, and tick **Needs a buddy** for large or
+   awkward items (used by the game). **Automatic order** fills it in footings first, west to east,
+   keeping your assemblies.
+
+The window flags pieces left out, pieces twice, and an assembly whose pieces aren't bolted together.
 **Continue to the timeline** closes it, and **Build order…** in the toolbar opens it again. This one
 order is everything the game needs: with the game open in another tab, it follows along as the
 order changes.
@@ -290,18 +297,19 @@ there soonest (builders with a fastening tool fasten, others carry). Support too
 the timeline are kept. **New** starts an empty plan and **Clear timeline** empties this one (the
 build order and its assemblies stay). **Duplicate** copies a
 plan so you can try a variation, and **Compare plans** shows every plan's time and construction cost
-side by side.
+side by side. Every piece in the 3D view is labeled with its name (**Names** hides them); scroll to
+zoom in where they're crowded, and drag to rotate. Click the times along the top of the timeline to
+see the bridge at that moment.
 
-**Playback:** under the timeline the whole plan plays back in the game's look: the site and river,
+**Playback** is in the Simulate tab (7): the whole plan plays back in the game's look: the site and river,
 the cartoon builders carrying pieces at full size, bolts going in and nuts being fastened, with the
 game's sparks and dust and the cost counting up. It also shows what the game doesn't have: tool
 crates and nuts & bolts bins, the tools each builder has picked up, and a bubble for jobs like
-grabbing a tool, an other task, or waiting. Play, pause, change the speed, or drag the slider;
-clicking the times along the top of the timeline jumps there too. **⛶ Big** fills the window (with
-a card per builder saying what they're doing).
+grabbing a tool, an other task, or waiting. **⛶ Big** fills the window (with a card per builder
+saying what they're doing).
 
-The build time and construction cost update on every change. Problems are listed beside the
-playback; click one to jump to its step.
+The build time and construction cost update on every change. Problems are listed under the 3D
+view; click one to jump to its step.
 
 ### 6 · Staging
 Plan where every member lies. Drag members from the list onto the yard, drag them around (they
@@ -320,12 +328,13 @@ connection, and it uses the shorter "staged touching" times. Any connection can 
 and per-bolt time here.
 
 ### 7 · Simulate
-Bolts are animated: each one travels from the builder putting it in to its spot and is fastened
-there. Across the bridge, green dots are fastened, amber rings are only inserted (and their members
-get an amber outline, since they're only partly connected), and small gray rings aren't in yet. The
-toolbar keeps a running count, and each builder shows how many bolts they have left.
+The build plays back in the game's look (see Playback above): press play, change the speed, or
+scrub, and **⛶ Big** fills the window. Beside it, the 3D view shows the bridge at that moment with
+every bolt: green dots are fastened, amber rings are only inserted (and their members get an amber
+outline, since they're only partly connected), and small gray rings aren't in yet. The toolbar keeps
+a running count, and each builder shows how many bolts they have left.
 
-Play back the build on the site plan and the 3D view, scrub the timeline, and read:
+Scrub the timeline and read:
 - the **Gantt chart** of every builder (walking, carrying, handing off, holding, aligning,
   fastening, ...)
 - **holding time** per piece: how long someone held it, split into waiting for a fastener and

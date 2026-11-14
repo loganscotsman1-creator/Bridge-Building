@@ -63,9 +63,10 @@ export function planOrder(model, plan, { fill = true } = {}) {
 
 // Put a new order on the plan and bring the plan's assemblies into line with it: assemblies are
 // named by their place in the order (unless renamed), and timeline steps for an assembly that
-// changed or went away are updated the same way as changing it on the timeline. Mutates the plan.
-export function setOrder(plan, model, items) {
-  const want = items.filter(isAssemblyItem);
+// changed or went away are updated the same way as changing it on the timeline. `spare` are
+// assemblies made but not put in the order yet. Mutates the plan.
+export function setOrder(plan, model, items, spare = []) {
+  const want = [...items, ...spare].filter(isAssemblyItem);
   const wantIds = new Set(want.map((it) => it.id));
   for (const a of [...plan.assemblies]) if (!wantIds.has(a.id)) dissolveAssembly(plan, model, a.id);
   want.forEach((it, i) => {

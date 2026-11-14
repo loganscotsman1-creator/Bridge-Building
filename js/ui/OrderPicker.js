@@ -1,11 +1,13 @@
-// The build order window, shown when the Build sequence tab opens: click pieces on the 3D bridge in
-// the order they go in, group up to three into an assembly, and put every piece in order. The
-// timeline offers tasks in this order, and the game (open in another tab) plays it, updating as
-// it changes here.
+// The build order window, shown when the Build sequence tab opens. Two steps, both on the 3D bridge:
+//   1 · Make assemblies: click pieces into assemblies (up to three each).
+//   2 · Put in order: click pieces and assemblies in the order they go in.
+// The timeline offers tasks in this order, and the game (open in another tab) plays it, updating as
+// it changes here. It sits over the tab only, so the other tabs stay usable.
 import { html, useEffect, useState } from '../lib/preact.js';
 import { updateProject } from '../model/store.js';
 import { activePlan } from '../model/schema.js';
 import { uid } from '../model/ids.js';
+import { ASM_COLORS } from '../model/timeline.js';
 import { deriveOrder, isAssemblyItem, orderProblems, planOrder, setOrder } from '../model/buildorder.js';
 import { IsoView } from './IsoView.js';
 
@@ -15,111 +17,183 @@ function orderColor(i, n) {
   const f = (k) => { const t = (k + h * 12) % 12; const c = l - s * Math.min(l, 1 - l) * Math.max(-1, Math.min(t - 3, 9 - t, 1)); return Math.round(c * 255).toString(16).padStart(2, '0'); };
   return '#' + f(0) + f(8) + f(4);
 }
+const copy = (list) => list.map((it) => ({ ...it, memberIds: [...it.memberIds] }));
+const single = (id) => ({ id: uid('it'), memberIds: [id], buddy: false });
 
 export function OrderPicker({ project, model, onClose }) {
   const plan = activePlan(project);
   const order = planOrder(model, plan, { fill: false });
-  const [sel, setSel] = useState(null); // the item pieces are being added to
+  const inOrder = new Set(order.map((it) => it.id));
+  // Assemblies made but not put in the order yet.
+  const spare = plan.assemblies.filter((a) => !inOrder.has(a.id) && a.memberIds.length > 1).map((a) => ({ id: a.id, memberIds: [...a.memberIds], buddy: false }));
+  const [mode, setMode] = useState(() => (order.length ? 'order' : 'assemblies'));
+  const [sel, setSel] = useState(null); // order step: the item picked out in the list
+  const [cur, setCur] = useState(null); // assemblies step: the assembly pieces are clicked into
+  const [draft, setDraft] = useState(null); // a new assembly with fewer than two pieces so far
   const [drag, setDrag] = useState(null);
   const max = project.site.rules?.maxAssemblyMembers || 3;
+
+  const assemblies = [...order.filter(isAssemblyItem), ...spare, ...(draft ? [draft] : [])];
+  const nameOf = (id) => plan.assemblies.find((a) => a.id === id)?.name || 'New assembly';
+  const asmOfMember = new Map();
+  assemblies.forEach((a) => a.memberIds.forEach((id) => asmOfMember.set(id, a.id)));
   const idx = new Map();
   order.forEach((it, i) => it.memberIds.forEach((id) => idx.set(id, i)));
-  const selItem = order.find((it) => it.id === sel);
-  const missing = model.members.filter((m) => !idx.has(m.id));
+  const loose = model.members.filter((m) => !idx.has(m.id) && !asmOfMember.has(m.id));
   const problems = orderProblems(order, model, project.site.rules, { strict: false });
   const gameNote = order.length && order[0].memberIds.length !== 3;
-  const asmName = new Map(order.filter(isAssemblyItem).map((it, i) => [it.id, plan.assemblies.find((a) => a.id === it.id)?.name || 'Assembly ' + (i + 1)]));
 
   // Every change goes straight onto the plan (undoable, autosaved, and picked up by the game).
-  const commit = (items) => updateProject((p) => setOrder(activePlan(p), model, items.filter((it) => it.memberIds.length)));
-  const edit = (fn) => commit(fn(order.map((it) => ({ ...it, memberIds: [...it.memberIds] }))));
-  const single = (id) => ({ id: uid('it'), memberIds: [id], buddy: false });
-  // An item that becomes an assembly gets a fresh id, so it doesn't take over a loose piece's steps.
-  const grow = (it, id) => ({ ...it, id: isAssemblyItem(it) ? it.id : uid('as'), memberIds: [...it.memberIds, id] });
+  const commit = (items, spares) => updateProject((p) => setOrder(activePlan(p), model, items.filter((it) => it.memberIds.length), spares.filter((a) => a.memberIds.length > 1)));
 
-  const pick = (m) => {
-    if (idx.has(m.id)) {
-      const it = order[idx.get(m.id)];
-      // With an item selected, clicking one of its pieces takes it back out (to the end of the order).
-      if (selItem && it.id === selItem.id) {
-        if (it.memberIds.length > 1) edit((o) => o.map((x) => (x.id === it.id ? { ...x, memberIds: x.memberIds.filter((id) => id !== m.id) } : x)).concat([single(m.id)]));
-        else setSel(null);
-        return;
-      }
-      if (selItem && selItem.memberIds.length < max) {
-        const grown = grow(selItem, m.id);
-        edit((o) => o.map((x) => (x.id === it.id ? { ...x, memberIds: x.memberIds.filter((id) => id !== m.id) } : x.id === selItem.id ? grown : x)));
-        setSel(grown.id);
-        return;
-      }
-      setSel(it.id === sel ? null : it.id);
-      return;
+  // ---- step 1: assemblies ----
+  const startNew = () => { const d = { id: uid('as'), memberIds: [], buddy: false }; setDraft(d); setCur(d.id); };
+  const assign = (m) => {
+    let target = assemblies.find((a) => a.id === cur);
+    if (!target) {
+      // Nothing being filled: a piece in an assembly picks that one, any other piece starts one.
+      if (asmOfMember.has(m.id)) { setCur(asmOfMember.get(m.id)); return; }
+      target = { id: uid('as'), memberIds: [], buddy: false };
+      setCur(target.id);
     }
-    if (selItem && selItem.memberIds.length < max) {
-      const grown = grow(selItem, m.id);
-      edit((o) => o.map((x) => (x.id === selItem.id ? grown : x)));
-      setSel(grown.id);
-    } else edit((o) => [...o, single(m.id)]);
+    const has = target.memberIds.includes(m.id);
+    if (!has && target.memberIds.length >= max) return;
+    const members = has ? target.memberIds.filter((id) => id !== m.id) : [...target.memberIds, m.id];
+    const isDraft = !order.some((it) => it.id === target.id) && !spare.some((a) => a.id === target.id);
+    if (isDraft && members.length < 2) { setDraft({ ...target, memberIds: members }); return; }
+    // The piece leaves wherever it was (another assembly, or the order as a single piece).
+    const strip = (list) => copy(list).map((it) => (it.id === target.id ? it : { ...it, memberIds: it.memberIds.filter((id) => id !== m.id && !(isDraft && members.includes(id))) }));
+    let items = strip(order), spares = strip(spare);
+    if (isDraft) { spares.push({ id: target.id, memberIds: members, buddy: false }); setDraft(null); }
+    else { items = items.map((it) => (it.id === target.id ? { ...it, memberIds: members } : it)); spares = spares.map((a) => (a.id === target.id ? { ...a, memberIds: members } : a)); }
+    // An assembly left with one piece in the order stays there as that piece; a spare one goes.
+    commit(items, spares);
   };
-  const move = (from, to) => edit((o) => { const c = [...o]; const [x] = c.splice(from, 1); c.splice(to, 0, x); return c; });
+  const takeApart = (a) => {
+    if (cur === a.id) setCur(null);
+    if (draft?.id === a.id) { setDraft(null); return; }
+    commit(copy(order).flatMap((it) => (it.id === a.id ? it.memberIds.map(single) : [it])), spare.filter((x) => x.id !== a.id));
+  };
+
+  // ---- step 2: the order ----
+  const unitOf = (m) => {
+    const aid = asmOfMember.get(m.id);
+    return aid ? assemblies.find((a) => a.id === aid) : single(m.id);
+  };
+  const place = (m) => {
+    const u = unitOf(m);
+    if (!u || u.memberIds.length < 1) return;
+    if (u.id === draft?.id) return;
+    const at = order.findIndex((it) => it.id === u.id || it.memberIds.includes(m.id));
+    if (at >= 0) { setSel(order[at].id === sel ? null : order[at].id); return; }
+    commit([...copy(order), { ...u, memberIds: [...u.memberIds] }], spare.filter((a) => a.id !== u.id));
+  };
+  const edit = (fn) => commit(fn(copy(order)), spare);
+  const move = (from, to) => edit((o) => { const [x] = o.splice(from, 1); o.splice(to, 0, x); return o; });
   const patch = (id, p) => edit((o) => o.map((x) => (x.id === id ? { ...x, ...p } : x)));
+  const removeItem = (it) => {
+    if (sel === it.id) setSel(null);
+    commit(copy(order).filter((x) => x.id !== it.id), isAssemblyItem(it) ? [...spare, it] : spare);
+  };
 
   useEffect(() => {
-    const key = (e) => { if (e.key === 'Escape') { e.stopPropagation(); if (sel) setSel(null); else onClose(); } };
+    const key = (e) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      if (cur || sel) { setCur(null); setSel(null); setDraft(null); } else onClose();
+    };
     window.addEventListener('keydown', key);
     return () => window.removeEventListener('keydown', key);
   });
 
+  const asmColor = (id) => ASM_COLORS[Math.max(0, assemblies.findIndex((a) => a.id === id)) % ASM_COLORS.length];
   const styleOf = (m) => {
-    if (!idx.has(m.id)) return { color: '#cbd5e1', opacity: 0.35, label: m.name, dash: '2 2' };
+    if (mode === 'assemblies') {
+      const aid = asmOfMember.get(m.id);
+      if (!aid) return { color: '#cbd5e1', opacity: 0.45, label: m.name, dash: '2 2', outline: null };
+      return { color: asmColor(aid), label: m.name, outline: aid === cur ? '#facc15' : null };
+    }
+    if (!idx.has(m.id)) return { color: asmOfMember.has(m.id) ? asmColor(asmOfMember.get(m.id)) : '#cbd5e1', opacity: 0.35, label: asmOfMember.has(m.id) ? nameOf(asmOfMember.get(m.id)) : m.name, dash: '2 2' };
     const i = idx.get(m.id);
     const it = order[i];
     return { color: orderColor(i, order.length), label: '#' + (i + 1) + (it.buddy ? '★' : ''), outline: it.id === sel ? '#facc15' : null };
   };
+  const curA = assemblies.find((a) => a.id === cur);
+  const label = mode === 'assemblies'
+    ? curA ? `Click pieces into ${curA.id === draft?.id ? 'the new assembly' : nameOf(curA.id)} (${curA.memberIds.length}/${max}); click one again to take it out` : 'Click a piece to start an assembly, or an assembly\'s piece to change it'
+    : sel ? `#${order.findIndex((x) => x.id === sel) + 1} picked out · click it again (or Esc) to stop` : (loose.length + spare.length) ? `${loose.length + spare.length} still to put in order` : 'Everything is in the order';
 
-  return html`<div class="pop-back order-back">
-    <div class="pop wide order-pop" role="dialog" aria-label="Build order" data-order-picker>
+  const asmCard = (a) => {
+    const n = order.findIndex((it) => it.id === a.id);
+    const isDraft = a.id === draft?.id;
+    return html`<div key=${a.id} class=${'order-item asm-card' + (a.id === cur ? ' sel' : '')} data-asm=${a.id} onClick=${() => { if (a.id === cur) { setCur(null); if (isDraft) setDraft(null); } else setCur(a.id); }}>
+      <span class="sw" style=${{ background: asmColor(a.id) }}>${a.memberIds.length}</span>
+      <div class="bd">
+        <div class="asm-name">${isDraft ? 'New assembly' : nameOf(a.id)}</div>
+        <div class="pcs">${a.memberIds.length ? a.memberIds.map((id) => html`<span class="pc">${model.memberById.get(id)?.name || '?'}</span>`) : html`<span class="muted small">Click pieces on the bridge</span>`}</div>
+        <div class="muted small">${isDraft ? `Needs at least two pieces` : n >= 0 ? `In the order as #${n + 1}` : 'Not in the order yet'}</div>
+      </div>
+      <div class="ops" onClick=${(e) => e.stopPropagation()}>
+        <button class="small" title="Take it apart into loose pieces" onClick=${() => takeApart(a)}>✕</button>
+      </div>
+    </div>`;
+  };
+
+  return html`<div class="order-back">
+    <div class="order-pop" role="dialog" aria-label="Build order" data-order-picker>
       <div class="pop-head">
-        <div>
+        <div class="order-steps">
           <b>Build order</b>
-          <div class="muted small">Click pieces in the order they go in. To make an assembly, select an item (click it in the list or on the bridge), then click up to ${max} pieces into it; click one of its pieces again to take it out. Drag to turn the bridge.</div>
+          <button class=${mode === 'assemblies' ? 'on' : ''} data-mode="assemblies" onClick=${() => { setMode('assemblies'); setSel(null); }}>1 · Make assemblies</button>
+          <button class=${mode === 'order' ? 'on' : ''} data-mode="order" onClick=${() => { setMode('order'); setCur(null); setDraft(null); }}>2 · Put in order</button>
         </div>
         <span class="spacer"></span>
-        <button title="Replace this order with the automatic one: footings first, west to east" onClick=${() => { if (!order.length || confirm('Replace the order with the automatic one?')) { commit(deriveOrder(model, { ...plan, order: null, tasks: [] })); setSel(null); } }}>Automatic order</button>
-        <button disabled=${!order.length} onClick=${() => { if (confirm('Clear the order and click every piece in again? Assemblies are taken apart too (Ctrl+Z brings it back).')) { commit([]); setSel(null); } }}>Clear</button>
-        <button class="primary" data-continue disabled=${!order.length} onClick=${onClose}>Continue to the timeline →</button>
+        ${mode === 'order' && html`<button title="Fill the order automatically: footings first, west to east (your assemblies are kept)" onClick=${() => { if (!order.length || confirm('Replace the order with the automatic one? Your assemblies are kept.')) { commit(deriveOrder(model, { ...plan, order: null, tasks: [] }), []); setSel(null); } }}>Automatic order</button>`}
+        ${mode === 'order' && html`<button disabled=${!order.length} title="Take everything out of the order (assemblies are kept)" onClick=${() => { if (confirm('Take everything out of the order? Your assemblies are kept (Ctrl+Z brings it back).')) { commit([], assemblies.filter((a) => a.id !== draft?.id)); setSel(null); } }}>Clear order</button>`}
+        <button class="primary" data-continue onClick=${onClose}>Continue to the timeline →</button>
       </div>
+      <div class="order-hint muted small">${mode === 'assemblies'
+        ? `Click pieces on the bridge to group them into an assembly (up to ${max}). Clicking a piece that's already in an assembly picks that assembly to change. Then put everything in order in step 2. Drag to turn the bridge.`
+        : 'Click pieces on the bridge in the order they go in. Clicking any piece of an assembly puts the whole assembly in. Drag items in the list (or use the arrows) to reorder. Drag to turn the bridge.'}</div>
       <div class="pop-body order-body">
         <div class="pop-canvas">
-          <${IsoView} model=${model} styleOf=${styleOf} onPick=${pick}
-            label=${selItem ? `Adding to #${order.indexOf(selItem) + 1} · click it in the list (or Esc) to stop` : missing.length ? `${missing.length} piece${missing.length === 1 ? '' : 's'} still to put in order` : 'Every piece is in the order'} />
+          <${IsoView} model=${model} styleOf=${styleOf} onPick=${mode === 'assemblies' ? assign : place} label=${label} />
         </div>
         <aside class="pop-list order-list">
-          ${problems.length > 0 && html`<ul class="order-problems">${problems.map((p) => html`<li>${p.msg}</li>`)}</ul>`}
-          ${gameNote && html`<div class="order-note">The game starts with a three-piece assembly, so make the first item one if you want to play this order.</div>`}
-          ${!order.length && html`<div class="muted small">Nothing in order yet. Click the first piece on the bridge, or use <b>Automatic order</b>.</div>`}
-          ${order.map((it, i) => html`<div key=${it.id} class=${'order-item' + (it.id === sel ? ' sel' : '') + (drag === i ? ' dragging' : '')} draggable="true" data-order-item=${i}
-              onDragStart=${(e) => { setDrag(i); e.dataTransfer.effectAllowed = 'move'; }}
-              onDragOver=${(e) => e.preventDefault()}
-              onDrop=${(e) => { e.preventDefault(); if (drag != null && drag !== i) move(drag, i); setDrag(null); }}
-              onDragEnd=${() => setDrag(null)}
-              onClick=${() => setSel(it.id === sel ? null : it.id)}>
-            <span class="sw" style=${{ background: orderColor(i, order.length) }}>${i + 1}</span>
-            <div class="bd">
-              ${isAssemblyItem(it) && html`<div class="asm-name">${asmName.get(it.id)}</div>`}
-              <div class="pcs">${it.memberIds.map((id) => html`<span class="pc">${model.memberById.get(id)?.name || '?'}</span>`)}</div>
-              <label class="check small" onClick=${(e) => e.stopPropagation()} title="In the game: large or awkward, so whoever carries it into place can only hold it there, and someone else bolts it">
-                <input type="checkbox" checked=${!!it.buddy} onChange=${(e) => patch(it.id, { buddy: e.target.checked })} /> Needs a buddy ★</label>
-            </div>
-            <div class="ops" onClick=${(e) => e.stopPropagation()}>
-              <button class="small" disabled=${i === 0} title="Earlier" onClick=${() => move(i, i - 1)}>↑</button>
-              <button class="small" disabled=${i === order.length - 1} title="Later" onClick=${() => move(i, i + 1)}>↓</button>
-              ${isAssemblyItem(it) && html`<button class="small" title="Split into single pieces" onClick=${() => edit((o) => o.flatMap((x) => (x.id === it.id ? x.memberIds.map(single) : [x])))}>Split</button>`}
-              <button class="small" title="Take out of the order" onClick=${() => { if (sel === it.id) setSel(null); edit((o) => o.filter((x) => x.id !== it.id)); }}>✕</button>
-            </div>
-          </div>`)}
-          ${missing.length > 0 && html`<div class="order-missing"><b>Not in the order yet</b> <span class="muted">(click them on the bridge, or here to add${selItem ? ` to #${order.indexOf(selItem) + 1}` : ' at the end'})</span>
-            <div class="pcs">${missing.map((m) => html`<button class="small" onClick=${() => pick(m)}>${m.name}</button>`)}</div></div>`}
+          ${mode === 'assemblies' ? html`
+            <button class="primary" data-new-asm onClick=${startNew}>+ New assembly</button>
+            ${!assemblies.length && html`<div class="muted small">No assemblies yet. Click a piece on the bridge, or <b>+ New assembly</b>.</div>`}
+            ${assemblies.map(asmCard)}
+            <button onClick=${() => setMode('order')}>Next: put them in order →</button>
+          ` : html`
+            ${problems.length > 0 && html`<ul class="order-problems">${problems.map((p) => html`<li>${p.msg}</li>`)}</ul>`}
+            ${gameNote && html`<div class="order-note">The game starts with a three-piece assembly, so make the first item one if you want to play this order.</div>`}
+            ${!order.length && html`<div class="muted small">Nothing in order yet. Click the first piece on the bridge, use the list below, or <b>Automatic order</b>.</div>`}
+            ${order.map((it, i) => html`<div key=${it.id} class=${'order-item' + (it.id === sel ? ' sel' : '') + (drag === i ? ' dragging' : '')} draggable="true" data-order-item=${i}
+                onDragStart=${(e) => { setDrag(i); e.dataTransfer.effectAllowed = 'move'; }}
+                onDragOver=${(e) => e.preventDefault()}
+                onDrop=${(e) => { e.preventDefault(); if (drag != null && drag !== i) move(drag, i); setDrag(null); }}
+                onDragEnd=${() => setDrag(null)}
+                onClick=${() => setSel(it.id === sel ? null : it.id)}>
+              <span class="sw" style=${{ background: orderColor(i, order.length) }}>${i + 1}</span>
+              <div class="bd">
+                ${isAssemblyItem(it) && html`<div class="asm-name">${nameOf(it.id)}</div>`}
+                <div class="pcs">${it.memberIds.map((id) => html`<span class="pc">${model.memberById.get(id)?.name || '?'}</span>`)}</div>
+                <label class="check small" onClick=${(e) => e.stopPropagation()} title="In the game: large or awkward, so whoever carries it into place can only hold it there, and someone else bolts it">
+                  <input type="checkbox" checked=${!!it.buddy} onChange=${(e) => patch(it.id, { buddy: e.target.checked })} /> Needs a buddy ★</label>
+              </div>
+              <div class="ops" onClick=${(e) => e.stopPropagation()}>
+                <button class="small" disabled=${i === 0} title="Earlier" onClick=${() => move(i, i - 1)}>↑</button>
+                <button class="small" disabled=${i === order.length - 1} title="Later" onClick=${() => move(i, i + 1)}>↓</button>
+                <button class="small" title="Take out of the order" onClick=${() => removeItem(it)}>✕</button>
+              </div>
+            </div>`)}
+            ${(spare.length > 0 || loose.length > 0) && html`<div class="order-missing"><b>Not in the order yet</b> <span class="muted">(click to add at the end)</span>
+              <div class="pcs">
+                ${spare.map((a) => html`<button class="small asm-btn" style=${{ borderColor: asmColor(a.id) }} onClick=${() => place(model.memberById.get(a.memberIds[0]))}>🧩 ${nameOf(a.id)}</button>`)}
+                ${loose.map((m) => html`<button class="small" onClick=${() => place(m)}>${m.name}</button>`)}
+              </div></div>`}
+          `}
         </aside>
       </div>
     </div>

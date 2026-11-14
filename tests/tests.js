@@ -1363,6 +1363,15 @@ await test('build order: setting it keeps the plan\'s assemblies in step, and th
   assert(a && a.memberIds.length === 2 && a.name === 'Assembly 1', JSON.stringify(a));
   assert(pl.assemblies[0].id === 'asNew', 'assemblies kept in build order');
   assert(planOrder(model, pl)[0].buddy, 'buddy flag kept');
+  // An assembly made but not put in the order yet is kept, and the game gets it at the end.
+  const spareIds = regroup.slice(-2).flatMap((it) => it.memberIds);
+  const rest = regroup.slice(0, -2);
+  setOrder(pl, model, rest, [{ id: 'asSpare', memberIds: spareIds }]);
+  assert(pl.assemblies.some((x) => x.id === 'asSpare'), 'spare assembly kept');
+  assert(!planOrder(model, pl, { fill: false }).some((it) => it.id === 'asSpare'), 'not in the order yet');
+  assert(planOrder(model, pl).some((it) => it.id === 'asSpare'), 'the game gets it at the end');
+  setOrder(pl, model, regroup);
+  assert(!pl.assemblies.some((x) => x.id === 'asSpare'), 'gone once nothing keeps it');
   // A piece left out is added at the end for the game (fill), not when editing.
   pl.order = pl.order.slice(0, -1);
   assert(planOrder(model, pl, { fill: false }).length === regroup.length - 1 && planOrder(model, pl).length === regroup.length, 'fill');

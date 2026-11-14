@@ -1,4 +1,5 @@
-// Simulate tab: play back the build, see who's doing what, and how long pieces are held.
+// Simulate tab: play back the build in the game's look (GameView), see who's doing what, and how
+// long pieces are held.
 import { html, useEffect, useMemo, useRef, useState } from '../lib/preact.js';
 import { activePlan } from '../model/schema.js';
 import { stagingSpots } from '../model/plan.js';
@@ -9,6 +10,8 @@ import { stateAt } from '../sim/playback.js';
 import { BOLT_COLORS, PlanView } from './PlanView.js';
 import { IsoView } from './IsoView.js';
 import { Gantt } from './Gantt.js';
+import { GameView } from './GameView.js';
+import { planOrder } from '../model/buildorder.js';
 import { Problems, TaskEditor } from './SequenceTab.js';
 import { Section } from './common.js';
 
@@ -22,7 +25,7 @@ export function SimulateTab({ project, model, sim }) {
   const [selTaskId, setSelTaskId] = useState(null);
   const raf = useRef(null);
   const end = sim.endTime;
-  const spots = useMemo(() => stagingSpots(project, model), [project]);
+  const order = useMemo(() => planOrder(model, activePlan(project)), [model, project]);
 
   const tRef = useRef(t);
   tRef.current = t;
@@ -85,13 +88,8 @@ export function SimulateTab({ project, model, sim }) {
     </div>
     <div class="sim-views">
       <div class="sim-plan">
-        <${PlanView} project=${project} model=${model} spots=${spots} state=${state} sel=${sel} setSel=${setSel} />
-        <div class="sim-legend">
-          ${Object.entries({ held: 'Being held', working: 'Being aligned / fastened', stable: 'Stable', unstable: 'Unstable' }).map(([k, l]) => html`<span><i style=${{ background: STATUS_COLORS[k] }}></i>${l}</span>`)}
-          <span class="bolt-key"><i class="round" style=${{ background: BOLT_COLORS.moving }}></i>Bolt on its way</span>
-          <span class="bolt-key"><i class="round" style=${{ background: BOLT_COLORS.fastened }}></i>Fastened</span>
-          <span class="bolt-key"><i class="round ring" style=${{ borderColor: BOLT_COLORS.inserted }}></i>Inserted, nut not on (partly connected)</span>
-        </div>
+        <${GameView} project=${project} model=${model} sim=${sim} order=${order} t=${t} setT=${setT} bare=${true}
+          outerPlaying=${playing} onPlay=${() => { if (t >= end) setT(0); setPlaying(!playing); }} />
       </div>
       <div class="sim-side">
         <${IsoView} model=${model} styleOf=${styleOf} supports=${state.supports} bolts=${boltDots} label="Bridge at this moment" />
