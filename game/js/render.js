@@ -342,7 +342,7 @@ export function draw(g, S, V, ui) {
     if (S.installed.has(id)) continue;
     const it = S.itemOf.get(id);
     const a = it && carriedBy.get(it.id);
-    drawMember(g, P, mm, a ? { glow: a.color, pulse: 0.5 + 0.5 * Math.sin(now * 6) } : { ghost: true });
+    drawMember(g, P, mm, a ? { glow: a.color, pulse: 0.5 + 0.5 * Math.sin(now * 6) } : { ghost: true, cant: it?.status === 'unplaceable' });
   }
 
   // Pieces at full size in the ready and assembly areas.
@@ -426,9 +426,26 @@ export function draw(g, S, V, ui) {
 
   // Bolts: a white + where one is needed, an amber nut to fasten, a green nut when done.
   for (const b of S.bolts) {
-    if (b.state === 'hidden' || b.state === 'internal') continue;
-    const [x, y] = P(b.x, b.y, b.z - sag);
+    if (b.state === 'internal' || b.state === 'fastened') { if (b.state === 'internal') continue; }
     const r = Math.max(3, k * 1.8);
+    if (b.impossible) {
+      // Nobody can reach it: a red cross once a piece it goes through is in.
+      if (!b.memberIds.some((id) => S.installed.has(id))) continue;
+      const [x, y] = P(b.x, b.y, b.z - sag);
+      g.strokeStyle = 'rgba(15,23,42,0.6)'; g.lineWidth = 4.5; g.lineCap = 'round';
+      g.beginPath(); g.moveTo(x - r, y - r); g.lineTo(x + r, y + r); g.moveTo(x + r, y - r); g.lineTo(x - r, y + r); g.stroke();
+      g.strokeStyle = '#ef4444'; g.lineWidth = 2.5;
+      g.beginPath(); g.moveTo(x - r, y - r); g.lineTo(x + r, y + r); g.moveTo(x + r, y - r); g.lineTo(x - r, y + r); g.stroke();
+      g.lineCap = 'butt';
+      continue;
+    }
+    if (b.state === 'hidden') continue;
+    const [x, y] = P(b.x, b.y, b.z - sag);
+    if (b.reach === 'far' && b.state !== 'fastened') {
+      // A long reach: a dashed amber ring, so it's worth standing right at the edge for.
+      g.setLineDash([3, 2]); g.strokeStyle = '#f59e0b'; g.lineWidth = 2;
+      g.beginPath(); g.arc(x, y, r * 2.6, 0, 7); g.stroke(); g.setLineDash([]);
+    }
     if (b.state === 'fastened') { hexagon(g, x, y, r * 0.8); g.fillStyle = '#22c55e'; g.fill(); g.strokeStyle = '#14532d'; g.lineWidth = 1; g.stroke(); continue; }
     if (b.state === 'needed') {
       const pulse = 1 + 0.25 * Math.sin(now * 6);
@@ -535,7 +552,7 @@ function drawMember(g, P, mm, o) {
   const lo2 = lo.map((p) => P(...p)), hi2 = hi.map((p) => P(...p));
   if (o.ghost) {
     poly(g, hi2);
-    g.setLineDash([3, 3]); g.strokeStyle = 'rgba(30,41,59,0.28)'; g.lineWidth = 1; g.stroke(); g.setLineDash([]);
+    g.setLineDash([3, 3]); g.strokeStyle = o.cant ? 'rgba(220,38,38,0.75)' : 'rgba(30,41,59,0.28)'; g.lineWidth = o.cant ? 1.6 : 1; g.stroke(); g.setLineDash([]);
     return;
   }
   if (o.glow) {
@@ -706,6 +723,24 @@ function drawActorTop(g, S, V, a, ui) {
     g.save(); g.translate(wx + 16, wy - 6); g.rotate(sw);
     g.fillStyle = '#92400e'; g.fillRect(-1, -2, 2.5, 11); g.fillStyle = '#475569'; g.fillRect(-4, -4, 9, 4); g.restore();
   }
+  // Boost left: a bar over their head that drains as it's used (gone once it's empty).
+  if (S.settings.boost && !a.npc && a.boostLeft > 0) {
+    const [bx, by] = P(a.x, a.y, 30);
+    const w = Math.max(22, k * 9), h = Math.max(4, k * 1.4), f = a.boostLeft / 8;
+    rrect(g, bx - w / 2 - 1, by - h / 2 - 1, w + 2, h + 2, h); g.fillStyle = 'rgba(15,23,42,0.75)'; g.fill();
+    rrect(g, bx - w / 2, by - h / 2, Math.max(h, w * f), h, h / 2); g.fillStyle = a.boosting ? '#38bdf8' : f < 0.25 ? '#f97316' : '#22d3ee'; g.fill();
+  }
+  if (a.boosting) {
+    // Speed lines trailing behind.
+    g.strokeStyle = 'rgba(255,255,255,0.75)'; g.lineWidth = 2; g.lineCap = 'round';
+    for (let i = -1; i <= 1; i++) {
+      const ox = -a.face[1] * i * 5, oy = a.face[0] * i * 5;
+      const [x1, y1] = P(a.x - a.face[0] * 10 + ox, a.y - a.face[1] * 10 + oy, 8 + i * 2);
+      const [x2, y2] = P(a.x - a.face[0] * (18 + 4 * Math.sin(ui.now * 30 + i)) + ox, a.y - a.face[1] * 18 + oy, 8 + i * 2);
+      g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke();
+    }
+    g.lineCap = 'butt';
+  }
   // Dizzy: stars circling their head.
   if (a.dizzyUntil > S.t) {
     const [hx, hy] = P(a.x, a.y, 26);
@@ -774,8 +809,9 @@ function drawHud(g, S, V, ui) {
   const placed = S.items.filter((it) => it.status === 'placed').length;
   const nuts = S.bolts.filter((b) => b.state !== 'internal');
   const fastened = nuts.filter((b) => b.state === 'fastened').length;
+  const cant = S.items.filter((it) => it.status === 'unplaceable').length + nuts.filter((b) => b.impossible).length;
   g.textAlign = 'right'; g.font = '700 14px system-ui'; g.fillStyle = '#e2e8f0';
-  g.fillText(`🧱 ${placed}/${S.items.length}   🔩 ${fastened}/${nuts.length}   💥 ${S.falls.length}`, W - 16, 24);
+  g.fillText(`🧱 ${placed}/${S.items.length}   🔩 ${fastened}/${nuts.length}   💥 ${S.falls.length}${cant ? `   🚫 ${cant}` : ''}`, W - 16, 24);
   g.font = '500 12px system-ui'; g.fillStyle = '#94a3b8';
   g.fillText(ui.hudRight ?? (ui.paused ? 'Paused' : `Esc / Start: pause · M: sound ${ui.muted ? 'off' : 'on'} · N: music ${ui.music ? 'on' : 'off'}`), W - 16, 46);
 
@@ -783,7 +819,7 @@ function drawHud(g, S, V, ui) {
   const n = S.items.length;
   const cw = Math.min(30, (W - 32) / n);
   const x0 = W / 2 - (cw * n) / 2;
-  const COL = { waiting: '#334155', building: '#1d4ed8', made: '#7c3aed', shelf: '#16a34a', carried: '#ca8a04', placed: '#0f172a', dropped: '#dc2626', floating: '#0284c7' };
+  const COL = { waiting: '#334155', building: '#1d4ed8', made: '#7c3aed', shelf: '#16a34a', carried: '#ca8a04', placed: '#0f172a', dropped: '#dc2626', floating: '#0284c7', unplaceable: '#7f1d1d' };
   S.items.forEach((it, i) => {
     const x = x0 + i * cw;
     g.fillStyle = it.loose ? '#f59e0b' : COL[it.status];

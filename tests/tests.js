@@ -1568,6 +1568,47 @@ await test('game: computers hand pieces across the river even with a holder stan
   assert(!S.falls.length, S.falls.map((f) => f.why).join(' | '));
 });
 
+await test('game: boost, when on, is 150% speed while held, 8 s in all', () => {
+  const run = (settings, rb, secs) => {
+    const g = game({ players: [['p1', 'east']], settings });
+    const a = g.actor('p1');
+    g.put('p1', 420, 100);
+    Object.assign(g.input.get('p1'), { mx: 1, rb });
+    const x0 = a.x;
+    g.tick(secs);
+    return { d: a.x - x0, a, g };
+  };
+  const plain = run({ boost: true }, false, 1), fast = run({ boost: true }, true, 1), off = run({ boost: false }, true, 1);
+  assert(near(fast.d / plain.d, 1.5, 0.05), `boosted ${fast.d.toFixed(1)} vs ${plain.d.toFixed(1)}`);
+  assert(near(off.d, plain.d, 0.5), 'no boost unless it is on');
+  assert(near(fast.a.boostLeft, 7, 0.05), 'drains while used: ' + fast.a.boostLeft);
+  assert(plain.a.boostLeft === 8, 'not used up by just walking');
+  // Used up: back to normal speed for good.
+  const long = run({ boost: true }, true, 9);
+  assert(long.a.boostLeft === 0 && long.g.S.events.some((e) => e.kind === 'boostOut'), 'empty after 8 s');
+  const x1 = long.a.x;
+  long.g.put('p1', 420, 100);
+  long.g.tick(1);
+  assert(near(long.a.x - 420, plain.d, 0.5), 'normal speed once it is gone');
+});
+
+await test('game: bolts and pieces out of reach are marked, and the game ends without them at a penalty', () => {
+  const g = game({ players: [['p1', 'west']] });
+  const far = g.S.bolts.filter((b) => b.reach === 'far').length;
+  assert(far > 0 && !g.S.bolts.some((b) => b.impossible), 'the example has long reaches but nothing out of reach: ' + far);
+  // With a short reach some bolts and pieces can't be reached at all.
+  const { S, tick } = game({ players: [], settings: { reach: 28 }, npcs: { holder: true, helpers: [{ side: 'east' }, { side: 'east' }, { side: 'west' }] } });
+  const pieces = S.items.filter((it) => it.status === 'unplaceable').length, bolts = S.bolts.filter((b) => b.impossible).length;
+  assert(pieces > 0 && bolts > 0, `out of reach: ${pieces} pieces, ${bolts} bolts`);
+  assert(S.events.some((e) => e.kind === 'unreachable'), 'announced at the start');
+  for (let i = 0; i < 700 && !S.done; i++) tick(1);
+  assert(S.done, 'ends once everything possible is done: ' + S.items.filter((it) => it.status === 'placed').length + ' placed at ' + Math.round(S.t));
+  const r = gameResults(S);
+  assert(r.unfinished && r.unfinished.pieces === pieces && r.unfinished.bolts === bolts, JSON.stringify(r.unfinished));
+  assert(r.unfinished.penalty === pieces * 60 + bolts * 10 && r.penalties >= r.unfinished.penalty, 'penalty ' + r.penalties);
+  assert(!S.falls.length, 'nothing falls: ' + S.falls.map((f) => f.why).join(' | '));
+});
+
 await test('old (version 1) project files still open', () => {
   const v1 = { version: 1, design: { nodes: [{ id: 'a', plane: 'A', x: 0, y: 0, z: 0, bearing: true }, { id: 'b', plane: 'A', x: 30, y: 0, z: 0 }], members: [{ id: 'm', name: 'A-1', plane: 'A', segments: [['a', 'b']] }], bolts: [{ id: 'x', memberId: 'm', seg: 0, s: 0.1 }] } };
   const p = normalizeProject(v1);

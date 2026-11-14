@@ -56,6 +56,9 @@ export function defaultSettings(project, fastenTime) {
     freeStaging: false, // pick pieces yourself (see the top of this file)
     bumps: false, // running into each other leaves both dizzy, and drops what they carry (see bump)
     bumpPenalty: 5, // s added for each piece dropped in a bump
+    boost: false, // each builder can run at 150% speed by holding a button, for 8 s in all
+    unplaceablePenalty: 60, // s added at the end for each piece nobody can get close enough to place
+    unreachablePenalty: 10, // s added at the end for each bolt left undone because nobody can reach it
     passReach: tm.passReach || 90,
   };
 }
@@ -156,10 +159,53 @@ export function createGame({ project, order, settings, players, npcs = {} }) {
     const pos = spawn(h.side, same.indexOf(h) + (bySide[h.side]?.length || 0), same.length + (bySide[h.side]?.length || 0));
     S.actors.push(newActor({ id: 'npc-com-' + (k + 1), name: 'COM ' + (k + 1), color: COM_COLORS[k % COM_COLORS.length], side: h.side, npc: 'helper', label: 'C' + (k + 1) }, pos));
   });
+  markReach(S);
+  for (const a of S.actors) a.boostLeft = settings.boost ? BOOST_TIME : 0;
   if (settings.freeStaging) setUpFreeStaging(S);
   releaseItems(S);
   if (settings.freeStaging) placeAll(S);
+  const cant = { pieces: S.items.filter((it) => it.status === 'unplaceable').length, bolts: S.bolts.filter((b) => b.impossible).length };
+  if (cant.pieces || cant.bolts) S.events.push({ kind: 'unreachable', ...cant });
   return S;
+}
+// What nobody can do from where builders can stand (the reach setting): a piece nobody can get
+// close enough to place is set aside ('unplaceable'); each bolt is a near reach, a long one (more
+// than three quarters of the reach away from anywhere to stand), or out of reach. A bolt is out of
+// reach too if a piece it goes through can't be placed. The game ends without them, at a penalty.
+function markReach(S) {
+  const reach = S.settings.reach;
+  const sides = Object.keys(S.sides);
+  for (const it of S.items) {
+    let ok = false;
+    for (const side of sides) {
+      for (const id of it.memberIds) {
+        const mm = S.members.get(id);
+        if (!mm || ok) continue;
+        const c = mm.poly.reduce((t, q) => [t[0] + q[0] / mm.poly.length, t[1] + q[1] / mm.poly.length], [0, 0]);
+        for (const [x, y] of [c, ...mm.poly]) {
+          for (const dy of [0, -14, 14]) {
+            const q = clampPos(S, side, x, y + dy);
+            if (itemDist(S, it, q.x, q.y) <= reach) { ok = true; break; }
+          }
+          if (ok) break;
+        }
+      }
+    }
+    if (!ok) it.status = 'unplaceable';
+  }
+  for (const b of S.bolts) {
+    const d = Math.min(...sides.map((side) => { const q = clampPos(S, side, b.x, b.y); return dist(q.x, q.y, b.x, b.y); }));
+    b.reachD = d;
+    b.reach = d > reach ? 'none' : d > reach * 0.75 ? 'far' : 'near';
+    b.impossible = b.state !== 'internal' && (b.reach === 'none' || b.memberIds.some((id) => S.itemOf.get(id)?.status === 'unplaceable'));
+  }
+}
+// What's left undone at the end (pieces that couldn't be placed, bolts not fastened).
+export function unfinished(S) {
+  return {
+    pieces: S.items.filter((it) => it.status !== 'placed').length,
+    bolts: S.bolts.filter((b) => b.state !== 'internal' && b.state !== 'fastened').length,
+  };
 }
 // Pick pieces yourself: the assembly area shrinks to a bench in the yard's top-right corner, just
 // big enough for the biggest assembly; the ready area is the whole yard around it.
@@ -222,6 +268,7 @@ export function releaseItems(S) {
     for (const it of S.items) if (!it.multi && it.status === 'waiting') it.status = 'shelf';
     return;
   }
+  // (An 'unplaceable' piece is set aside: it never comes out, and doesn't hold up the rest.)
   let blocked = false;
   for (const it of S.items) {
     if (it.multi) {
@@ -339,7 +386,8 @@ export function canPlace(S, a, item) {
 
 function placeItem(S, a) {
   const item = S.items.find((it) => it.id === a.carrying);
-  const contacts = contactsWithBridge(S, item);
+  // Only connections with a bolt someone can reach count: a piece isn't held waiting for the rest.
+  const contacts = contactsWithBridge(S, item).filter((cid) => S.bolts.some((b) => b.jointIds.includes(cid) && !b.impossible));
   for (const id of item.memberIds) S.installed.add(id);
   item.status = 'placed';
   a.carrying = null;
@@ -348,7 +396,7 @@ function placeItem(S, a) {
   for (const b of S.bolts) if (b.state === 'hidden' && isOn(S, b)) b.state = 'needed';
   const need = Math.min(2, contacts.length);
   if (need && !item.buddy) {
-    const mine = S.bolts.filter((b) => b.state === 'needed' && b.jointIds.some((j) => contacts.includes(j)));
+    const mine = S.bolts.filter((b) => b.state === 'needed' && !b.impossible && b.jointIds.some((j) => contacts.includes(j)));
     mine.sort((p, q) => dist(p.x, p.y, a.x, a.y) - dist(q.x, q.y, a.x, a.y));
     if (mine[0]) placeBolt(S, a, mine[0], false);
   }
@@ -470,7 +518,7 @@ function updateBridge(S) {
     S.events.push({ kind: 'stands' });
   }
   const overhang = [...S.installed].some((id) => !S.members.get(id)?.over);
-  sup.needed = !sup.standing && overhang;
+  sup.needed = !sup.standing && overhang && !S.allBuilt; // (nothing more to hold it for once all that can be built is)
 }
 
 // Self-supporting: secure pieces, bolted together, reach both footings on each truss, and the
@@ -711,7 +759,7 @@ export function roaming(S, a) {
 export const pace = (S, a) => (roaming(S, a) ? Math.max(0.05, (S.settings.comSpeed ?? 80) / 100) : 1);
 
 // ---------- moving ----------
-function move(S, a, mx, my, dt) {
+function move(S, a, mx, my, dt, boost = 1) {
   const m = Math.hypot(mx, my);
   if (m > 1) { mx /= m; my /= m; }
   a.moving = m > 0.15;
@@ -748,7 +796,7 @@ function move(S, a, mx, my, dt) {
     return;
   }
   if (!a.moving) return;
-  const v = (a.carrying ? S.settings.carrySpeed : S.settings.walkSpeed) * pace(S, a);
+  const v = (a.carrying ? S.settings.carrySpeed : S.settings.walkSpeed) * pace(S, a) * boost;
   let x = a.x + mx * v * dt, y = a.y + my * v * dt;
   for (const o of S.obstacles) {
     const qx = Math.max(o.x, Math.min(o.x + o.w, x)), qy = Math.max(o.y, Math.min(o.y + o.h, y));
@@ -765,6 +813,7 @@ function move(S, a, mx, my, dt) {
 // Two builders who run into each other are both dizzy for a moment, bounce apart, and drop whatever
 // they're carrying where they stand (a time penalty for each piece). One dropped over the river
 // floats slowly downstream (north to south) and, at the end, turns up back in the ready area.
+const BOOST_TIME = 8, BOOST_SPEED = 1.5; // s of boost each builder gets, and how much faster
 const DIZZY = 1, BUMP_AGAIN = 1.2, BOUNCE = 7, FLOAT_SPEED = 10, PICKUP_REACH = 30;
 function bumps(S) {
   const ready = (a) => !a.anchor && !(a.dizzyUntil > S.t) && !(a.bumpAgain > S.t);
@@ -867,7 +916,12 @@ export function stepGame(S, inputs, dt) {
       a.stats.time.idle += dt;
       continue;
     }
-    move(S, a, inp.mx || 0, inp.my || 0, dt);
+    // Boost: hold RB (or Shift) to move at 150% while there's some left.
+    const boosting = !!(S.settings.boost && inp.rb && a.boostLeft > 0 && !a.anchor && Math.hypot(inp.mx || 0, inp.my || 0) > 0.15);
+    if (boosting && !a.boosting) S.events.push({ kind: 'boost', by: a.id });
+    a.boosting = boosting;
+    move(S, a, inp.mx || 0, inp.my || 0, dt, boosting ? BOOST_SPEED : 1);
+    if (boosting) { a.boostLeft = Math.max(0, a.boostLeft - dt); if (!a.boostLeft) S.events.push({ kind: 'boostOut', by: a.id }); }
 
     // A holder who walks out along the bridge keeps up with it.
     const hd = S.support.holders.get(a.id);
@@ -928,11 +982,23 @@ export function stepGame(S, inputs, dt) {
     a.prompt = { A, X, LB };
   }
 
-  S.allBuilt = S.items.every((it) => it.status === 'placed' && !it.loose) && S.bolts.every((b) => b.state === 'internal' || b.state === 'fastened');
+  // Built: everything that can be done is (pieces nobody can reach to place, and bolts nobody can
+  // reach, are left for a penalty).
+  S.allBuilt = S.items.every((it) => (it.status === 'placed' && !it.loose) || it.status === 'unplaceable') && S.bolts.every((b) => b.state === 'internal' || b.state === 'fastened' || b.impossible);
+  // Everything possible is in but the bridge can't stand on its own without what's missing: there's
+  // nothing more anyone can do, so holders can let go and head back (it's all in the penalty).
+  if (S.allBuilt && !S.support.standing && S.support.holders.size) {
+    for (const id of S.support.holders.keys()) { const a = S.actors.find((x) => x.id === id); if (a?.anchor?.kind === 'bridge') a.anchor = null; }
+    S.support.holders.clear();
+    S.support.needed = false;
+  }
   if (S.allBuilt && S.actors.every((a) => inStaging(S, a) && !a.anchor)) {
     S.done = true;
     S.finishT = S.t;
-    S.events.push({ kind: 'done' });
+    const left = unfinished(S);
+    S.unfinished = { ...left, penalty: left.pieces * (S.settings.unplaceablePenalty ?? 60) + left.bolts * (S.settings.unreachablePenalty ?? 10) };
+    S.penalties += S.unfinished.penalty;
+    S.events.push({ kind: 'done', unfinished: S.unfinished });
   }
 }
 
@@ -1138,7 +1204,7 @@ function jobs(S, a) {
   }
   // Picking pieces yourself: fetch the next piece in build order, wherever it was set down.
   if (S.settings.freeStaging && a.side === S.stagingSide && !taken.has('grab')) {
-    const firstOpen = S.items.find((it) => it.status !== 'placed' && it.status !== 'carried');
+    const firstOpen = S.items.find((it) => it.status !== 'placed' && it.status !== 'carried' && it.status !== 'unplaceable');
     const next = shelfItems(S).filter((it) => placeableNow(S, it) || it === firstOpen).sort((p, q) => p.idx - q.idx)[0];
     if (next && next.pos) {
       const q = clampPos(S, a.side, next.pos.x, next.pos.y);
@@ -1148,7 +1214,7 @@ function jobs(S, a) {
   // Run the next ready piece, in build order, if it can go in now (or it's simply next).
   else if (a.side === S.stagingSide && !taken.has('grab')) {
     const next = shelfItems(S)[0];
-    const firstOpen = S.items.find((it) => it.status !== 'placed' && it.status !== 'carried');
+    const firstOpen = S.items.find((it) => it.status !== 'placed' && it.status !== 'carried' && it.status !== 'unplaceable');
     if (next && (placeableNow(S, next) || next === firstOpen)) {
       const r0 = S.ready;
       const q = clampPos(S, a.side, Math.max(r0.x + 6, Math.min(r0.x + r0.w - 6, a.x)), Math.max(r0.y + 6, Math.min(r0.y + r0.h - 6, a.y)));
@@ -1238,7 +1304,7 @@ function npcThink(S, a, dt) {
     return hold;
   }
   // The holder's main job until the bridge stands: be there to hold it.
-  if (a.npc === 'holder' && !sup.standing) {
+  if (a.npc === 'holder' && !sup.standing && !S.allBuilt) {
     if (sup.needed || sup.fallen) {
       const q = farHoldSpot(S, a);
       if (q) {
@@ -1318,7 +1384,7 @@ export function results(S) {
   const time = S.finishT ?? S.t;
   const total = time + S.penalties;
   return {
-    done: S.done, time, penalties: S.penalties, total, falls: S.falls, neglected: S.neglected,
+    done: S.done, time, penalties: S.penalties, total, falls: S.falls, neglected: S.neglected, unfinished: S.unfinished || null,
     builders: S.actors.length, cost: constructionCost(S.project.site.rules, total, S.actors.length),
     players: S.actors.map((a) => ({ id: a.id, name: a.name, color: a.color, side: a.side, npc: a.npc, ...a.stats })),
   };

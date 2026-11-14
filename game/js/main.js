@@ -12,7 +12,6 @@ import { Setup } from './ui/setup.js';
 import { Play } from './ui/play.js';
 import { Results } from './ui/results.js';
 import { isMusicOn, playSong, setMusicOn, unlock } from './sound.js';
-import { PadCursor } from './ui/cursor.js';
 
 const SETUP_KEY = 'oe.setup.v1';
 const SETTINGS_VERSION = 3;
@@ -73,7 +72,6 @@ function App() {
     window.addEventListener('keydown', go);
     return () => { window.removeEventListener('pointerdown', go); window.removeEventListener('keydown', go); };
   }, []);
-  const cursor = html`<${PadCursor} device=${setup.players[0]?.device} />`;
   const musicButton = html`<button class="oe-music-btn" title="Music on or off (N during a run)" onClick=${() => { setMusicOn(!isMusicOn()); setMusicState(isMusicOn()); }}>${musicOn ? '♪ Music on' : '♪ Music off'}</button>`;
 
   if (screen === 'play') {
@@ -84,7 +82,7 @@ function App() {
     return html`${musicButton}<${Results} result=${result} project=${project} order=${order} setup=${setup}
       onAgain=${() => { setQuick(true); setRunKey(runKey + 1); setScreen('play'); }} onSetup=${() => setScreen('setup')} />`;
   }
-  return html`${musicButton}${cursor}<${Setup} project=${project} model=${model} from=${from} order=${order} setup=${setup} setSetup=${setSetup}
+  return html`${musicButton}<${Setup} project=${project} model=${model} from=${from} order=${order} setup=${setup} setSetup=${setSetup}
     onProject=${useProject} onStart=${() => { setQuick(false); setRunKey(runKey + 1); setScreen('play'); }} />`;
 }
 

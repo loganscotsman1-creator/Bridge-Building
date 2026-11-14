@@ -98,6 +98,9 @@ export const SFX = {
     [523, 659, 784, 1046, 784, 1046, 1318].forEach((f, i) => tone(f, i === 6 ? 0.8 : 0.22, { type: 'triangle', vol: 0.09, delay: i * 0.12 }));
     noise(1.2, { vol: 0.08, type: 'highpass', freq: 6000, delay: 0.72 });
   },
+  // Boost: a quick rising whoosh.
+  boost: () => { noise(0.28, { vol: 0.1, freq: 600, to: 2600, q: 1.2 }); tone(300, 0.2, { type: 'sine', vol: 0.04, slide: 500 }); },
+  boostOut: () => tone(260, 0.18, { type: 'triangle', vol: 0.05, slide: -120 }),
   // Two builders run into each other: a cartoon boing.
   bump: () => { tone(220, 0.35, { type: 'sine', vol: 0.12, slide: 520 }); tone(160, 0.12, { type: 'triangle', vol: 0.08 }); noise(0.05, { vol: 0.08, type: 'lowpass', freq: 800 }); },
   // A piece clatters to the ground.

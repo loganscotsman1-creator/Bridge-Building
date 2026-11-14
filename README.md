@@ -25,15 +25,33 @@ clock. It uses the bridge, site and timing from the sequencer in the same browse
 file you open), so the times are realistic: walking and carrying speeds, reach, and how long a nut
 takes to fasten.
 
-- **Setup:** players join by pressing A on a controller (any the browser sees: Xbox,
-  PlayStation, Switch Pro…) or Space / slash for two players on one keyboard, and pick a side of
-  the river. With a controller, X switches side and Y opens an on-screen keyboard for a name
-  (A types, B deletes, Y is done). Player 1 can also set the builders and times from their
-  controller: the left stick moves a pointer and A clicks (LB/RB change a number under it, the
-  right stick scrolls), or the d-pad steps through the settings; Start begins. On the results
-  screen, left / right highlights Build again, Change setup or Download results; A or Enter picks
-  it, and Start builds again with the same settings, straight into the countdown. With 5 builders an NPC either holds the bridge or makes the assemblies; with 6 there
-  is one of each.
+- **Setup** is three screens, one after another:
+  1. **Title and players:** the game's name, players joining (press A on a controller, any the
+     browser sees: Xbox, PlayStation, Switch Pro…, or Space / slash for two players on one keyboard),
+     and the computers (how many builders, the NPC's job, each COM's side, the computer speed).
+     With a controller, X switches side and Y opens an on-screen keyboard for a name (A types, B
+     deletes, Y is done).
+  2. **Game play:** the bridge and its build order, staging (pieces come out in order, or pick them
+     yourself), bumping into each other, and boost.
+  3. **Timing:** how long things take, speeds, reach, and penalties.
+
+  Player 1 runs the menus from their controller (or keys), with no pointer: the stick or d-pad
+  moves a highlight over the settings and buttons; A on a button presses it, and A on a setting
+  starts changing it (up/down changes it, A when done). Start goes on to the next screen (and starts
+  building from the last), B goes back. On the results screen, left / right highlights Build again,
+  Change setup or Download results; A or Enter picks it, and Start builds again with the same
+  settings, straight into the countdown. With 5 builders an NPC either holds the bridge or makes the
+  assemblies; with 6 there is one of each.
+- **Boost** (a setup option): every builder gets 8 seconds of boost to use whenever they like.
+  Hold RB (or Shift on the keyboard) to move 150% faster; a bar over their head drains as it's used,
+  and once it's empty it's gone for the rest of the build.
+- **Out of reach:** a bolt in a dashed amber ring is a long reach (more than three quarters of the
+  reach from anywhere to stand): stand right at the edge for it. A bolt nobody can reach from
+  anywhere gets a red ✕, and a piece nobody can get close enough to place is outlined in red where
+  it would go and never comes out of staging. The game ends once everything that can be done is
+  done and everyone is back in a staging yard, with a penalty for each piece (60 s) and bolt (10 s)
+  left undone, set on the timing screen. If what's missing keeps the bridge from standing on its
+  own, holders can let go once there's nothing more to do.
 - **Build order:** the game plays the order and assemblies chosen in the Build Sequencer
   (5 · Build sequence → Build order), including which items need a buddy. The game has no order
   editor of its own: with the sequencer open in another tab, the setup screen's list follows every

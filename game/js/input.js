@@ -19,10 +19,10 @@ if (typeof window !== 'undefined') {
 }
 
 export const KEYBOARDS = {
-  kb1: { name: 'Keyboard left', up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD', a: 'Space', x: 'KeyE', lb: 'KeyQ', start: 'Escape', caps: { A: 'Space', X: 'E', LB: 'Q', move: 'W A S D', start: 'Esc' }, help: 'WASD move · Space = A · E = X · Q = hold bridge' },
-  kb2: { name: 'Keyboard right', up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', a: 'Slash', x: 'Period', lb: 'Comma', start: 'Backspace', caps: { A: '/', X: '.', LB: ',', move: 'Arrow keys', start: 'Backspace' }, help: 'Arrows move · / = A · . = X · , = hold bridge' },
+  kb1: { name: 'Keyboard left', up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD', a: 'Space', x: 'KeyE', lb: 'KeyQ', rb: 'ShiftLeft', start: 'Escape', caps: { A: 'Space', X: 'E', LB: 'Q', RB: 'Left Shift', move: 'W A S D', start: 'Esc' }, help: 'WASD move · Space = A · E = X · Q = hold bridge' },
+  kb2: { name: 'Keyboard right', up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', a: 'Slash', x: 'Period', lb: 'Comma', rb: 'ShiftRight', start: 'Backspace', caps: { A: '/', X: '.', LB: ',', RB: 'Right Shift', move: 'Arrow keys', start: 'Backspace' }, help: 'Arrows move · / = A · . = X · , = hold bridge' },
 };
-const KEY_CODES = new Set(Object.values(KEYBOARDS).flatMap((k) => [k.up, k.down, k.left, k.right, k.a, k.x, k.lb]));
+const KEY_CODES = new Set(Object.values(KEYBOARDS).flatMap((k) => [k.up, k.down, k.left, k.right, k.a, k.x, k.lb, k.rb]));
 
 const pads = () => (typeof navigator !== 'undefined' && navigator.getGamepads ? [...navigator.getGamepads()] : []);
 
@@ -41,12 +41,12 @@ export function readDevice(id) {
     return {
       mx: (keys.has(k.right) ? 1 : 0) - (keys.has(k.left) ? 1 : 0),
       my: (keys.has(k.down) ? 1 : 0) - (keys.has(k.up) ? 1 : 0),
-      a: down(k.a), x: down(k.x), y: false, b: false, lb: down(k.lb), start: down(k.start),
+      a: down(k.a), x: down(k.x), y: false, b: false, lb: down(k.lb), rb: keys.has(k.rb), start: down(k.start),
       get dx() { return this.mx; }, get dy() { return this.my; },
     };
   }
   const p = pads()[+id.slice(3)];
-  if (!p || !p.connected) return { mx: 0, my: 0, a: false, x: false, y: false, b: false, lb: false, start: false };
+  if (!p || !p.connected) return { mx: 0, my: 0, a: false, x: false, y: false, b: false, lb: false, rb: false, start: false };
   const btn = (i) => !!(p.buttons[i] && (p.buttons[i].pressed || p.buttons[i].value > 0.5));
   let mx = p.axes[0] || 0, my = p.axes[1] || 0;
   const m = Math.hypot(mx, my);
@@ -54,7 +54,7 @@ export function readDevice(id) {
   // dx/dy: the d-pad alone (the menus use it apart from the stick, which moves player 1's pointer).
   const dx = (btn(15) ? 1 : 0) - (btn(14) ? 1 : 0), dy = (btn(13) ? 1 : 0) - (btn(12) ? 1 : 0);
   if (btn(14)) mx = -1; if (btn(15)) mx = 1; if (btn(12)) my = -1; if (btn(13)) my = 1;
-  return { mx, my, dx, dy, a: btn(0), x: btn(2) || btn(1), y: btn(3), b: btn(1), lb: btn(4) || btn(6), start: btn(9) };
+  return { mx, my, dx, dy, a: btn(0), x: btn(2) || btn(1), y: btn(3), b: btn(1), lb: btn(4) || btn(6), rb: btn(5) || btn(7), start: btn(9) };
 }
 
 // Devices with A (or Space / slash) pressed right now, for joining.

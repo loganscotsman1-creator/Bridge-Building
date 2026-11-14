@@ -156,8 +156,8 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart, quick
         for (const e of S.events.splice(0)) {
           if (e.kind === 'drop' && e.river) SFX.splash(); else SFX[e.kind]?.();
           effect(e);
-          const text = e.kind === 'drop' ? `${itemLabel(e.item)} dropped${e.river ? ' in the river' : ''}! +${S.settings.bumpPenalty} s` : e.kind === 'returned' ? `${itemLabel(e.item)} floated back to the ready area` : e.kind === 'fall' ? `Bridge fell! +${S.settings.fallPenalty} s` : e.kind === 'stands' ? 'The bridge stands on its own!' : e.kind === 'ready' && e.made ? itemLabel(e.item) + (S.settings.freeStaging ? ' is made: move it off the bench' : ' is ready') : e.kind === 'held' ? 'Holding again: back to work' : null;
-          if (text) ui.banners.push({ text, color: e.kind === 'fall' || e.kind === 'drop' ? '#dc2626' : e.kind === 'ready' || e.kind === 'returned' ? '#2563eb' : '#16a34a', t0: ui.now });
+          const text = e.kind === 'unreachable' ? `Out of reach: ${[e.pieces && `${e.pieces} piece${e.pieces === 1 ? '' : 's'}`, e.bolts && `${e.bolts} bolt${e.bolts === 1 ? '' : 's'}`].filter(Boolean).join(' and ')} (penalty at the end)` : e.kind === 'boostOut' ? `${S.actors.find((x) => x.id === e.by)?.name || 'Someone'} is out of boost` : e.kind === 'drop' ? `${itemLabel(e.item)} dropped${e.river ? ' in the river' : ''}! +${S.settings.bumpPenalty} s` : e.kind === 'returned' ? `${itemLabel(e.item)} floated back to the ready area` : e.kind === 'fall' ? `Bridge fell! +${S.settings.fallPenalty} s` : e.kind === 'stands' ? 'The bridge stands on its own!' : e.kind === 'ready' && e.made ? itemLabel(e.item) + (S.settings.freeStaging ? ' is made: move it off the bench' : ' is ready') : e.kind === 'held' ? 'Holding again: back to work' : null;
+          if (text) ui.banners.push({ text, color: e.kind === 'fall' || e.kind === 'drop' || e.kind === 'unreachable' ? '#dc2626' : e.kind === 'boostOut' ? '#0891b2' : e.kind === 'ready' || e.kind === 'returned' ? '#2563eb' : '#16a34a', t0: ui.now });
           if (e.kind === 'done') { finished = true; finishedAt = ui.now; }
         }
         if (ui.banners.length > 6) ui.banners.splice(0, ui.banners.length - 6);
@@ -175,7 +175,7 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart, quick
 
   return html`<div class="oe-play">
     <canvas ref=${canvasRef} class="oe-canvas"></canvas>
-    ${briefing && html`<${Controls} players=${setup.players} onStart=${() => beginRef.current?.()} onBack=${onQuit} />`}
+    ${briefing && html`<${Controls} players=${setup.players} settings=${setup.settings} onStart=${() => beginRef.current?.()} onBack=${onQuit} />`}
     ${paused && html`<${PauseMenu} items=${(pauseItems.current = [
       { label: 'Resume', go: true, run: () => resumeRef.current?.() },
       { label: `Sound: ${soundOn ? 'on' : 'off'} (M)`, run: () => { setMuted(!isMuted()); setSoundOn(!isMuted()); } },
@@ -188,32 +188,33 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart, quick
 }
 
 // Each player's controls, for the controller or keyboard they joined with.
-function controlsFor(device) {
+function controlsFor(device, settings = {}) {
   const k = KEYBOARDS[device];
+  const boost = (key) => (settings.boost ? [[key, 'Boost: move 150% faster while held (8 s in all; the bar over your head shows what\'s left)']] : []);
   if (k) {
     const c = k.caps;
     return [[c.move, 'Move'], [c.A, 'Grab a piece, place it, put in a bolt'], ['Hold ' + c.A, 'While carrying: hold a piece out to pass it across the river'],
-      ['Hold ' + c.X, 'Fasten a nut, or make an assembly'], ['Hold ' + c.LB, 'Hold the bridge up'], [c.start, 'Pause']];
+      ['Hold ' + c.X, 'Fasten a nut, or make an assembly'], ['Hold ' + c.LB, 'Hold the bridge up'], ...boost('Hold ' + c.RB), [c.start, 'Pause']];
   }
   return [['Left stick', 'Move'], ['A', 'Grab a piece, place it, put in a bolt'], ['Hold A', 'While carrying: hold a piece out to pass it across the river'],
-    ['Hold X', 'Fasten a nut, or make an assembly'], ['Hold LB', 'Hold the bridge up'], ['Start', 'Pause']];
+    ['Hold X', 'Fasten a nut, or make an assembly'], ['Hold LB', 'Hold the bridge up'], ...boost('Hold RB'), ['Start', 'Pause']];
 }
 
-function Controls({ players, onStart, onBack }) {
+function Controls({ players, settings, onStart, onBack }) {
   return html`<div class="oe-pause oe-brief">
     <div class="oe-brief-card">
       <h2>Controls</h2>
       <div class="oe-brief-players">
         ${players.map((p, i) => html`<div class="oe-brief-player" style=${{ borderColor: p.color }}>
           <div class="who"><span class="num" style=${{ background: p.color }}>${i + 1}</span><b>${p.name}</b><small>${deviceName(p.device)} · ${p.side} side</small></div>
-          <table>${controlsFor(p.device).map(([key, what]) => html`<tr><td><kbd>${key}</kbd></td><td>${what}</td></tr>`)}</table>
+          <table>${controlsFor(p.device, settings).map(([key, what]) => html`<tr><td><kbd>${key}</kbd></td><td>${what}</td></tr>`)}</table>
         </div>`)}
       </div>
       <ul class="oe-brief-tips">
         <li>Grab pieces from the <b>ready</b> area in order and set them where they glow on the bridge.</li>
         <li>Once anything hangs past a footing, someone must <b>hold the bridge</b> (and walk out along it as it grows), or it falls.</li>
         <li>Your score is the <b>construction cost</b>: minutes × builders × $ per builder-minute. Lower is better.</li>
-        <li>Fasten every nut, then everyone back to a staging yard to finish.</li>
+        <li>Fasten every nut, then everyone back to a staging yard to finish. A bolt in a <b>dashed amber ring</b> is a long reach: stand right at the edge. A <b>red ✕</b> (or a red outline for a piece) is out of anyone's reach: it's left undone, at a penalty when you finish.</li>
       </ul>
       <div class="oe-brief-go">
         <button class="oe-go" onClick=${onStart}>Start</button>
