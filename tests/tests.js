@@ -1266,13 +1266,13 @@ await test('game: computers build the whole bridge picking pieces themselves', (
   assert(S.done, `finished: ${placed}/${S.items.length} placed, t=${S.t.toFixed(0)}, ${S.items.filter((it) => it.status !== 'placed').map((it) => '#' + (it.idx + 1) + ':' + it.status).join(' ')}; ` + S.actors.filter((a) => a.npc).map((a) => a.id + ':' + (a.task?.kind || '-') + (a.carrying ? '*' : '')).join(' '));
 });
 
-await test('game: roaming computers work at the computer speed factor (80% by default)', () => {
+await test('game: every computer works at the computer speed factor (80% by default)', () => {
   const { S, tick } = game({ players: [['p1', 'west']], npcs: { assembler: true, helpers: [{ side: 'east' }] } });
   assert(S.settings.comSpeed === 80, 'default 80%');
   const com = S.actors.find((a) => a.npc === 'helper'), asm = S.actors.find((a) => a.npc === 'assembler');
-  assert(pace(S, com) === 0.8 && pace(S, asm) === 1 && pace(S, S.actors[0]) === 1, 'COMs at 80%; the assembler at full speed on its main job; players at full speed');
+  assert(pace(S, com) === 0.8 && pace(S, asm) === 0.8 && pace(S, S.actors[0]) === 1, 'COMs and the assembler (even on its main job) at 80%; players at full speed');
   for (const it of S.items) if (it.multi) it.status = 'shelf';
-  assert(pace(S, asm) === 0.8, 'every assembly made: the assembler roams at 80%');
+  assert(pace(S, asm) === 0.8, 'still 80% once every assembly is made');
   S.settings.comSpeed = 50;
   const x0 = com.x, y0 = com.y;
   com.task = null;

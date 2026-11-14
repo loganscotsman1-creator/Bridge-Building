@@ -110,9 +110,10 @@ takes to fasten.
   water's edge to pass or take a piece (and to reach a bolt), stepping around anyone holding the
   bridge there, and one takes hold from the other side once the bridge has reached across the river
   past whoever is holding it. Two builders straight across from each other at the water can always
-  pass (the pass reach gets a few inches of leeway). Roaming computers (COMs always,
-  the holder and assembler once their main job is done) work at the computer speed factor in setup
-  (80% of the players' walking, carrying, fastening and assembling speeds by default).
+  pass (the pass reach gets a few inches of leeway). Every computer (COMs, the
+  holder and the assembler) works at the computer speed factor set on the first setup screen (80% of
+  the players' walking, carrying, fastening and assembling speeds by default). The setting is there
+  whenever any spot is a computer.
 - **Score:** the construction cost from this year's rules (6.2.5 in 2027): minutes (with
   penalties) × builders (players and computers) × $ per builder-minute, × the crew factor with
   enough builders; over the time limit counts as 180 minutes. Lower is better. It shows live

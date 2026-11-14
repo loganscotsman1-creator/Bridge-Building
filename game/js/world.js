@@ -52,7 +52,7 @@ export function defaultSettings(project, fastenTime) {
     walkSpeed: Math.round((tm.walkSpeed || 54) * 1.35),
     carrySpeed: Math.round((tm.carrySpeed || 36) * 1.5),
     reach: tm.maxReach || 40,
-    comSpeed: 80, // % of players' speeds that computers work at once they're roaming (see pace)
+    comSpeed: 80, // % of players' speeds that every computer works at (see pace)
     freeStaging: false, // pick pieces yourself (see the top of this file)
     bumps: false, // running into each other leaves both dizzy, and drops what they carry (see bump)
     bumpPenalty: 5, // s added for each piece dropped in a bump
@@ -747,16 +747,17 @@ function work(S, a, dt) {
   return true;
 }
 
-// How fast someone works, as a share of the speed settings: 1 for players and for computers on
-// their main job (the holder until the bridge stands, the assembler while assemblies are left);
-// the computer speed factor for computers roaming (COMs always, the others once that job is done).
+// Is a computer off its main job (the holder once the bridge stands, the assembler once every
+// assembly is made; COMs always)?
 export function roaming(S, a) {
   if (!a.npc) return false;
   if (a.npc === 'holder') return S.support.standing;
   if (a.npc === 'assembler') return !S.items.some((it) => it.multi && (it.status === 'waiting' || it.status === 'building'));
   return true;
 }
-export const pace = (S, a) => (roaming(S, a) ? Math.max(0.05, (S.settings.comSpeed ?? 80) / 100) : 1);
+// How fast someone works, as a share of the speed settings: 1 for players, and the computer speed
+// factor for every computer (COMs, the holder and the assembler), whatever it's doing.
+export const pace = (S, a) => (a.npc ? Math.max(0.05, (S.settings.comSpeed ?? 80) / 100) : 1);
 
 // ---------- moving ----------
 function move(S, a, mx, my, dt, boost = 1) {

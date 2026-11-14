@@ -31,7 +31,7 @@ const TIMES = [
   { key: 'unplaceablePenalty', label: 'Penalty for each piece nobody can reach to place', unit: 's', step: 10, title: 'Added at the end' },
   { key: 'unreachablePenalty', label: 'Penalty for each bolt nobody can reach', unit: 's', step: 1, title: 'Added at the end' },
 ];
-const COM_SPEED = { key: 'comSpeed', label: 'Computer speed factor', unit: '%', step: 5, title: "How fast computers walk, carry, fasten and assemble, as a share of the players' speeds, while they're roaming: COMs always, and the holder and assembler once their main job is done." };
+const COM_SPEED = { key: 'comSpeed', label: 'Computer speed factor', unit: '%', step: 5, title: "How fast every computer (COMs, the holder and the assembler) walks, carries, fastens and assembles, as a share of the players' speeds." };
 const DEFAULTS = { assemblyTime: 4, comSpeed: 80, bumpPenalty: 5, unplaceablePenalty: 60, unreachablePenalty: 10 };
 export const STEPS = ['Players', 'Game play', 'Timing'];
 // Highlighted items that are buttons (A presses them); everything else is a setting (A edits it).
@@ -48,7 +48,7 @@ function navList(setup, step) {
       { id: 'builders' },
       ...(setup.builders === 5 ? [{ id: 'npcRole' }] : []),
       ...npcList(setup).helpers.map((_, k) => ({ id: 'com' + k })),
-      { id: 'comSpeed' },
+      ...(npcCount(npcList(setup)) ? [{ id: 'comSpeed' }] : []), // (only with computers playing)
       { id: 'next' },
     ];
   }
@@ -343,8 +343,9 @@ export function Setup({ project, model, from, order, setup, setSetup, onProject,
             <button class=${setup.npcRole === 'assembler' ? 'on' : ''} onClick=${() => setSetup({ ...setup, npcRole: 'assembler' })}>NPC makes assemblies</button>
           </div>`}
           ${npcs.holder && html`<p class="oe-hint">The holder (${sides.holder} side) holds the bridge, walking out along it as it grows and bolting what it can reach, until it stands; then it does the nearest job.</p>`}
-          ${npcs.assembler && html`<p class="oe-hint">The assembler (${sides.assembler} side) makes every assembly at its set time, then runs pieces. Players can make assemblies alongside it to get ahead.</p>`}
-          ${num(COM_SPEED)}
+          ${npcs.assembler && html`<p class="oe-hint">The assembler (${sides.assembler} side) makes every assembly (at the computer speed below), then runs pieces. Players can make assemblies alongside it to get ahead.</p>`}
+          ${npcCount(npcs) > 0 ? html`${num(COM_SPEED)}<p class="oe-hint">Every computer works at this share of the players' speeds: walking, carrying, fastening and assembling.</p>`
+            : html`<p class="oe-hint">Every spot is a player: no computers this time.</p>`}
         </section>
       </div>`}
 
