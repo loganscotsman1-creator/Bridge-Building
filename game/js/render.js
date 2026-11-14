@@ -270,14 +270,19 @@ export function draw(g, S, V, ui) {
       g.fillStyle = grad; g.fill();
       g.save(); g.clip();
       g.strokeStyle = 'rgba(255,255,255,0.28)'; g.lineWidth = 2;
-      for (let yy = z.y - 20; yy < z.y + z.h + 20; yy += 12) {
+      // The water runs north to south (down the screen): ripple lines drift down, each keeping its
+      // own wiggle as it goes.
+      const FLOW = 16, GAP = 12; // in/s, in between ripples
+      const run = now * FLOW, shift = run % GAP, passed = Math.floor(run / GAP);
+      for (let j = 0, yy = z.y - 24 + shift; yy < z.y + z.h + 20; j++, yy += GAP) {
+        const phase = (j - passed) * 1.7; // follows the ripple, so it doesn't jump when lines wrap
         g.beginPath();
-        for (let xx = z.x; xx <= z.x + z.w; xx += 4) { const p = P(xx, yy + Math.sin(xx / 9 - now * 2 + yy) * 2.5); xx === z.x ? g.moveTo(...p) : g.lineTo(...p); }
+        for (let xx = z.x; xx <= z.x + z.w; xx += 4) { const p = P(xx, yy + Math.sin(xx / 9 + phase + now * 0.6) * 2.5); xx === z.x ? g.moveTo(...p) : g.lineTo(...p); }
         g.stroke();
       }
-      // Glints
+      // Glints, carried downstream
       g.fillStyle = 'rgba(255,255,255,0.55)';
-      for (let i = 0; i < 10; i++) { const gx = z.x + ((i * 37 + now * 9) % z.w), gy = z.y + ((i * 53) % z.h); const [sx, sy] = P(gx, gy); g.fillRect(sx, sy, 3 * k, 1); }
+      for (let i = 0; i < 10; i++) { const gx = z.x + ((i * 37) % z.w) + Math.sin(now + i) * 2, gy = z.y + ((i * 53 + now * FLOW * 1.3) % z.h); const [sx, sy] = P(gx, gy); g.fillRect(sx, sy, 1.2 * k, 3 * k); }
       g.restore();
       // Banks
       g.strokeStyle = '#7c5a3a'; g.lineWidth = Math.max(2, k * 1.4);
