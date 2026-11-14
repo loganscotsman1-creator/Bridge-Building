@@ -1168,7 +1168,8 @@ await test('game: if the bridge grows twice and nobody moves out to hold it, it 
   const { S, place, hold, tick, put, press, actor } = game({ players: [['p1', 'west'], ['p2', 'west'], ['p3', 'west']] });
   place('p1', S.items[0]);
   const pt = holdPoints(S)[0];
-  put('p2', pt.x, pt.y); hold('p2', 'lb', true); tick();
+  // Holding back toward the start (as far out as they can reach would count as keeping up).
+  put('p2', pt.x - 40 * S.dir, pt.y); hold('p2', 'lb', true); tick();
   place('p1', S.items[1]); // both trusses now reach the same length: grown once
   assert(S.support.grown === 1 && S.support.holders.get('p2').stale === 1, JSON.stringify({ g: S.support.grown, h: [...S.support.holders.values()] }));
   const name = (n) => S.items.find((it) => it.memberIds.length === 1 && S.members.get(it.memberIds[0]).m.name === n);
@@ -1289,7 +1290,8 @@ await test('game: pieces set on the far footing, not yet joined on, do not make 
   const pt = holdPoints(S)[0];
   put('p2', pt.x, pt.y); hold('p2', 'lb', true); tick();
   place('p1', S.items[1]);
-  assert(S.support.grown === 1 && S.support.holders.get('p2').stale === 1, 'both trusses reach out: grown once');
+  // (p2 already stands as far out as anyone can reach, so that growth doesn't count against them.)
+  assert(S.support.grown === 1, 'both trusses reach out: grown once');
   const byName = (n) => S.items.find((it) => it.memberIds.length === 1 && S.members.get(it.memberIds[0]).m.name === n);
   for (const n of ['A-P2', 'B-P2']) place('p3', byName(n));
   assert(byName('A-P2').status === 'placed' && byName('B-P2').status === 'placed', 'both far piers are in');
@@ -1555,6 +1557,15 @@ await test('game: a piece dropped over the river floats downstream and turns up 
   tick(rv.h / 8 + 5);
   assert(it.status === 'shelf', 'back in the ready area: ' + it.status);
   assert(S.events.some((e) => e.kind === 'returned' && e.item === it.id), 'returned event');
+});
+
+await test('game: computers hand pieces across the river even with a holder standing at the bank', () => {
+  // Four computers picking pieces themselves: holders end up at both banks, right where pieces are
+  // passed and bolts reached, which used to leave a runner and a taker stuck facing each other.
+  const { S, tick } = game({ players: [], settings: { freeStaging: true }, npcs: { helpers: [{ side: 'east' }, { side: 'east' }, { side: 'west' }, { side: 'west' }] } });
+  for (let i = 0; i < 900 && !S.done; i++) tick(1);
+  assert(S.done, 'built: ' + S.items.filter((it) => it.status === 'placed').length + '/' + S.items.length + ' at ' + Math.round(S.t) + ' s');
+  assert(!S.falls.length, S.falls.map((f) => f.why).join(' | '));
 });
 
 await test('old (version 1) project files still open', () => {

@@ -77,7 +77,8 @@ takes to fasten.
   river (slowly, staying right next to it), and still put in and fasten bolts in reach. The bridge
   falls (a time penalty, and it must be held again before work goes on) if nobody takes hold
   within a few seconds, the last holder lets go, or the bridge grows longer twice while every
-  holder stays put (walking a foot farther out counts as keeping up). The bridge grows when both
+  holder stays put (walking a foot farther out counts as keeping up, and so does already standing
+  as far out as anyone on that side can reach). The bridge grows when both
   trusses reach farther; laterals don't count, nor do a few inches. It stands on its own once it
   reaches both footings with the trusses tied together.
 - **Computers:** any builder spot not taken by a player is a computer (COM), up to the number of
@@ -87,7 +88,11 @@ takes to fasten.
   order: hold the bridge if nobody is, take a piece someone is passing across, deliver what it
   carries (passing it over the river if it goes in on the other side), put in and fasten bolts,
   run the next ready piece, help make assemblies. The holder bolts what it can reach while it
-  holds; the assembler runs pieces once every assembly is made. Roaming computers (COMs always,
+  holds; the assembler runs pieces once every assembly is made. Computers find a free spot at the
+  water's edge to pass or take a piece (and to reach a bolt), stepping around anyone holding the
+  bridge there, and one takes hold from the other side once the bridge has reached across the river
+  past whoever is holding it. Two builders straight across from each other at the water can always
+  pass (the pass reach gets a few inches of leeway). Roaming computers (COMs always,
   the holder and assembler once their main job is done) work at the computer speed factor in setup
   (80% of the players' walking, carrying, fastening and assembling speeds by default).
 - **Score:** the construction cost from this year's rules (6.2.5 in 2027): minutes (with

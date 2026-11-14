@@ -34,6 +34,7 @@ const HOLD_SNAP = 80; // how far away a builder can be to take hold of the bridg
 const STATION_REACH = 12; // how close to the assembly or ready area counts as in it
 const HOLD_REACH = 26; // a holder stays within this of the bridge while walking along it (in)
 const HOLD_RESET = 12; // moving this much farther out along the bridge counts as moving out (in)
+const HOLD_NEAR_END = 6; // within this of the farthest spot a holder can reach counts as out there too (in)
 const ANCHOR_PIECE = 12;
 const GROW_MIN = 4; // the bridge has grown when it reaches at least this much farther (in)
 
@@ -550,8 +551,10 @@ function nearestBolt(S, a, state) {
   }
   return best;
 }
+// (A little leeway on the pass reach, about a builder's width: the river leaves only a couple of
+// inches to spare, so two builders straight across from each other at the water can always pass.)
 function passer(S, a) {
-  let best = null, bd = S.settings.passReach;
+  let best = null, bd = S.settings.passReach + R;
   for (const o of S.actors) {
     if (o === a || !o.extending || !o.carrying) continue;
     const d = dist(o.x, o.y, a.x, a.y);
@@ -868,7 +871,11 @@ export function stepGame(S, inputs, dt) {
 
     // A holder who walks out along the bridge keeps up with it.
     const hd = S.support.holders.get(a.id);
-    if (hd) { const o = outAt(S, a.x, a.y); if (o > hd.best + HOLD_RESET) { hd.best = o; hd.stale = 0; } }
+    // (Being as far out as anyone on this side can reach counts too: there's nowhere farther to go.)
+    if (hd) {
+      const o = outAt(S, a.x, a.y), far = farHoldSpot(S, a);
+      if (o > hd.best + HOLD_RESET || (far && o >= outAt(S, far.x, far.y) - HOLD_NEAR_END)) { hd.best = Math.max(hd.best, o); hd.stale = 0; }
+    }
 
     // A: tap to grab, place or bolt; hold while carrying to pass.
     if (inp.a && !a.prev.a) doA(S, a, actionA(S, a));
@@ -937,6 +944,13 @@ export function stepGame(S, inputs, dt) {
 // piece being passed across, deliver what it carries (passing it over the river if it goes on the
 // other side), put in and fasten bolts, run the next ready piece, help make assemblies. When
 // everything is built it walks back to a staging yard.
+// Take hold of the bridge: at the spot heading for, or right where they are if they can reach it
+// (someone may be standing in the way of the farthest spot; once holding, they walk out along it).
+function canHoldNow(S, a, there) {
+  if (!there && bridgeDist(S, a.x, a.y) > HOLD_REACH) return false; // (cheap check first)
+  const act = actionLB(S, a);
+  return act?.kind === 'hold' && (there || !!act.target?.here);
+}
 function goTo(S, a, x, y, tol = 4) {
   const dx = x - a.x, dy = y - a.y, d = Math.hypot(dx, dy);
   if (d <= tol) return { mx: 0, my: 0, there: true };
@@ -945,9 +959,22 @@ function goTo(S, a, x, y, tol = 4) {
 const NONE = { mx: 0, my: 0, a: false, x: false, lb: false };
 const tapA = (a) => !a.prev.a; // press A this frame (a tap needs A up the frame before)
 // Where on its side an NPC can stand to reach a point, if anywhere.
-function reachSpot(S, side, x, y, reach) {
-  const q = clampPos(S, side, x, y);
-  return dist(q.x, q.y, x, y) <= reach ? q : null;
+function reachSpot(S, side, x, y, reach, a = null) {
+  // Not where someone holding the bridge (or a piece) is standing: they won't move out of the way.
+  const blocked = (q) => a && S.actors.some((o) => o !== a && o.anchor && dist(o.x, o.y, q.x, q.y) < 2 * R + 1);
+  if (!a) { const q = clampPos(S, side, x, y); return dist(q.x, q.y, x, y) <= reach ? q : null; }
+  // The free spot nearest to them that they can walk straight to (not through whoever's in the
+  // way); a little farther out than they'd like if that's what it takes.
+  const clear = (q) => !S.actors.some((o) => o !== a && o.anchor && distToSegment2([o.x, o.y], [a.x, a.y], [q.x, q.y]).d < 2 * R);
+  let best = null, bd = Infinity;
+  for (let dy = -24; dy <= 24; dy += 4) {
+    const q = clampPos(S, side, x, y + dy);
+    const r = dist(q.x, q.y, x, y);
+    if (r > reach + 1.5 || blocked(q)) continue;
+    const d = dist(q.x, q.y, a.x, a.y) + (r > reach ? 30 : 0) + (clear(q) ? 0 : 1000);
+    if (d < bd) { bd = d; best = q; }
+  }
+  return best;
 }
 // Where on a side an NPC can stand to place an item, nearest to `from`, if anywhere.
 function itemSpot(S, side, item, from) {
@@ -974,6 +1001,34 @@ const placeableNow = (S, item) => item.memberIds.some((id) => S.members.get(id)?
 function edgeSpot(S, side, y) {
   const [x0, x1] = S.sides[side];
   return clampPos(S, side, side === 'west' ? x1 : x0, y);
+}
+// Where to stand at the water's edge to take a piece from `o` across the river: as close to
+// straight across from them as there's room (someone holding the bridge there doesn't move), and
+// within reach of the pass.
+function meetSpot(S, a, o) {
+  const reach = S.settings.passReach + R - 2;
+  const free = (q) => !S.actors.some((p) => p !== a && p !== o && dist(p.x, p.y, q.x, q.y) < 2 * R + 1);
+  // A straight walk there that doesn't go through someone who won't move (holding the bridge).
+  const clear = (q) => !S.actors.some((p) => p !== a && p.anchor && distToSegment2([p.x, p.y], [a.x, a.y], [q.x, q.y]).d < 2 * R);
+  let best = null, bd = Infinity;
+  for (let dy = -48; dy <= 48; dy += 4) {
+    const q = edgeSpot(S, a.side, o.y + dy);
+    if (dist(q.x, q.y, o.x, o.y) > reach || !free(q)) continue;
+    const d = dist(q.x, q.y, a.x, a.y) + (clear(q) ? 0 : 1000);
+    if (d < bd) { bd = d; best = q; }
+  }
+  return best || edgeSpot(S, a.side, o.y);
+}
+// The free spot at the water's edge nearest to `y` (nobody standing there), that `ok` accepts.
+function freeEdge(S, a, y, ok = () => true, other = null) {
+  for (let k = 0; k <= 24; k++) {
+    const dy = (k % 2 ? 1 : -1) * Math.ceil(k / 2) * 4;
+    const q = edgeSpot(S, a.side, y + dy);
+    if (!ok(q)) continue;
+    if (S.actors.some((p) => p !== a && p !== other && dist(p.x, p.y, q.x, q.y) < 2 * R + 1)) continue;
+    return q;
+  }
+  return edgeSpot(S, a.side, y);
 }
 // The farthest-out spot along the bridge an NPC holding it can reach on its side (worked out
 // again only when pieces go in).
@@ -1005,7 +1060,7 @@ function stillOn(S, a, job) {
     case 'pickup': return !a.carrying && job.item.status === 'dropped';
     case 'clear': return !a.carrying && !!madeItem(S);
     case 'stow': return a.carrying === job.item.id;
-    case 'hold': return !S.support.holders.size && (S.support.needed || S.support.fallen) && !S.support.standing;
+    case 'hold': return (!S.support.holders.size || ([...S.support.holders.values()].every((h) => h.stale >= 1) && !S.actors.some((o) => S.support.holders.has(o.id) && o.side === a.side))) && (S.support.needed || S.support.fallen) && !S.support.standing;
     case 'assemble': return !a.carrying && S.items.some((it) => it.multi && (it.status === 'waiting' || it.status === 'building'));
   }
   return false;
@@ -1020,7 +1075,7 @@ function boltJob(S, a, taken, near = null) {
     if (b.state !== 'needed' && b.state !== 'placed') continue;
     if (taken.has('bolt:' + b.id)) continue;
     if (near && !near(b)) continue;
-    const q = reachSpot(S, a.side, b.x, b.y, reach);
+    const q = reachSpot(S, a.side, b.x, b.y, reach, a);
     if (!q) continue;
     const d = dist(q.x, q.y, a.x, a.y) + (b.flashing ? -40 : 0);
     if (d < bd) { bd = d; best = { kind: b.state === 'needed' ? 'bolt' : 'fasten', key: 'bolt:' + b.id, bolt: b, spot: q, cost: d }; }
@@ -1030,8 +1085,8 @@ function boltJob(S, a, taken, near = null) {
 // Do a bolt job: walk there, then tap A (put in) or hold X (fasten).
 function doBolt(S, a, job, base = NONE) {
   const b = job.bolt;
-  const close = dist(b.x, b.y, a.x, a.y) <= S.settings.reach - 1;
-  if (!close) return { ...base, ...goTo(S, a, job.spot.x, job.spot.y, 2) };
+  const close = dist(b.x, b.y, a.x, a.y) <= S.settings.reach - 0.5;
+  if (!close) return { ...base, ...goTo(S, a, job.spot.x, job.spot.y, 0.5) };
   if (job.kind === 'bolt') return { ...base, a: tapA(a) };
   return { ...base, x: true };
 }
@@ -1048,11 +1103,14 @@ function jobs(S, a) {
     // Picking pieces yourself: something that can't go in yet goes back in the ready area.
     if (S.settings.freeStaging && !placeableNow(S, item) && a.side === S.stagingSide) out.push({ kind: 'stow', key: 'item:' + item.id, item, spot: freeSpot(S, a), cost: -500 });
     else if (spot) out.push({ kind: 'deliver', key: 'item:' + item.id, item, spot, cost: -500 });
-    else out.push({ kind: 'pass', key: 'item:' + item.id, item, spot: edgeSpot(S, a.side, itemBox(S, item) ? (itemBox(S, item).y0 + itemBox(S, item).y1) / 2 : a.y), cost: -500 });
+    else out.push({ kind: 'pass', key: 'item:' + item.id, item, spot: freeEdge(S, a, itemBox(S, item) ? (itemBox(S, item).y0 + itemBox(S, item).y1) / 2 : a.y), cost: -500 });
     return out;
   }
-  // Hold the bridge up if it needs it and nobody (or no other NPC on its way) is.
-  if ((sup.needed || sup.fallen) && !sup.standing && !sup.holders.size && !taken.has('hold')) {
+  // Hold the bridge up if it needs it and nobody (or no other NPC on its way) is, or everyone
+  // holding it has fallen behind as it grew (say it's reached across the river past them).
+  const behind = sup.holders.size && [...sup.holders.values()].every((h) => h.stale >= 1)
+    && !S.actors.some((o) => sup.holders.has(o.id) && o.side === a.side); // (only across the river from them)
+  if ((sup.needed || sup.fallen) && !sup.standing && (!sup.holders.size || behind) && !taken.has('hold')) {
     const q = farHoldSpot(S, a);
     if (q) out.push({ kind: 'hold', key: 'hold', spot: q, cost: dist(q.x, q.y, a.x, a.y) - 2000 });
   }
@@ -1061,7 +1119,7 @@ function jobs(S, a) {
     if (o === a || o.side === a.side || !o.carrying) continue;
     const it = S.items.find((x) => x.id === o.carrying);
     if (!o.extending && (itemSpot(S, o.side, it, o) || !itemSpot(S, a.side, it, a))) continue;
-    const q = edgeSpot(S, a.side, o.y);
+    const q = meetSpot(S, a, o);
     if (!taken.has('take:' + o.id)) out.push({ kind: 'take', key: 'take:' + o.id, from: o, spot: q, cost: dist(q.x, q.y, a.x, a.y) - 300 });
   }
   // Pick up a piece someone dropped on this side.
@@ -1186,7 +1244,7 @@ function npcThink(S, a, dt) {
       if (q) {
         a.task = { kind: 'hold', key: 'hold' };
         const g = goTo(S, a, q.x, q.y, 8);
-        return { ...NONE, mx: g.mx, my: g.my, lb: g.there && !a.prev.lb };
+        return { ...NONE, mx: g.mx, my: g.my, lb: canHoldNow(S, a, g.there) && !a.prev.lb };
       }
     }
     const fx = S.F.length ? S.toSite((S.F[S.startFooting][0] + S.F[S.startFooting][1]) / 2 + S.dir * 30, 0)[0] : a.x;
@@ -1204,17 +1262,22 @@ function npcThink(S, a, dt) {
     case 'deliver':
       if (canPlace(S, a, job.item)) return { ...NONE, a: tapA(a) };
       return { ...NONE, ...goTo(S, a, job.spot.x, job.spot.y, 2) };
-    case 'pass':
+    case 'pass': {
       // At the river, hold it out (hold A) until someone takes it.
       // (right up to the water, so the pass reaches across)
-      if (!there(0.5)) return { ...NONE, ...goTo(S, a, job.spot.x, job.spot.y, 0.2) };
+      const atEdge = Math.abs(a.x - edgeSpot(S, a.side, a.y).x) < 1;
+      if (!a.extending && !there(0.5) && !(atEdge && there(14))) return { ...NONE, ...goTo(S, a, job.spot.x, job.spot.y, 0.2) };
       return { ...NONE, a: a.extending || tapA(a) };
-    case 'take':
+    }
+    case 'take': {
       if (passer(S, a)) return { ...NONE, a: tapA(a) }; // take whatever is held out to us
-      return { ...NONE, ...goTo(S, a, job.spot.x, job.spot.y, 0.2) };
+      // Keep to a free spot across from them (they may still be moving along the bank).
+      const q = job.from ? meetSpot(S, a, job.from) : job.spot;
+      return { ...NONE, ...goTo(S, a, q.x, q.y, 0.2) };
+    }
     case 'hold': {
       const g = goTo(S, a, job.spot.x, job.spot.y, 8);
-      return { ...NONE, mx: g.mx, my: g.my, lb: g.there && !a.prev.lb };
+      return { ...NONE, mx: g.mx, my: g.my, lb: canHoldNow(S, a, g.there) && !a.prev.lb };
     }
     case 'bolt': case 'fasten': return doBolt(S, a, job);
     case 'grab':
