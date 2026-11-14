@@ -244,6 +244,7 @@ function drawFx(g, V, ui) {
 // ---------- the scene ----------
 export function draw(g, S, V, ui) {
   const { P, k, W, H } = V;
+  if (!(k > 0)) return; // no room (canvas hidden or being torn down): nothing to draw
   const now = ui.now;
   ui.fx = ui.fx || [];
 

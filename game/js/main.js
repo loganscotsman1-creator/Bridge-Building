@@ -82,7 +82,7 @@ function App() {
       onFinish=${(r) => { setResult(r); setScreen('results'); }} onQuit=${() => setScreen('setup')} onRestart=${() => setRunKey(runKey + 1)} />`;
   }
   if (screen === 'results') {
-    return html`${musicButton}${cursor}<${Results} result=${result} project=${project} order=${order} setup=${setup}
+    return html`${musicButton}<${Results} result=${result} project=${project} order=${order} setup=${setup}
       onAgain=${() => { setQuick(true); setRunKey(runKey + 1); setScreen('play'); }} onSetup=${() => setScreen('setup')} />`;
   }
   return html`${musicButton}${cursor}<${Setup} project=${project} model=${model} from=${from} order=${order} setOrder=${setOrder} setup=${setup} setSetup=${setSetup}

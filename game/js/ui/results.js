@@ -1,5 +1,5 @@
 // After a run: the time, what each builder spent their time on, and earlier runs to compare.
-import { html, useEffect, useState } from '../../../js/lib/preact.js';
+import { html, useEffect, useRef, useState } from '../../../js/lib/preact.js';
 import { readDevice } from '../input.js';
 import { downloadJSON, safeFilename } from '../../../js/model/storage.js';
 import { ACTIVITIES, ACTIVITY_NAMES } from '../world.js';
@@ -23,18 +23,43 @@ export function Results({ result, project, order, setup, onAgain, onSetup }) {
   });
   // The score is the construction cost (lower is better); runs saved before costs, by time.
   const scoreOf = (r) => (r.cost != null ? r.cost : null);
-  // Start on player 1's controller, or Enter, builds again with the same settings.
+  // The buttons, left to right. Player 1 moves the highlight sideways (stick, d-pad or arrow keys),
+  // A / Enter picks it, Start builds again; up / down scrolls the page.
+  const [sel, setSel] = useState(0);
+  const selRef = useRef(0);
+  const download = () => downloadJSON({ kind: 'over-engineered-run', projectName: project.name, at: new Date().toISOString(), setup: { builders: setup.builders, npcRole: setup.npcRole, settings: setup.settings, players: setup.players.map((p) => ({ name: p.name, side: p.side })) }, order, result }, safeFilename(project.name + ' run', '.json'));
+  const items = [
+    { label: 'Build again (same settings)', go: true, title: 'Same players, order and settings (Start)', run: onAgain },
+    { label: 'Change setup', run: onSetup },
+    { label: 'Download results', run: download },
+  ];
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
   useEffect(() => {
     const dev = setup.players[0]?.device;
-    let raf, was = true;
-    const loop = () => {
-      const st = dev ? readDevice(dev).start : false;
-      if (st && !was) { onAgain(); return; }
-      was = st;
+    const move = (dir) => { const n = itemsRef.current.length; selRef.current = (selRef.current + dir + n) % n; setSel(selRef.current); };
+    let raf, was = { start: true, a: true }, rep = { dir: 0, t: 0 }, last = performance.now();
+    const loop = (ts) => {
+      const dt = Math.min(0.1, (ts - last) / 1000 || 0);
+      last = ts;
+      const d = dev && dev.startsWith('pad') ? readDevice(dev) : null; // keyboards: the keydown handler below
+      if (d) {
+        if (d.start && !was.start) { onAgain(); return; }
+        if (d.a && !was.a) itemsRef.current[selRef.current].run();
+        const dir = d.mx > 0.6 ? 1 : d.mx < -0.6 ? -1 : 0;
+        if (dir !== rep.dir) { rep = { dir, t: -0.35 }; if (dir) move(dir); }
+        else if (dir) { rep.t += dt; if (rep.t >= 0.18) { rep.t = 0; move(dir); } }
+        if (Math.abs(d.my) > 0.4 && !dir) window.scrollBy(0, d.my * 700 * dt);
+        was = { start: d.start, a: d.a };
+      }
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
-    const key = (e) => { if (e.key === 'Enter' && !/INPUT|TEXTAREA|SELECT|BUTTON/.test(e.target?.tagName || '')) { e.preventDefault(); onAgain(); } };
+    const key = (e) => {
+      if (/INPUT|TEXTAREA|SELECT/.test(e.target?.tagName || '')) return;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); move(e.key === 'ArrowRight' ? 1 : -1); }
+      else if (e.key === 'Enter' && e.target?.tagName !== 'BUTTON') { e.preventDefault(); itemsRef.current[selRef.current].run(); }
+    };
     window.addEventListener('keydown', key);
     return () => { cancelAnimationFrame(raf); window.removeEventListener('keydown', key); };
   }, []);
@@ -56,10 +81,9 @@ export function Results({ result, project, order, setup, onAgain, onSetup }) {
         ${best != null && money && html`<div class=${result.cost < best ? 'good' : ''}>${result.done && result.cost < best ? 'New best! ' : ''}Best before: ${fmtMoney(best)}</div>`}
         <div class="oe-sub">${result.falls.length} fall${result.falls.length === 1 ? '' : 's'} · ${result.neglected} bolt${result.neglected === 1 ? '' : 's'} left unfastened over ${setup.settings.neglect} s</div>
         <div class="row wrap center">
-          <button class="oe-go" onClick=${onAgain} title="Same players, order and settings (Start or Enter)">Build again (same settings)</button>
-          <button onClick=${onSetup}>Change setup</button>
-          <button onClick=${() => downloadJSON({ kind: 'over-engineered-run', projectName: project.name, at: new Date().toISOString(), setup: { builders: setup.builders, npcRole: setup.npcRole, settings: setup.settings, players: setup.players.map((p) => ({ name: p.name, side: p.side })) }, order, result }, safeFilename(project.name + ' run', '.json'))}>Download results</button>
+          ${items.map((it, i) => html`<button class=${(it.go ? 'oe-go' : '') + (i === sel ? ' oe-sel' : '')} title=${it.title || ''} onMouseEnter=${() => { selRef.current = i; setSel(i); }} onClick=${it.run}>${it.label}</button>`)}
         </div>
+        <small class="oe-res-hint">Left / right to choose · A or Enter to select · Start to build again</small>
       </section>
 
       <section class="oe-card">
