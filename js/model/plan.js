@@ -200,6 +200,13 @@ export function autoOrderSteps(model, plan) {
   const better = (p, q) => p.x - q.x || p.lateral - q.lateral || p.z - q.z || p.plane - q.plane;
   const placed = new Set();
   const order = [];
+  // The plan's own build order (chosen on the 3D bridge), when it covers every piece.
+  if (Array.isArray(plan.order)) {
+    const rank = new Map();
+    plan.order.forEach((it, i) => it.memberIds.forEach((id) => rank.set(id, i)));
+    const rankOf = (u) => Math.min(...u.memberIds.map((id) => rank.get(id) ?? Infinity));
+    if (units.every((u) => Number.isFinite(rankOf(u)))) order.push(...[...units].sort((a, b) => rankOf(a) - rankOf(b)));
+  }
   while (order.length < units.length) {
     let pick = null;
     for (const it of info.values()) {
@@ -269,6 +276,7 @@ export function taskLabel(task, model, plan, project) {
     case 'bolt': return `Place ${n} bolt${n === 1 ? '' : 's'} in ${memberName()}${joint ? ` (${jointLabel(model, joint)})` : ''} ${place}`;
     case 'nut': return `Fasten ${n} nut${n === 1 ? '' : 's'}${joint ? `: ${jointLabel(model, joint)}` : ''} ${place}`;
     case 'tool': return `Assemble ${tool()}`;
+    case 'grab': return task.hardware ? 'Grab nuts & bolts' : `Grab ${tool()}`;
     case 'pass': return `Pass ${tool()} to ${project.builders.find((b) => b.id === task.to)?.name || '(missing builder)'}`;
     case 'other': return task.text || 'Other task';
     case 'assembly': return `Make ${plan.assemblies.find((a) => a.id === task.assemblyId)?.name || '(missing assembly)'}`;

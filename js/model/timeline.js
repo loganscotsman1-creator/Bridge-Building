@@ -1,6 +1,7 @@
 // The build sequence as a timeline: where each builder's tasks sit in time, where a drop lands, what
 // a builder could pick at that moment, and what the plan still misses. No drawing in here.
-import { jointLabel, membersArea, planUnits, sideOf, taskUnitKey, unitKey } from './plan.js';
+import { jointLabel, membersArea, planUnits, sideOf, taskUnitKey, unitCentroid, unitKey } from './plan.js';
+import { bridgeToSite } from './geometry.js';
 import { uid } from './ids.js';
 
 export const ASM_COLORS = ['#9333ea', '#0891b2', '#db2777', '#65a30d', '#ea580c', '#4f46e5', '#0d9488', '#b91c1c', '#ca8a04', '#7c3aed'];
@@ -14,6 +15,7 @@ export const TASK_KINDS = {
   nut: ['🔧', 'Fasten a nut', 'Put the nut on a placed bolt and fasten it'],
   assembly: ['🧩', 'Make an assembly', 'Bolt pieces together in the staging yard, to carry as one'],
   tool: ['⚒', 'Assemble a tool', 'Put a tool together from its pieces'],
+  grab: ['🧰', 'Grab a tool or the nuts & bolts', 'Pick up a tool, or a supply of nuts and bolts, from where it starts'],
   pass: ['⇄', 'Pass a tool', 'Hand a tool to another builder'],
   stand: ['▲', 'Place or remove a support tool', 'Set a jack stand under a piece, or take it out'],
   other: ['✎', 'Other task', 'Anything else: write what it is and how long it takes'],
@@ -39,6 +41,7 @@ export function shortLabel(task, model, plan, project) {
     case 'nut': return 'Nut ' + joint();
     case 'assembly': return 'Make ' + (plan.assemblies.find((a) => a.id === task.assemblyId)?.name || 'assembly');
     case 'tool': return 'Assemble ' + tool();
+    case 'grab': return task.hardware ? 'Grab nuts & bolts' : 'Grab ' + tool();
     case 'pass': return 'Pass ' + tool();
     case 'stand': return (task.action === 'remove' ? 'Remove ' : 'Place ') + tool();
     case 'other': return task.text || 'Other task';
@@ -346,4 +349,145 @@ export function planChecks(project, model, plan, sim) {
     todo,
     marks,
   };
+}
+
+// ---------- what can be done next ----------
+
+// Does this piece go in on the other side of the river from where pieces are staged?
+export function crossesRiver(project, model, memberIds) {
+  const site = project.site;
+  const area = membersArea(site);
+  const from = sideOf(site, { x: area.x + area.w / 2, y: area.y + area.h / 2 });
+  if (!from) return false;
+  const c = unitCentroid(model, memberIds);
+  const to = sideOf(site, bridgeToSite(site, c[0], c[1]));
+  return !!to && to !== from;
+}
+
+// The tasks that can go on the timeline next, following the build order: the next assembly to
+// make, running or placing the next piece (each one once the one before is on its way), bolts and
+// nuts where both pieces are placed, and the things that can happen any time. Each entry is
+// {id, group, kind, text, preset?} (no preset: a pop-up asks for the details); `soon` lists the
+// pieces coming up after these, for reference.
+export function nextUp(project, model, plan, sim, order) {
+  const tasks = plan.tasks || [];
+  const { units, inAssembly } = planUnits(model, plan);
+  const byKey = new Map(units.map((u) => [u.key, u]));
+  const has = (kind, key) => tasks.some((t) => t.kind === kind && taskUnitKey(t) === key);
+  const planned = plannedBolts(model, plan);
+  // Made by a Make step, or by bolt and nut steps for every bolt inside it.
+  const made = (asmId) => {
+    if (tasks.some((t) => t.kind === 'assembly' && t.assemblyId === asmId)) return true;
+    const ids = byKey.get('a:' + asmId)?.memberIds || [];
+    const inner = model.bolts.filter((b) => b.jointId && b.memberIds.length > 1 && b.memberIds.every((m) => ids.includes(m)));
+    return inner.length > 0 && inner.every((b) => planned.placed.has(b.id) && planned.nutted.has(b.id));
+  };
+  const keyOf = (it) => (it.memberIds.length > 1 ? 'a:' + it.id : 'm:' + it.memberIds[0]);
+  const label = (it, i) => '#' + (i + 1) + ' ' + (byKey.get(keyOf(it))?.name || '?');
+  const pieces = (it) => it.memberIds.map((id) => model.memberById.get(id)?.name || '?').join(' + ');
+  const out = [];
+  const soon = [];
+
+  // The next assembly to make.
+  const nextAsm = order.find((it) => it.memberIds.length > 1 && !made(it.id) && byKey.has('a:' + it.id));
+  if (nextAsm) out.push({ id: 'asm:' + nextAsm.id, group: 'assembly', kind: 'assembly', text: `Make ${byKey.get('a:' + nextAsm.id).name}: ${pieces(nextAsm)}`, preset: { assemblyId: nextAsm.id } });
+
+  // Pieces, in order. A piece run to the river can be received (and the next one run meanwhile).
+  let stopped = false;
+  order.forEach((it, i) => {
+    const key = keyOf(it), u = byKey.get(key);
+    if (!u || has('receive', key)) return;
+    if (stopped) { if (soon.length < 3) soon.push(label(it, i)); return; }
+    const preset = { unit: { type: u.type, id: u.id } };
+    if (u.type === 'assembly' && !made(u.id)) {
+      out.push({ id: 'wait:' + key, group: 'piece', kind: null, text: `${label(it, i)} is next: make it first`, disabled: true });
+      stopped = true;
+      return;
+    }
+    if (has('run', key)) { out.push({ id: 'recv:' + key, group: 'piece', kind: 'receive', text: `Receive ${label(it, i)} at the river and place it`, preset }); return; }
+    if (crossesRiver(project, model, u.memberIds)) out.push({ id: 'run:' + key, group: 'piece', kind: 'run', text: `Run ${label(it, i)} to the river`, preset });
+    else out.push({ id: 'place:' + key, group: 'piece', kind: 'receive', text: `Carry ${label(it, i)} to its place`, preset });
+    stopped = true;
+  });
+
+  // Bolts and nuts where both pieces are placed (inside an assembly, making it does them).
+  const placedKeys = new Set(tasks.filter((t) => t.kind === 'receive').map(taskUnitKey));
+  const unitKeyOf = (id) => (inAssembly.has(id) ? 'a:' + inAssembly.get(id) : 'm:' + id);
+  const { placed, nutted } = planned;
+  const seen = { bolt: new Set(), nut: new Set() };
+  for (const joint of model.contacts.filter((c) => c.bolts > 0)) {
+    const ka = unitKeyOf(joint.a), kb = unitKeyOf(joint.b);
+    if (ka === kb || !placedKeys.has(ka) || !placedKeys.has(kb)) continue;
+    const bolts = joint.boltIds.filter((id) => !placed.has(id) && !seen.bolt.has(id));
+    bolts.forEach((id) => seen.bolt.add(id));
+    if (bolts.length) out.push({ id: 'bolt:' + joint.id, group: 'bolt', kind: 'bolt', text: `${bolts.length} bolt${bolts.length === 1 ? '' : 's'}: ${jointLabel(model, joint)}`, preset: { member: joint.a, jointId: joint.id, boltIds: bolts, where: 'bridge' } });
+    const nuts = joint.boltIds.filter((id) => placed.has(id) && !nutted.has(id) && !seen.nut.has(id));
+    nuts.forEach((id) => seen.nut.add(id));
+    if (nuts.length) out.push({ id: 'nut:' + joint.id, group: 'nut', kind: 'nut', text: `${nuts.length} nut${nuts.length === 1 ? '' : 's'}: ${jointLabel(model, joint)}`, preset: { member: joint.a, jointId: joint.id, boltIds: nuts, where: 'bridge' } });
+  }
+
+  // Pieces that would fall.
+  const fallen = new Set();
+  for (const f of sim?.falls || []) {
+    if (fallen.has(f.unitKey)) continue;
+    fallen.add(f.unitKey);
+    const u = byKey.get(f.unitKey);
+    if (u) out.push({ id: 'fall:' + f.unitKey, group: 'support', kind: 'support', text: `Support ${u.name}: it would fall`, preset: { member: u.memberIds[0], until: 'auto' } });
+  }
+
+  // Any time.
+  const tools = project.tools;
+  if (tools.some((t) => (t.pieces || []).length)) out.push({ id: 'any:tool', group: 'any', kind: 'tool', text: 'Assemble a tool' });
+  if (tools.length) out.push({ id: 'any:grab', group: 'any', kind: 'grab', text: 'Grab a tool' });
+  out.push({ id: 'any:hw', group: 'any', kind: 'grab', text: 'Grab nuts & bolts', preset: { hardware: true } });
+  out.push({ id: 'any:other', group: 'any', kind: 'other', text: 'Other task' });
+  out.push({ id: 'more:support', group: 'more', kind: 'support', text: 'Support a placed piece' });
+  if (tools.some((t) => t.kind === 'support')) out.push({ id: 'more:stand', group: 'more', kind: 'stand', text: 'Place or remove a support tool' });
+  if (tools.length && project.builders.length > 1) out.push({ id: 'more:pass', group: 'more', kind: 'pass', text: 'Pass a tool' });
+  return { items: out, soon };
+}
+
+// When a step could first get going, from the steps it waits on (null: nothing to wait for, or
+// not known yet). Used to land a dropped step where it can actually start.
+export function readyTime(task, plan, model, sim) {
+  const tasks = plan.tasks || [];
+  const times = sim?.taskTimes || {};
+  const end = (t) => (t ? times[t.id]?.end ?? null : null);
+  const { inAssembly } = planUnits(model, plan);
+  const unitKeyOf = (id) => (inAssembly.has(id) ? 'a:' + inAssembly.get(id) : 'm:' + id);
+  const placedAt = (key) => end(tasks.find((t) => t.kind === 'receive' && taskUnitKey(t) === key && t.id !== task.id));
+  const max = (list) => { const xs = list.filter((x) => x != null); return xs.length ? Math.max(...xs) : null; };
+  if ((task.kind === 'run' || task.kind === 'receive') && task.unit) {
+    const key = unitKey(task.unit);
+    const list = [];
+    if (task.unit.type === 'assembly') list.push(end(tasks.find((t) => t.kind === 'assembly' && t.assemblyId === task.unit.id)));
+    if (task.kind === 'receive') {
+      const run = tasks.find((t) => t.kind === 'run' && taskUnitKey(t) === key && t.builder !== task.builder);
+      // Head for the river as the runner sets off with it.
+      const carry = run && (sim?.segments || []).find((s) => s.taskId === run.id && s.kind === 'carry');
+      if (carry) list.push(carry.t0);
+      else if (run) list.push(end(run));
+    }
+    return max(list);
+  }
+  if ((task.kind === 'bolt' || task.kind === 'nut') && task.jointId && task.where !== 'staging') {
+    const c = model.contacts.find((x) => x.id === task.jointId);
+    if (!c) return null;
+    const list = [placedAt(unitKeyOf(c.a)), placedAt(unitKeyOf(c.b))];
+    if (task.kind === 'nut') for (const t of tasks) if (t.kind === 'bolt' && (t.boltIds || []).some((id) => (task.boltIds || []).includes(id))) list.push(end(t));
+    return max(list);
+  }
+  if (task.kind === 'support' && task.member) return placedAt(unitKeyOf(task.member));
+  return null;
+}
+
+// Move a drop that landed before its step could start to where it can: after whatever that builder
+// is in the middle of when it becomes ready, or later.
+export function slotWhenReady(blocks, slot, at) {
+  if (at == null || slot.along) return slot;
+  const mains = (blocks.get(slot.builder) || []).filter((b) => !b.along);
+  const before = slot.before ? mains.find((b) => b.task.id === slot.before) : null;
+  if (before ? before.start >= at - 0.01 : slot.time >= at - 0.01) return slot;
+  const next = mains.find((b) => b.start >= at - 0.01);
+  return { builder: slot.builder, time: at, along: false, before: next?.task.id || null };
 }

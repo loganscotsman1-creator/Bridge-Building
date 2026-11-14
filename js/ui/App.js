@@ -33,12 +33,13 @@ export function App() {
   });
   const [saveOk, setSaveOk] = useState(true);
   const [touring, setTouring] = useState(null); // the tour showing: {id, replay}
+  const [orderOpen, setOrderOpen] = useState(() => tab === 'sequence'); // the build order window is up (tips wait for it)
   // The intro on a first visit, then a tab's tips the first time it's opened (or after it changes).
   useEffect(() => {
-    if (touring) return;
+    if (touring || orderOpen) return;
     const id = dueTour(tab, toursSeen());
     if (id) setTouring({ id });
-  }, [tab, touring]);
+  }, [tab, touring, orderOpen]);
   useEffect(() => onAutosaveStatus(setSaveOk), []);
   useEffect(() => { try { localStorage.setItem('bss.tab', tab); } catch { /* private mode */ } }, [tab]);
 
@@ -105,7 +106,7 @@ export function App() {
       </div>
     </header>
     <nav class="tabs" data-tour="tabs">
-      ${TABS.map(([k, label]) => html`<button class=${tab === k ? 'on' : ''} onClick=${() => setTab(k)}>${label}</button>`)}
+      ${TABS.map(([k, label]) => html`<button class=${tab === k ? 'on' : ''} onClick=${() => { if (k === 'sequence' && tab !== 'sequence') setOrderOpen(true); setTab(k); }}>${label}</button>`)}
       <span class="spacer"></span>
       <a class="help-link" href="game/" target="_blank" rel="noopener" title="Over Engineered: a co-op game on this bridge for practicing teamwork">Play the game</a>
       <a class="help-link" href="https://github.com/loganscotsman1-creator/Bridge-Building#readme" target="_blank" rel="noopener">Help</a>
@@ -115,7 +116,7 @@ export function App() {
       ${tab === 'site' && html`<${SiteTab} project=${project} model=${model} />`}
       ${tab === 'tools' && html`<${ToolsTab} project=${project} />`}
       ${tab === 'crew' && html`<${CrewTab} project=${project} />`}
-      ${tab === 'sequence' && html`<${SequenceTab} project=${project} model=${model} sim=${sim} />`}
+      ${tab === 'sequence' && html`<${SequenceTab} project=${project} model=${model} sim=${sim} onOrderOpen=${setOrderOpen} />`}
       ${tab === 'staging' && html`<${StagingTab} project=${project} model=${model} sim=${sim} />`}
       ${tab === 'simulate' && html`<${SimulateTab} project=${project} model=${model} sim=${sim} />`}
     </main>

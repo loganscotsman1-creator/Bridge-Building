@@ -2,7 +2,7 @@
 // and image import.
 import { normalizeSite } from './schema.js';
 
-const PROJECT_KEY = 'bss.project.v1';
+export const PROJECT_KEY = 'bss.project.v1';
 const SITES_KEY = 'bss.sites.v1';
 
 let saveTimer = null;

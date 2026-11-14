@@ -12,21 +12,27 @@ const ZONE_FILL = {
   staging: '#d6e4fb', construction: '#d9f0dc', riverbank: '#cfe8a9', transport: '#e4e8ee',
   footing: '#c8a070', assembly: '#eadcfb', walkway: '#e5e7eb',
 };
+// Extra ground the sequencer's playback shows (the game draws its own staging instead).
+const REPLAY_FILL = { members: '#d6e4fb', tools: '#cdeaf0', hardware: '#f3e3b5', builders: '#dfe3fb', staging: '#e3ecfb' };
 const PLANE = { A: '#6b7f9c', B: '#5a6b85', L: '#7c6fd6' };
+// An item by id: the game's own, or one the sequencer's playback adds (a piece of an assembly
+// that isn't made yet).
+const findItem = (S, id) => S.items.find((q) => q.id === id) || S.lookItems?.get(id) || null;
 const BTN = { A: '#16a34a', X: '#2563eb', LB: '#d97706' };
 
-export function makeView(S, W, H) {
+export function makeView(S, W, H, opts = {}) {
   const site = S.site;
   const lift = 50; // room above the ground for the bridge and builders
-  const availH = H - HUD_TOP - HUD_BOTTOM - 16;
+  const top = opts.top ?? HUD_TOP, bottom = opts.bottom ?? HUD_BOTTOM;
+  const availH = H - top - bottom - 16;
   const kw = (W - 30) / site.width;
   YF = Math.max(1, Math.min(2.4, availH / kw / (site.depth + 1.15 * lift)));
   ZF = 1.6 * Math.max(1, YF * 0.8);
   const k = Math.min(kw, availH / (site.depth * YF + lift * ZF));
   const ox = (W - site.width * k) / 2;
   const used = (site.depth * YF + lift * ZF) * k;
-  const oy = HUD_TOP + 8 + Math.max(0, (availH - used) / 2) + lift * ZF * k;
-  return { k, ox, oy, W, H, P: (x, y, z = 0) => [ox + x * k, oy + (y * YF - z * ZF) * k] };
+  const oy = top + 8 + Math.max(0, (availH - used) / 2) + lift * ZF * k;
+  return { k, ox, oy, W, H, hudTop: top, hudBottom: bottom, P: (x, y, z = 0) => [ox + x * k, oy + (y * YF - z * ZF) * k] };
 }
 
 function shade(hex, f) {
@@ -290,7 +296,7 @@ export function draw(g, S, V, ui) {
       for (const bx of [z.x, z.x + z.w]) { g.beginPath(); g.moveTo(...P(bx, z.y)); g.lineTo(...P(bx, z.y + z.h)); g.stroke(); }
       continue;
     }
-    const fill = ZONE_FILL[z.type];
+    const fill = ZONE_FILL[z.type] || (ui.replay ? REPLAY_FILL[z.type] : null);
     if (!fill) continue;
     poly(g, ground(z.x, z.y, z.w, z.h));
     g.fillStyle = fill; g.fill();
@@ -301,15 +307,15 @@ export function draw(g, S, V, ui) {
   g.font = `700 ${Math.max(10, k * 4.2)}px system-ui, sans-serif`;
   g.textAlign = 'center';
   for (const z of site.zones) {
-    if (!ZONE_FILL[z.type] && z.type !== 'nogo') continue;
-    if (z.type === 'footing' || z === S.yard) continue;
+    if (!ZONE_FILL[z.type] && !(ui.replay && REPLAY_FILL[z.type]) && z.type !== 'nogo') continue;
+    if (z.type === 'footing' || (z === S.yard && !ui.replay)) continue;
     const [x, y] = P(z.x + z.w / 2, z.y + z.h - 6);
     g.fillStyle = z.type === 'nogo' ? 'rgba(255,255,255,0.6)' : 'rgba(15,23,42,0.25)';
     g.fillText(z.name.toUpperCase(), x, y);
   }
 
   // Staging: a workshop floor with hazard stripes for assembling, a timber deck for what's ready.
-  {
+  if (!ui.replay) {
     const a = S.assembly, rd = S.ready;
     poly(g, ground(rd.x + 2, rd.y + 2, rd.w - 4, rd.h - 4)); g.fillStyle = '#c99a62'; g.fill();
     g.strokeStyle = 'rgba(92,58,24,0.45)'; g.lineWidth = 1;
@@ -327,6 +333,8 @@ export function draw(g, S, V, ui) {
     }
   }
 
+  ui.drawGround?.(g, V); // the sequencer's playback: tool racks, nuts & bolts bins
+
   // The bridge still to build, faintly; a carried piece's spot glows in its carrier's color.
   const carriedBy = new Map(S.actors.filter((a) => a.carrying).map((a) => [a.carrying, a]));
   g.lineWidth = 1;
@@ -338,7 +346,7 @@ export function draw(g, S, V, ui) {
   }
 
   // Pieces at full size in the ready and assembly areas.
-  const ready = readyLayout(S), building = benchLayout(S);
+  const ready = ui.readyLayout ? ui.readyLayout() : readyLayout(S), building = ui.replay ? new Map() : benchLayout(S);
   const next = S.settings.freeStaging ? null : shelfItems(S)[0]; // picking pieces yourself: no hints
 
   // Shadows first (under everything), then pieces and builders back to front.
@@ -346,7 +354,7 @@ export function draw(g, S, V, ui) {
   for (const id of S.installed) drawShadow(g, P, S.members.get(id), null, sag);
   for (const [it, sl] of [...ready, ...building]) for (const id of it.memberIds) drawShadow(g, P, S.members.get(id), sl, 0);
   for (const a of S.actors) {
-    const it = a.carrying && S.items.find((q) => q.id === a.carrying);
+    const it = a.carrying && findItem(S, a.carrying);
     if (it) for (const id of it.memberIds) drawShadow(g, P, S.members.get(id), carriedShift(S, a, it), 0);
   }
   for (const a of S.actors) {
@@ -403,7 +411,7 @@ export function draw(g, S, V, ui) {
     rrect(g, x - w / 2 + 1, y - 3, Math.max(0, (w - 2) * Math.min(1, it.progress / it.time)), 6, 3); g.fillStyle = '#22c55e'; g.fill();
     chip(g, x, y - 13, '#' + (it.idx + 1), '#1d4ed8', k);
   }
-  if (!buildingItems(S).length && S.items.some((x) => x.multi && x.status === 'waiting')) {
+  if (!ui.replay && !buildingItems(S).length && S.items.some((x) => x.multi && x.status === 'waiting')) {
     const [x, y] = P(S.assembly.x + S.assembly.w / 2, S.assembly.y + S.assembly.h * 0.45, 0);
     g.fillStyle = 'rgba(30,58,138,0.55)'; g.font = `700 ${Math.max(10, k * 3.6)}px system-ui`; g.textAlign = 'center';
     g.fillText('Hold X here to assemble', x, y);
@@ -467,6 +475,7 @@ export function draw(g, S, V, ui) {
   drawFx(g, V, ui);
   // Prompts and labels on top of everything.
   for (const a of S.actors) drawActorTop(g, S, V, a, ui);
+  ui.drawTop?.(g, V); // the sequencer's playback: what each builder is doing that the game doesn't show
   g.restore();
 
   drawHud(g, S, V, ui);
@@ -568,7 +577,7 @@ function drawActor(g, S, V, a, ui) {
     g.fillStyle = '#3f2a1d'; g.fill(); g.strokeStyle = ink; g.lineWidth = 1.5; g.stroke();
   }
   // A carried piece, at full size, held at waist height (pushed out in front while passing).
-  const carried = a.carrying && S.items.find((q) => q.id === a.carrying);
+  const carried = a.carrying && findItem(S, a.carrying);
   const sh = carried && carriedShift(S, a, carried);
   // Body: a round blob.
   const [bx, by] = P(a.x, a.y, 7 + bob);
@@ -656,7 +665,7 @@ function drawActorTop(g, S, V, a, ui) {
   let [x, y] = P(a.x, a.y, 36);
   if (a.carrying) {
     // Just its number: the piece itself is in their hands.
-    const it = S.items.find((q) => q.id === a.carrying);
+    const it = findItem(S, a.carrying);
     const b = itemBox(S, it);
     const [, iy] = P(a.x, a.y, CARRY_Z + (b.z1 - b.z0) + 4);
     y = Math.min(y, iy);
@@ -719,6 +728,7 @@ function drawActorTop(g, S, V, a, ui) {
 
 function drawHud(g, S, V, ui) {
   const { W, H } = V;
+  const HUD_TOP = V.hudTop, HUD_BOTTOM = V.hudBottom;
   const top = g.createLinearGradient(0, 0, 0, HUD_TOP);
   top.addColorStop(0, 'rgba(8,12,20,0.98)'); top.addColorStop(1, 'rgba(15,23,42,0.92)');
   g.fillStyle = top; g.fillRect(0, 0, W, HUD_TOP - 6);
@@ -747,7 +757,7 @@ function drawHud(g, S, V, ui) {
   g.textAlign = 'right'; g.font = '700 14px system-ui'; g.fillStyle = '#e2e8f0';
   g.fillText(`🧱 ${placed}/${S.items.length}   🔩 ${fastened}/${nuts.length}   💥 ${S.falls.length}`, W - 16, 24);
   g.font = '500 12px system-ui'; g.fillStyle = '#94a3b8';
-  g.fillText(ui.paused ? 'Paused' : `Esc / Start: pause · M: sound ${ui.muted ? 'off' : 'on'} · N: music ${ui.music ? 'on' : 'off'}`, W - 16, 46);
+  g.fillText(ui.hudRight ?? (ui.paused ? 'Paused' : `Esc / Start: pause · M: sound ${ui.muted ? 'off' : 'on'} · N: music ${ui.music ? 'on' : 'off'}`), W - 16, 46);
 
   // The build order
   const n = S.items.length;
@@ -768,7 +778,7 @@ function drawHud(g, S, V, ui) {
   // Player cards
   const humans = S.actors;
   const cardW = Math.min(300, (W - 20) / humans.length - 8);
-  humans.forEach((a, i) => {
+  if (HUD_BOTTOM >= 40) humans.forEach((a, i) => {
     const x = W / 2 - (humans.length * (cardW + 8)) / 2 + i * (cardW + 8) + 4, y = H - HUD_BOTTOM + 10;
     rrect(g, x, y, cardW, HUD_BOTTOM - 20, 10);
     g.fillStyle = 'rgba(10,15,25,0.9)'; g.fill();
@@ -777,7 +787,7 @@ function drawHud(g, S, V, ui) {
     g.textAlign = 'left'; g.fillStyle = '#fff'; g.font = '700 14px system-ui';
     g.fillText((a.npc ? '' : ui.numberOf(a) + '  ') + a.name, x + 14, y + 16);
     g.fillStyle = '#cbd5e1'; g.font = '500 12px system-ui';
-    g.fillText(activityText(S, a), x + 14, y + 36);
+    g.fillText(ui.activityOf?.(a) ?? activityText(S, a), x + 14, y + 36);
     g.fillStyle = '#64748b'; g.font = '500 11px system-ui';
     g.fillText(a.npc ? (a.npc === 'holder' ? 'Holds the bridge, then does the nearest job' : a.npc === 'assembler' ? 'Makes assemblies, then runs pieces' : 'Computer: does the nearest job') : ui.deviceOf(a), x + 14, y + 54);
   });
@@ -837,6 +847,6 @@ function activityText(S, a) {
   if (a.work?.kind === 'fasten') return 'Fastening';
   if (a.work?.kind === 'assemble') return 'Making assembly #' + (a.work.target.idx + 1);
   if (a.extending) return 'Passing a piece';
-  if (a.carrying) { const it = S.items.find((q) => q.id === a.carrying); return 'Carrying #' + (it.idx + 1) + (it.buddy ? ' (buddy piece)' : ''); }
+  if (a.carrying) { const it = findItem(S, a.carrying); return 'Carrying #' + (it.idx + 1) + (it.buddy ? ' (buddy piece)' : ''); }
   return a.moving ? 'Walking' : 'Ready';
 }

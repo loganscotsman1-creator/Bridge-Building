@@ -34,9 +34,10 @@ takes to fasten.
   screen, left / right highlights Build again, Change setup or Download results; A or Enter picks
   it, and Start builds again with the same settings, straight into the countdown. With 5 builders an NPC either holds the bridge or makes the assemblies; with 6 there
   is one of each.
-- **Build order:** click pieces on the 3D bridge in the order they come in, grouping up to three
-  into an assembly. The first item must be a three-piece assembly. Mark large or awkward items
-  as needing a buddy, and set each assembly's time. Orders can be saved, downloaded and loaded.
+- **Build order:** the game plays the order and assemblies chosen in the Build Sequencer
+  (5 · Build sequence → Build order), including which items need a buddy. The game has no order
+  editor of its own: with the sequencer open in another tab, the setup screen's list follows every
+  change there. The first item must be a three-piece assembly.
 - **Staging** is the yard split in half: an assembly area to the north (hold X; several
   builders can work there at once, on different assemblies or together on one) and a ready
   area to the south where items wait at their real size, standing as they will in the bridge. An assembly
@@ -53,7 +54,7 @@ takes to fasten.
   builders walk and carry faster, and a fall costs 20 s. Each run opens with a window showing
   every player's controls (for their controller or keyboard); Start, Enter or the button begins a
   3-2-1 countdown.
-- **Music:** an upbeat loop plays during a run, and a slower, mellow one on the setup, order and
+- **Music:** an upbeat loop plays during a run, and a slower, mellow one on the setup and
   results screens. Press N during a run, use the pause menu, or the ♪ button on the other screens
   to turn music off.
 - **Sound:** every action has a sound (grab, pass, the clank of placing steel, bolt, ratchet,
@@ -217,21 +218,39 @@ fetch a tool, so give each side its own.
   need). The Simulate tab counts them down and warns if someone runs out.
 
 ### 5 · Build sequence
-The plan is built **on a timeline**, with one row per builder. Drag a task from the list onto a
-builder's row:
+**Build order first.** Opening the tab brings up the build order window: click pieces on the 3D
+bridge in the order they go in. To make an assembly, select an item (in the list or on the bridge)
+and click up to three pieces into it; click one of its pieces again to take it out. Reorder with the
+arrows or by dragging, **Split** an assembly back into pieces, and tick **Needs a buddy** for large
+or awkward items (used by the game). **Automatic order** fills in footings first, west to east. The
+window flags pieces left out, pieces twice, and an assembly whose pieces aren't bolted together.
+**Continue to the timeline** closes it, and **Build order…** in the toolbar opens it again. This one
+order is everything the game needs: with the game open in another tab, it follows along as the
+order changes.
 
-- **Run a piece to the river** to hand off.
-- **Receive a piece, run it to its place.** With nobody running it to the river, the builder picks it
-  up from where it's staged.
-- **Support the bridge**: until it stands without them, or for a set time.
-- **Place a bolt**: at the bridge, in the staging yard, or while that member is being run to its
-  place.
-- **Fasten a nut**: at the bridge or in the staging yard.
-- **Make an assembly** from pieces in the staging yard.
-- **Assemble a tool** from the pieces listed in the Tools tab.
-- **Pass a tool** to another builder.
-- **Place or remove a support tool** (a jack stand) under a member.
-- **Other task**: write in what it is and how long it takes.
+**Then the timeline**, one row per builder. **Next up** on the left offers only what can happen next
+in the build order; drag one onto a builder's row:
+
+- **Make** the next assembly in the order. After it, the next one is offered.
+- **Run** the next piece to the river (when it goes in across the river from the yard), then
+  **Receive** it at the river and place it; or **Carry** it to its place when it doesn't cross. An
+  assembly can be run once there's a step making it, and the next piece is offered once this one is
+  on its way. The few pieces after it are listed underneath.
+- **Bolts and nuts** where both pieces have a step placing them.
+- **Support** a piece that would fall. Placing a piece adds supporting it until it stands (untick
+  the box to stop that; pieces on a footing stand by themselves).
+- **Any time:** **Assemble a tool**, **Grab a tool**, **Grab nuts & bolts**, and **Other task**
+  (write in what it is and how long it takes). Under **More:** support a placed piece, place or
+  remove a support tool (a jack stand), or pass a tool to another builder.
+
+**Grabbing:** builders pick up the tools in their loadout and the nuts & bolts automatically at the
+start. Give someone a Grab step for one of those and they pick it up at that point in their row
+instead.
+
+**Dropped too early:** when a step has to wait for another (running an assembly that's still being
+made, receiving a piece someone else runs), it lands where it can start: in that builder's row
+after whatever they're doing when it's ready. A receiver sets off for the river as the runner picks
+the piece up.
 
 **Which piece:** when a task lands, a pop-up asks what it's about. A builder on the staging yard's
 side of the river sees the yard as you laid it out in tab 6, and a builder across the river sees the
@@ -239,11 +258,10 @@ bridge, with what they can get at by that point in the plan listed first. Either
 away, and what isn't ready yet is still there further down the list. A bolt or nut asks which two
 pieces it goes between: click one and the pieces it bolts to turn green, then click the second.
 
-**Making an assembly:** drag *Make an assembly* onto a builder and click the pieces that go together
-in the yard. That builder does every bolt and nut inside it, then it's carried as one piece and gets
-its own color. To split the work, give someone else a bolt or nut step inside the assembly, and the
-assembly step leaves those to them. **Edit** on an assembly card changes its pieces, and taking the
-step off the timeline turns them back into loose pieces.
+**Making an assembly:** the builder given *Make* does every bolt and nut inside it, then it's
+carried as one piece and gets its own color. To split the work, give someone else a bolt or nut step
+inside the assembly, and the make step leaves those to them. Which pieces go in it is changed in the
+build order (the assembly cards on the right link there); renaming happens on the cards.
 
 **When things happen:** each builder does their row left to right, starting each step as soon as
 they're free and what it needs is ready. A receiver waits at the river for the runner, a nut waits
@@ -265,19 +283,25 @@ would fall.
 placed, nuts fastened and pieces that would fall. Marks on the bars show what a step is still
 missing (✋ nobody supports this piece, ● bolts with no step, 🔧 nuts with no step), flags along the
 top of the timeline mark problems at the time they happen, and a striped bar is a step that can't
-start. Hover over a bar to see why. **Still to do** lists everything missing, and dragging a line
-from it onto a builder adds that step with no pop-up.
+start. Hover over a bar to see why.
 
-**Auto-build plan** fills in a working plan to edit from: footings first, west to east, trusses
-before laterals, using whoever can get there soonest (builders with a fastening tool fasten, others
-carry). **New** starts an empty plan and **Clear timeline** empties this one. **Duplicate** copies a
+**Auto-build plan** fills in a working plan to edit from, in the build order, using whoever can get
+there soonest (builders with a fastening tool fasten, others carry). Support tool steps already on
+the timeline are kept. **New** starts an empty plan and **Clear timeline** empties this one (the
+build order and its assemblies stay). **Duplicate** copies a
 plan so you can try a variation, and **Compare plans** shows every plan's time and construction cost
-side by side. Every piece in the 3D view is labeled with its name (**Names** hides them); scroll to
-zoom in where they're crowded, and drag to rotate. Click the times along the top of the timeline to
-see the bridge at that moment.
+side by side.
 
-The build time and construction cost update on every change. Problems are listed under the 3D
-view; click one to jump to its step.
+**Playback:** under the timeline the whole plan plays back in the game's look: the site and river,
+the cartoon builders carrying pieces at full size, bolts going in and nuts being fastened, with the
+game's sparks and dust and the cost counting up. It also shows what the game doesn't have: tool
+crates and nuts & bolts bins, the tools each builder has picked up, and a bubble for jobs like
+grabbing a tool, an other task, or waiting. Play, pause, change the speed, or drag the slider;
+clicking the times along the top of the timeline jumps there too. **⛶ Big** fills the window (with
+a card per builder saying what they're doing).
+
+The build time and construction cost update on every change. Problems are listed beside the
+playback; click one to jump to its step.
 
 ### 6 · Staging
 Plan where every member lies. Drag members from the list onto the yard, drag them around (they
@@ -382,6 +406,8 @@ and add one when you fix a bug.
 | `js/model/rules2027.js` | The 2027 site layout and rule numbers |
 | `js/model/geometry.js` | Box members → 3D model, where boxes touch, mirroring, image calibration |
 | `js/model/plan.js` | Units (member / assembly), staging layout, automatic order |
+| `js/model/buildorder.js` | The build order (shared with the game) and keeping assemblies in step with it |
+| `js/model/timeline.js` | The timeline: where steps sit, what's next up, where a drop lands |
 | `js/model/edit.js` | Edits that keep everything consistent (deleting, mirroring, auto-fill bolts) |
 | `js/model/store.js`, `storage.js` | Undo/redo, autosave, files, the site library |
 | `js/model/example.js` | The example bridge |
@@ -389,6 +415,8 @@ and add one when you fix a bug.
 | `js/sim/stability.js` | Which pieces stand on their own |
 | `js/sim/grid.js` | Walking paths, the two sides of the river, hand-off spots |
 | `js/sim/playback.js` | Where everything is at time *t* (for the animation) |
+| `js/ui/GameView.js` | The playback in the game's look (poses a game world from the simulation) |
+| `js/ui/OrderPicker.js` | The build order window |
 | `js/ui/snap.js` | Box snapping |
 | `js/ui/*.js` | One file per tab, plus the drawing canvases (`Annotator`, `PlanView`, `IsoView`, `Gantt`) |
 | `library/sites/` | Shared site layouts (with their rules) |

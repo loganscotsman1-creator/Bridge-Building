@@ -1,13 +1,14 @@
-// Over Engineered: setup → (order editor) → play → results.
+// Over Engineered: setup → play → results. The build order comes from the Build Sequencer's plan
+// (chosen there on the 3D bridge), and follows along live while the sequencer is open in another tab.
 import { html, render, useEffect, useMemo, useState } from '../../js/lib/preact.js';
 import { buildModel } from '../../js/model/geometry.js';
-import { loadAutosave } from '../../js/model/storage.js';
-import { normalizeProject } from '../../js/model/schema.js';
+import { PROJECT_KEY, loadAutosave } from '../../js/model/storage.js';
+import { activePlan, normalizeProject } from '../../js/model/schema.js';
+import { planOrder } from '../../js/model/buildorder.js';
 import { createExampleProject } from '../../js/model/example.js';
-import { defaultOrder, gameFastenTime, readOrderFile } from './order.js';
+import { gameFastenTime } from './order.js';
 import { defaultSettings } from './world.js';
 import { Setup } from './ui/setup.js';
-import { OrderEditor } from './ui/ordereditor.js';
 import { Play } from './ui/play.js';
 import { Results } from './ui/results.js';
 import { isMusicOn, playSong, setMusicOn, unlock } from './sound.js';
@@ -15,7 +16,6 @@ import { PadCursor } from './ui/cursor.js';
 
 const SETUP_KEY = 'oe.setup.v1';
 const SETTINGS_VERSION = 3;
-const CURRENT_KEY = 'oe.current.v1';
 
 function loadProject() {
   try {
@@ -30,17 +30,20 @@ const writeJSON = (key, v) => { try { localStorage.setItem(key, JSON.stringify(v
 function App() {
   const [{ project, from }, setSource] = useState(loadProject);
   const model = useMemo(() => buildModel(project), [project]);
-  const [order, setOrderState] = useState(() => {
-    const cur = readJSON(CURRENT_KEY, null);
-    if (cur && cur.projectName === project.name) {
-      try {
-        const items = readOrderFile(cur);
-        if (items.every((it) => it.memberIds.every((id) => model.memberById.has(id)))) return items;
-      } catch { /* fall through */ }
-    }
-    return defaultOrder(project, model);
-  });
-  const setOrder = (items) => { setOrderState(items); writeJSON(CURRENT_KEY, { projectName: project.name, items }); };
+  // The order the sequencer's plan builds in (each item: an assembly or a single piece).
+  const order = useMemo(() => gameOrder(project, model), [project, model]);
+  // The sequencer saves the project as it's edited; follow along when it's open in another tab.
+  useEffect(() => {
+    const onStorage = (e) => {
+      if (e.key !== PROJECT_KEY || !e.newValue) return;
+      setSource((cur) => {
+        if (cur.from !== 'sequencer') return cur;
+        try { return { project: normalizeProject(JSON.parse(e.newValue)), from: 'sequencer' }; } catch { return cur; }
+      });
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
   const [setup, setSetupState] = useState(() => {
     const s = readJSON(SETUP_KEY, {});
     // Settings saved before the game's pace changed are dropped, so everyone gets the new defaults.
@@ -55,10 +58,7 @@ function App() {
 
   const useProject = (p, src) => {
     const np = normalizeProject(p);
-    const m = buildModel(np);
     setSource({ project: np, from: src });
-    setOrderState(defaultOrder(np, m));
-    writeJSON(CURRENT_KEY, null);
     setSetup({ ...setup, settings: { ...setup.settings, fastenTime: gameFastenTime(np) } });
   };
 
@@ -76,7 +76,6 @@ function App() {
   const cursor = html`<${PadCursor} device=${setup.players[0]?.device} />`;
   const musicButton = html`<button class="oe-music-btn" title="Music on or off (N during a run)" onClick=${() => { setMusicOn(!isMusicOn()); setMusicState(isMusicOn()); }}>${musicOn ? '♪ Music on' : '♪ Music off'}</button>`;
 
-  if (screen === 'order') return html`${musicButton}${cursor}<${OrderEditor} project=${project} model=${model} order=${order} setOrder=${setOrder} settings=${setup.settings} onDone=${() => setScreen('setup')} />`;
   if (screen === 'play') {
     return html`<${Play} key=${runKey} quick=${quick} project=${project} order=${order} setup=${setup}
       onFinish=${(r) => { setResult(r); setScreen('results'); }} onQuit=${() => setScreen('setup')} onRestart=${() => setRunKey(runKey + 1)} />`;
@@ -85,8 +84,13 @@ function App() {
     return html`${musicButton}<${Results} result=${result} project=${project} order=${order} setup=${setup}
       onAgain=${() => { setQuick(true); setRunKey(runKey + 1); setScreen('play'); }} onSetup=${() => setScreen('setup')} />`;
   }
-  return html`${musicButton}${cursor}<${Setup} project=${project} model=${model} from=${from} order=${order} setOrder=${setOrder} setup=${setup} setSetup=${setSetup}
-    onProject=${useProject} onEditOrder=${() => setScreen('order')} onStart=${() => { setQuick(false); setRunKey(runKey + 1); setScreen('play'); }} />`;
+  return html`${musicButton}${cursor}<${Setup} project=${project} model=${model} from=${from} order=${order} setup=${setup} setSetup=${setSetup}
+    onProject=${useProject} onStart=${() => { setQuick(false); setRunKey(runKey + 1); setScreen('play'); }} />`;
+}
+
+// The game's order: the plan's build order, as game items.
+function gameOrder(project, model) {
+  return planOrder(model, activePlan(project)).map((it) => ({ id: it.id, memberIds: it.memberIds, buddy: !!it.buddy, time: null }));
 }
 
 const root = document.getElementById('app');

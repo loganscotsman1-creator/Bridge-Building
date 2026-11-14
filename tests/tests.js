@@ -12,10 +12,13 @@ import { assemblyConnections, defaultView, layOutAssembly, membersArea, stagedPo
 import { stateAt } from '../js/sim/playback.js';
 import { TOURS, dueTour } from '../js/ui/Tour.js';
 import { feetInches, parseLength, snapZoneEdge, snapZoneMove } from '../js/model/zonesnap.js';
-import { defaultOrder, orderProblems } from '../game/js/order.js';
+import { orderProblems } from '../game/js/order.js';
+import { deriveOrder, planOrder, setOrder } from '../js/model/buildorder.js';
+import { activePlan } from '../js/model/schema.js';
+const defaultOrder = (project, model = buildModel(project)) => planOrder(model, activePlan(project)).map((it) => ({ ...it, time: null }));
 import { bridgeDist, clampPos, constructionCost, pace, createGame, defaultSettings, holdPoints, itemBox, itemDist, readyLayout, results as gameResults, shelfItems, shelfSlot, stepGame } from '../game/js/world.js';
 import { npcList } from '../game/js/ui/setup.js';
-import { applyAssembly, connectionChoices, dissolveAssembly, dropSlot, insertAtSlot, onStagingSide, pieceChoices, planChecks, removeTask, taskBlocks, taskGroup } from '../js/model/timeline.js';
+import { applyAssembly, connectionChoices, dissolveAssembly, dropSlot, insertAtSlot, nextUp, onStagingSide, pieceChoices, planChecks, readyTime, removeTask, slotWhenReady, taskBlocks, taskGroup } from '../js/model/timeline.js';
 
 const results = [];
 async function test(name, fn) {
@@ -1337,6 +1340,112 @@ await test('game: NPCs make assemblies at their set time and hold the bridge unt
   for (const id of ['p1', 'p2']) { const a = g.actor(id); const z = g.S.stageZones.find((q) => g.S.sideOfX(q.x + q.w / 2) === a.side); g.put(id, z.x + 20, z.y + 20); }
   g.tick(30);
   assert(g.S.done, 'everyone back: done (the holder walks back too)');
+});
+
+// ---------- build order (chosen on the 3D bridge, shared with the game) ----------
+await test('build order: setting it keeps the plan\'s assemblies in step, and the game plays it', () => {
+  const p = taskProject();
+  const pl = p.plans[0];
+  const model = buildModel(p);
+  const order = planOrder(model, pl);
+  assert(order.length && order[0].memberIds.length === 3, 'starts with the first assembly');
+  assert(!orderProblems(order, model, p.site.rules).length, JSON.stringify(orderProblems(order, model, p.site.rules)));
+  // Split the first assembly into pieces: its make/run steps go, the assembly goes.
+  const first = order[0];
+  const split = [...first.memberIds.map((id) => ({ id: 'x' + id, memberIds: [id], buddy: false })), ...order.slice(1)];
+  setOrder(pl, model, split);
+  assert(!pl.assemblies.some((a) => a.id === first.id), 'assembly gone');
+  assert(planOrder(model, pl).length === order.length + 2, 'three pieces where one assembly was');
+  // Group two of them again: a new assembly, named by its place in the order.
+  const regroup = [{ id: 'asNew', memberIds: first.memberIds.slice(0, 2), buddy: true }, ...split.slice(2)];
+  setOrder(pl, model, regroup);
+  const a = pl.assemblies.find((x) => x.id === 'asNew');
+  assert(a && a.memberIds.length === 2 && a.name === 'Assembly 1', JSON.stringify(a));
+  assert(pl.assemblies[0].id === 'asNew', 'assemblies kept in build order');
+  assert(planOrder(model, pl)[0].buddy, 'buddy flag kept');
+  // A piece left out is added at the end for the game (fill), not when editing.
+  pl.order = pl.order.slice(0, -1);
+  assert(planOrder(model, pl, { fill: false }).length === regroup.length - 1 && planOrder(model, pl).length === regroup.length, 'fill');
+});
+
+await test('build order: an assembly whose pieces aren\'t bolted together is flagged', () => {
+  const p = normalizeProject(createExampleProject());
+  const model = buildModel(p);
+  const c = model.contacts.find((x) => x.bolts > 0);
+  const loner = model.members.find((m) => !model.contacts.some((x) => x.bolts > 0 && ((x.a === m.id && x.b === c.a) || (x.b === m.id && x.a === c.a))) && m.id !== c.a);
+  const ok = orderProblems([{ id: 'g', memberIds: [c.a, c.b] }], model, {}, { strict: false });
+  assert(!ok.some((x) => x.msg.includes('bolted')), 'connected pair is fine');
+  const bad = orderProblems([{ id: 'g', memberIds: [c.a, loner.id] }], model, {}, { strict: false });
+  assert(bad.some((x) => x.msg.includes('bolted')), JSON.stringify(bad));
+});
+
+await test('next up: the pool follows the build order', () => {
+  const p = taskProject();
+  const pl = p.plans[0];
+  const model = buildModel(p);
+  pl.tasks = [];
+  const order = planOrder(model, pl);
+  let pool = nextUp(p, model, pl, simulate(p, pl), order);
+  const kinds = pool.items.map((x) => x.kind + ':' + (x.preset?.assemblyId || x.preset?.unit?.id || x.preset?.hardware || ''));
+  assert(kinds[0] === 'assembly:' + order[0].id, kinds.join());
+  assert(pool.items.some((x) => x.disabled && x.text.includes('make it first')), 'running #1 waits for it to be made');
+  assert(pool.items.some((x) => x.kind === 'grab' && x.preset?.hardware) && pool.items.some((x) => x.kind === 'other'), 'any-time tasks');
+  // Make it: now it can be run (it's placed across the river from the yard).
+  pl.tasks.push({ id: 'k1', kind: 'assembly', builder: p.builders[3].id, assemblyId: order[0].id });
+  pool = nextUp(p, model, pl, simulate(p, pl), order);
+  const run = pool.items.find((x) => x.kind === 'run');
+  assert(run && run.preset.unit.id === order[0].id, pool.items.map((x) => x.text).join(' | '));
+  assert(pool.items.find((x) => x.kind === 'assembly')?.preset.assemblyId === order[1].id, 'the next assembly to make');
+  // Run it: receiving it is offered, and the next piece (once made) after that.
+  pl.tasks.push({ id: 'k2', kind: 'run', builder: p.builders[2].id, unit: { type: 'assembly', id: order[0].id } });
+  pool = nextUp(p, model, pl, simulate(p, pl), order);
+  assert(pool.items.some((x) => x.kind === 'receive' && x.preset.unit.id === order[0].id), 'receive #1');
+});
+
+await test('next up: a step dropped before it can start lands when it can', () => {
+  const p = taskProject();
+  const pl = p.plans[0];
+  const model = buildModel(p);
+  const order = planOrder(model, pl);
+  const [w1, , e1, e2] = p.builders.map((b) => b.id);
+  pl.tasks = [
+    { id: 'mk', kind: 'assembly', builder: e2, assemblyId: order[0].id },
+    { id: 'oth', kind: 'other', builder: e1, text: 'Stretch', duration: 3 },
+    { id: 'oth2', kind: 'other', builder: e1, text: 'Later', duration: 200 },
+  ];
+  let sim = simulate(p, pl);
+  const made = sim.taskTimes.mk.end;
+  const run = { id: 'rn', kind: 'run', builder: e1, unit: { type: 'assembly', id: order[0].id } };
+  const at = readyTime(run, pl, model, sim);
+  assert(near(at, made), at + ' vs ' + made);
+  // Dropped at the very start, before "Stretch": it goes after whatever they're doing once it's made.
+  const slot = slotWhenReady(taskBlocks(pl, sim, p), { builder: e1, time: 0, along: false, before: 'oth' }, at);
+  assert(slot.before === null || slot.before !== 'oth', JSON.stringify(slot));
+  insertAtSlot(pl.tasks, [run], slot, (id) => sim.taskStarts?.[id] ?? null);
+  const mine = pl.tasks.filter((t) => t.builder === e1).map((t) => t.id);
+  assert(mine.indexOf('rn') > mine.indexOf('oth2'), 'after the long task they were in the middle of: ' + mine.join());
+  pl.tasks.push({ id: 'rc', kind: 'receive', builder: w1, unit: { type: 'assembly', id: order[0].id } });
+  sim = simulate(p, pl);
+  assert(sim.taskTimes.rn.start >= sim.taskTimes.oth2.end - 1e-6, 'the run waits its turn');
+  // The receiver sets off for the river once the runner has it, so their step starts then.
+  assert(sim.taskTimes.rc.start >= sim.taskTimes.rn.start - 1e-6, 'receive starts with the run: ' + sim.taskTimes.rc.start + ' / ' + sim.taskTimes.rn.start);
+});
+
+await test('grab steps: a builder picks up a tool when the plan says, not automatically', () => {
+  const p = taskProject();
+  const pl = p.plans[0];
+  const b = p.builders.find((x) => (x.loadout || []).length);
+  const toolId = b.loadout[0];
+  const before = simulate(p, pl).segments.find((s) => s.builderId === b.id && s.kind === 'gear' && s.toolKey?.startsWith(toolId));
+  assert(before && before.t0 < 10, 'picked up at the start by default');
+  pl.tasks.unshift({ id: 'oth', kind: 'other', builder: b.id, text: 'Warm up', duration: 30 }, { id: 'gr', kind: 'grab', builder: b.id, toolId });
+  const r = simulate(p, pl);
+  const segs = r.segments.filter((s) => s.builderId === b.id && s.kind === 'gear' && s.toolKey?.startsWith(toolId));
+  assert(segs.length === 1 && segs[0].t0 >= 30, JSON.stringify(segs.map((s) => s.t0)));
+  assert(r.taskTimes.gr && r.taskTimes.gr.start >= 30, 'grab step timed');
+  pl.tasks.unshift({ id: 'hw', kind: 'grab', builder: b.id, hardware: true });
+  const r2 = simulate(p, pl);
+  assert(r2.segments.filter((s) => s.builderId === b.id && s.hardware).length === 1, 'nuts & bolts grabbed once, by the step');
 });
 
 await test('old (version 1) project files still open', () => {

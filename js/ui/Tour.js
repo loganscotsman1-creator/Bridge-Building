@@ -83,12 +83,12 @@ export const TOURS = {
     ],
   },
   sequence: {
-    v: 2, title: 'Build sequence',
+    v: 3, title: 'Build sequence',
     steps: [
       {
         target: 'seq-palette',
-        title: 'Drag tasks onto a builder',
-        body: 'Drag a task onto a builder\'s row, and a pop-up asks which piece it\'s for. Drop on the lower half of a bar to do both at once. Make an assembly works the same way: click the pieces that go together.',
+        title: 'Next up: drag onto a builder',
+        body: 'Only what can happen next in the build order is offered: the next assembly to make, running or placing the next piece, bolts and nuts where pieces are in place, and things like grabbing tools that can happen any time. A step that has to wait (running an assembly that isn\'t made yet) lands where it can start. Drop on the lower half of a bar to do both at once. Build order… at the top changes the order and the assemblies.',
       },
       {
         target: 'seq-timeline',
@@ -98,7 +98,7 @@ export const TOURS = {
       {
         target: 'seq-checks',
         title: 'Nothing gets missed',
-        body: 'These counts and the marks on the bars show what\'s still missing, and hovering over a bar says why it\'s flagged. Still to do, on the right, lists it all and can be dragged straight onto a builder.',
+        body: 'These counts and the marks on the bars show what\'s still missing, and hovering over a bar says why it\'s flagged. Below, the build plays back in the game\'s look: press play, or click the time along the top of the timeline.',
       },
     ],
   },

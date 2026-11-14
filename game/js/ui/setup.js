@@ -2,9 +2,9 @@
 import { html, useEffect, useRef, useState } from '../../../js/lib/preact.js';
 import { bridgeToSite, footingRanges } from '../../../js/model/geometry.js';
 import { membersArea, sideOf } from '../../../js/model/plan.js';
-import { downloadJSON, pickFile, readJSONFile, safeFilename } from '../../../js/model/storage.js';
+import { loadAutosave, pickFile, readJSONFile } from '../../../js/model/storage.js';
 import { createExampleProject } from '../../../js/model/example.js';
-import { gameAssemblyTime, deleteSavedOrder, itemName, orderFile, orderProblems, readOrderFile, saveOrder, savedOrders, startFooting } from '../order.js';
+import { gameAssemblyTime, itemName, orderProblems, startFooting } from '../order.js';
 import { KEYBOARDS, deviceHelp, deviceName, endFrame, pressedDevices, readDevice } from '../input.js';
 import { cursorActive, suspendCursor } from './cursor.js';
 
@@ -107,7 +107,7 @@ export function setupProblems(project, model, order, setup) {
   return out;
 }
 
-export function Setup({ project, model, from, order, setOrder, setup, setSetup, onProject, onEditOrder, onStart }) {
+export function Setup({ project, model, from, order, setup, setSetup, onProject, onStart }) {
   const problems = setupProblems(project, model, order, setup);
   const setupRef = useRef(setup);
   setupRef.current = setup;
@@ -245,6 +245,7 @@ export function Setup({ project, model, from, order, setOrder, setup, setSetup, 
         <div class="row wrap">
           <button onClick=${openProject}>Open project file…</button>
           ${from !== 'example' && html`<button onClick=${() => onProject(createExampleProject(), 'example')}>Use the example bridge</button>`}
+          ${from !== 'sequencer' && loadAutosave() && html`<button onClick=${() => onProject(loadAutosave(), 'sequencer')}>Use my Build Sequencer bridge</button>`}
         </div>
         <h3>Staging</h3>
         <div class=${'oe-side' + (navId === 'staging' ? ' oe-navfocus' : '')}>
@@ -255,10 +256,9 @@ export function Setup({ project, model, from, order, setOrder, setup, setSetup, 
           ? 'Every piece waits in the ready area and grabbing takes the one nearest you. Assemblies are made one at a time on a small bench in the corner, and each has to be moved off (set down in the ready area, or run to the bridge) before the next. Runners keep track of what goes next.'
           : 'Pieces appear in the ready area in build order, and grabbing always takes the next one.'}</p>
         <${OrderSummary} project=${project} model=${model} order=${order} settings=${setup.settings} />
-        <div class="row wrap">
-          <button class="primary" onClick=${onEditOrder}>Edit the order…</button>
-          <${SavedOrders} project=${project} order=${order} setOrder=${setOrder} />
-        </div>
+        <p class="oe-hint">${from === 'sequencer'
+          ? html`The order and assemblies come from your Build Sequencer plan (5 · Build sequence → Build order). Change them there: with the sequencer open in another tab, this list follows along.`
+          : 'The order and assemblies come from this project’s plan. To change them, open it in the Build Sequencer (5 · Build sequence → Build order).'}</p>
       </section>
 
       <section class="oe-card">
@@ -313,7 +313,7 @@ export function Setup({ project, model, from, order, setOrder, setup, setSetup, 
       <section class="oe-card">
         <h2>3 · Times</h2>
         ${TIMES.map((t) => html`<${Num} step=${t.step} label=${t.label} unit=${t.unit} title=${t.title} focused=${navId === t.key} value=${setup.settings[t.key] ?? (t.key === 'assemblyTime' ? 4 : t.key === 'comSpeed' ? 80 : 0)} onChange=${(v) => setS({ [t.key]: Math.max(0, v) })} />`)}
-        <p class="oe-hint">An assembly's own time can be set in the order editor. Defaults keep the game moving: quicker nuts and assemblies, brisker walking.</p>
+        <p class="oe-hint">Defaults keep the game moving: quicker nuts and assemblies, brisker walking.</p>
         <details class="oe-how">
           <summary>How to play</summary>
           <ul>
@@ -347,36 +347,4 @@ function OrderSummary({ project, model, order, settings }) {
       ${it.memberIds.length > 1 && html`<span class="tm">${gameAssemblyTime(it, project, model, settings)} s</span>`}
     </li>`)}
   </ol>`;
-}
-
-function SavedOrders({ project, order, setOrder }) {
-  const [list, setList] = useState(() => savedOrders());
-  const mine = list.filter((o) => o.projectName === project.name);
-  const save = () => {
-    const name = prompt('Name this order', 'Order ' + (mine.length + 1));
-    if (!name) return;
-    saveOrder(name, project, order);
-    setList(savedOrders());
-  };
-  const load = (name) => {
-    const o = mine.find((x) => x.name === name);
-    if (o) setOrder(readOrderFile(o));
-  };
-  const upload = async () => {
-    const f = await pickFile('.json,application/json');
-    if (!f) return;
-    try { setOrder(readOrderFile(await readJSONFile(f))); } catch (e) { alert(e.message); }
-  };
-  return html`
-    <button onClick=${save}>Save order</button>
-    ${mine.length > 0 && html`<select onChange=${(e) => { if (e.target.value) load(e.target.value); e.target.value = ''; }}>
-      <option value="">Load a saved order…</option>
-      ${mine.map((o) => html`<option value=${o.name}>${o.name}</option>`)}
-    </select>`}
-    ${mine.length > 0 && html`<select title="Delete a saved order" onChange=${(e) => { if (e.target.value && confirm('Delete "' + e.target.value + '"?')) { deleteSavedOrder(e.target.value, project.name); setList(savedOrders()); } e.target.value = ''; }}>
-      <option value="">Delete…</option>
-      ${mine.map((o) => html`<option value=${o.name}>${o.name}</option>`)}
-    </select>`}
-    <button onClick=${() => downloadJSON(orderFile('Build order', project, order), safeFilename(project.name + ' order', '.json'))}>Download</button>
-    <button onClick=${upload}>Upload…</button>`;
 }

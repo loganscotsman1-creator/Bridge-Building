@@ -436,13 +436,16 @@ class Sim {
     this.finish();
   }
 
-  gearUp() {
+  // Each builder picks up their loadout at the start, except what a "Grab" step in the plan has
+  // them pick up themselves (`skip`: 'builderId|toolId' or 'builderId|hardware').
+  gearUp(skip = new Set()) {
     const taken = new Set();
     const hwZones = this.site.zones.filter((z) => z.type === 'hardware');
     for (const b of this.builders) {
       const src = this.project.builders.find((x) => x.id === b.id);
       const items = [];
       for (const toolId of src.loadout || []) {
+        if (skip.has(b.id + '|' + toolId)) continue;
         const insts = this.toolInst.filter((ti) => ti.tool.id === toolId && !taken.has(ti.key));
         const inst = insts.find((ti) => this.grid.path(b.mask, b.pos, ti.pos) || this.grid.nearestStand(b.mask, ti.pos)?.dist < this.T.maxReach);
         if (!inst) {
@@ -453,7 +456,7 @@ class Sim {
         taken.add(inst.key);
         items.push({ pos: inst.pos, inst });
       }
-      if (src.hardware) {
+      if (src.hardware && !skip.has(b.id + '|hardware')) {
         const reachable = hwZones.map((z) => ({ x: z.x + z.w / 2, y: z.y + z.h / 2 })).filter((p) => this.standFor(b, [p]));
         reachable.sort((p, q) => dist2d(b.pos, p) - dist2d(b.pos, q));
         if (reachable.length) items.push({ pos: reachable[0], hardware: true });
@@ -464,7 +467,7 @@ class Sim {
         const it = items.shift();
         const stand = this.standFor(b, [it.pos]);
         if (!stand || !this.go(b, stand.stand, 'walk', { label: 'To ' + (it.hardware ? 'nuts & bolts' : it.inst.tool.name) })) continue;
-        this.seg(b, 'gear', b.freeAt, b.freeAt + this.T.gearUpTime, { label: 'Grab ' + (it.hardware ? 'nuts & bolts' : it.inst.tool.name) });
+        this.seg(b, 'gear', b.freeAt, b.freeAt + this.T.gearUpTime, { label: 'Grab ' + (it.hardware ? 'nuts & bolts' : it.inst.tool.name), hardware: !!it.hardware, toolKey: it.inst?.key });
         if (it.hardware) b.hardware = true;
         else { it.inst.carriedBy = b.id; b.gear.push(it.inst); }
       }
@@ -1079,7 +1082,8 @@ class Sim {
 export class TaskSim extends Sim {
   run() {
     this.stepIndex = -1;
-    this.gearUp();
+    const grabs = this.plan.tasks.filter((t) => t.kind === 'grab');
+    this.gearUp(new Set(grabs.map((t) => t.builder + '|' + (t.hardware ? 'hardware' : t.toolId))));
     for (const inst of this.toolInst) inst.assembled = !(inst.tool.pieces || []).length;
     for (const b of this.builders) this.refreshTool(b);
     this.now = 0;
@@ -1188,11 +1192,20 @@ export class TaskSim extends Sim {
     if (task.after && this.taskIds.has(task.after)) {
       yield* this.waitFor(ctx, () => this.doneTasks.has(task.after), 'step ' + (this.taskIndex.get(task.after) + 1));
     }
-    const handler = { run: this.doRun, receive: this.doReceive, support: this.doHold, bolt: this.doBolt, nut: this.doNut, tool: this.doTool, pass: this.doPass, other: this.doOther, stand: this.doStand, assembly: this.doAssembly }[task.kind];
+    const handler = { run: this.doRun, receive: this.doReceive, support: this.doHold, bolt: this.doBolt, nut: this.doNut, tool: this.doTool, grab: this.doGrab, pass: this.doPass, other: this.doOther, stand: this.doStand, assembly: this.doAssembly }[task.kind];
+    const first = this.segments.length;
     if (handler) yield* handler.call(this, ctx);
     else this.warn(`Unknown kind of step "${task.kind}"; skipped.`);
     this.doneTasks.add(task.id);
-    this.taskTimes[task.id] = { start, end: this.now };
+    // On the timeline a step starts once it gets going: waiting for what it needs comes before it.
+    let begin = start;
+    for (let i = first; i < this.segments.length; i++) {
+      const s = this.segments[i];
+      if (s.taskId !== task.id) continue;
+      if (s.kind === 'wait') begin = Math.max(begin, s.t1);
+      break;
+    }
+    this.taskTimes[task.id] = { start: Math.min(begin, this.now), end: this.now, queued: start };
   }
 
   // ---------- small pieces of a task ----------
@@ -1312,6 +1325,7 @@ export class TaskSim extends Sim {
     const catcher = recv && this.builderById.get(recv.builder);
     if (!catcher) { this.error(`${u.name} is run to the river, but no step has a builder receive it.`); return; }
     if (!(yield* this.pickUp(ctx, u))) return;
+    u.runStarted = true;
     const h = this.handoffFor(u, b, catcher);
     if (!h) { this.error(`${b.name} and ${catcher.name} can't hand ${u.name} to each other: they're on the same side of the river, or too far apart (hand-off distance ${this.T.passReach} in).`); return; }
     if (!(yield* this.walk(ctx, h.g, 'carry', { label: `Run ${u.name} to the river`, memberIds: u.memberIds }))) return;
@@ -1333,6 +1347,8 @@ export class TaskSim extends Sim {
     const run = this.plan.tasks.find((t) => t.kind === 'run' && taskUnitKey(t) === u.key);
     const runner = run && this.builderById.get(run.builder);
     if (runner && runner !== b) {
+      // Set off for the river once the runner has the piece.
+      yield* this.waitFor(ctx, () => u.runStarted, `${runner.name} to pick up ${u.name}`);
       const h = this.handoffFor(u, runner, b);
       if (!h) return; // the runner's step reports this
       if (!(yield* this.walk(ctx, h.t, 'walk', { label: `Meet ${runner.name} for ${u.name}` }))) return;
@@ -1568,7 +1584,7 @@ export class TaskSim extends Sim {
     }
     ctx.group.started = true;
     const pieces = tool.pieces || [];
-    for (const piece of pieces) yield* this.work(ctx, 'gear', piece.time || 0, { label: `Assemble ${tool.name}: ${piece.name || 'piece'}` });
+    for (const piece of pieces) yield* this.work(ctx, 'gear', piece.time || 0, { label: `Assemble ${tool.name}: ${piece.name || 'piece'}`, toolKey: inst.key, assembling: true });
     inst.assembled = true;
     this.refreshTool(b);
   }
@@ -1587,11 +1603,39 @@ export class TaskSim extends Sim {
       if (dist2d(b.pos, to.pos) > this.T.passReach) { this.error(`${to.name} is ${Math.round(dist2d(b.pos, to.pos))} in from the closest ${b.name} can get, so the ${tool.name} can't be passed (hand-off distance ${this.T.passReach} in).`); return; }
     }
     ctx.group.started = true;
-    yield* this.work(ctx, 'pickup', this.T.pickupTime, { label: `Pass ${tool.name} to ${to.name}` });
     const inst = mine();
+    yield* this.work(ctx, 'pickup', this.T.pickupTime, { label: `Pass ${tool.name} to ${to.name}`, toolKey: inst?.key, to: to.id });
     if (inst) inst.carriedBy = to.id;
     this.refreshTool(b);
     this.refreshTool(to);
+  }
+
+  // Pick up a tool, or a supply of nuts and bolts, from where it starts.
+  * doGrab(ctx) {
+    const { b, task } = ctx;
+    if (task.hardware) {
+      const spots = this.site.zones.filter((z) => z.type === 'hardware').map((z) => ({ x: z.x + z.w / 2, y: z.y + z.h / 2 })).filter((p) => this.standFor(b, [p]));
+      spots.sort((p, q) => dist2d(b.pos, p) - dist2d(b.pos, q));
+      if (!spots.length) { this.error(`${b.name} has no nuts & bolts area they can reach.`); return; }
+      if (!(yield* this.reach(ctx, spots[0], 'walk', 'the nuts & bolts'))) return;
+      ctx.group.started = true;
+      yield* this.work(ctx, 'gear', this.T.gearUpTime, { label: 'Grab nuts & bolts', hardware: true, spot: spots[0] });
+      b.hardware = true;
+      return;
+    }
+    const tool = this.project.tools.find((t) => t.id === task.toolId);
+    if (!tool) { this.warn('This step grabs a tool that no longer exists; skipped.'); return; }
+    if (this.toolInst.some((ti) => ti.tool.id === tool.id && ti.carriedBy === b.id && !ti.placedAt)) { this.warn(`${b.name} already has a ${tool.name}.`); return; }
+    const free = this.toolInst.filter((ti) => ti.tool.id === tool.id && !ti.carriedBy && !ti.placedAt && (!ti.claimedBy || ti.claimedBy === b.id));
+    free.sort((p, q) => dist2d(b.pos, p.pos) - dist2d(b.pos, q.pos));
+    const inst = free.find((ti) => this.standFor(b, [ti.pos]));
+    if (!inst) { this.error(free.length ? `${b.name} can't reach a ${tool.name} from their side of the site.` : `There's no ${tool.name} left for ${b.name} to grab.`); return; }
+    inst.claimedBy = b.id;
+    if (!(yield* this.reach(ctx, inst.pos, 'walk', tool.name))) return;
+    ctx.group.started = true;
+    yield* this.work(ctx, 'gear', this.T.gearUpTime, { label: 'Grab ' + tool.name, toolKey: inst.key });
+    inst.carriedBy = b.id;
+    this.refreshTool(b);
   }
 
   * doOther(ctx) {
