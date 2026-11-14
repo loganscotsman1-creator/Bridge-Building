@@ -8,6 +8,10 @@
 //   - Items (assemblies and single pieces) appear in the ready area in the build order: an
 //     assembly once it's made, a single piece as soon as every assembly before it is. Grabbing
 //     from anywhere in or near the ready area always takes the next item in the order.
+//   - Or, with "pick pieces yourself" (settings.freeStaging): every single piece waits in the ready
+//     area from the start and grabbing takes the one nearest you; assemblies are made one at a time
+//     on a small bench in the yard's corner, and each must be moved off (set down in the ready area
+//     or run to the bridge) before the next can be made. Runners keep track of the order.
 //   - A piece is placed where it goes in the bridge (tap A within reach). It needs one bolt if it
 //     touches the bridge at one place, two bolts at two different places if it touches at two or
 //     more. Placing it puts in the first bolt. Until it has its bolts, whoever placed it holds it.
@@ -48,6 +52,7 @@ export function defaultSettings(project, fastenTime) {
     carrySpeed: Math.round((tm.carrySpeed || 36) * 1.5),
     reach: tm.maxReach || 40,
     comSpeed: 80, // % of players' speeds that computers work at once they're roaming (see pace)
+    freeStaging: false, // pick pieces yourself (see the top of this file)
     passReach: tm.passReach || 90,
   };
 }
@@ -148,8 +153,29 @@ export function createGame({ project, order, settings, players, npcs = {} }) {
     const pos = spawn(h.side, same.indexOf(h) + (bySide[h.side]?.length || 0), same.length + (bySide[h.side]?.length || 0));
     S.actors.push(newActor({ id: 'npc-com-' + (k + 1), name: 'COM ' + (k + 1), color: COM_COLORS[k % COM_COLORS.length], side: h.side, npc: 'helper', label: 'C' + (k + 1) }, pos));
   });
+  if (settings.freeStaging) setUpFreeStaging(S);
   releaseItems(S);
+  if (settings.freeStaging) placeAll(S);
   return S;
+}
+// Pick pieces yourself: the assembly area shrinks to a bench in the yard's top-right corner, just
+// big enough for the biggest assembly; the ready area is the whole yard around it.
+function setUpFreeStaging(S) {
+  const yard = S.yard, pad = 6;
+  let w = 30, h = 24;
+  for (const it of S.items) {
+    if (!it.multi) continue;
+    const b = itemBox(S, it);
+    w = Math.max(w, b.x1 - b.x0 + 2 * pad);
+    h = Math.max(h, b.y1 - b.y0 + (b.z1 - b.z0) * LIFT + 2 * pad + 10);
+  }
+  w = Math.min(w, yard.w * 0.7); h = Math.min(h, yard.h * 0.6);
+  S.assembly = { x: yard.x + yard.w - w, y: yard.y, w, h };
+  S.ready = { x: yard.x, y: yard.y, w: yard.w, h: yard.h, blocked: S.assembly };
+}
+// Lay out every piece in the ready area at the start (pick pieces yourself), remembering where.
+function placeAll(S) {
+  for (const [it, sl] of layout(S, S.ready, shelfItems(S))) it.pos = { x: sl.x, y: sl.y };
 }
 const COM_COLORS = ['#94a3b8', '#7c8aa0', '#a3b1c4', '#6b7a90'];
 
@@ -189,6 +215,10 @@ const inStaging = (S, a) => S.stageZones.some((z) => a.x >= z.x - 1 && a.x <= z.
 // ---------- the ready area ----------
 // Single pieces come out as soon as every assembly before them is made; assemblies once they're made.
 export function releaseItems(S) {
+  if (S.settings.freeStaging) {
+    for (const it of S.items) if (!it.multi && it.status === 'waiting') it.status = 'shelf';
+    return;
+  }
   let blocked = false;
   for (const it of S.items) {
     if (it.multi) {
@@ -225,22 +255,35 @@ const LIFT = 1.2;
 // area. Rows are squeezed together (overlapping) if they don't all fit. Each item gets the shift
 // to draw it there ({dx, dy, dz}) and where its middle is on the ground ({x, y}).
 function layout(S, area, list) {
-  const pad = 4, out = new Map(), rows = [];
-  let row = null;
-  for (const it of list) {
-    const b = itemBox(S, it), w = b.x1 - b.x0, h = b.y1 - b.y0 + (b.z1 - b.z0) * LIFT;
-    if (!row || (row.items.length && row.w + w > area.w - 2 * pad)) { row = { items: [], w: 0, h: 0 }; rows.push(row); }
-    row.items.push({ it, b, w });
-    row.w += w + pad;
-    row.h = Math.max(row.h, h);
-  }
+  const pad = 4, out = new Map();
+  // Rows level with a bench in the area (area.blocked) stop short of it. How far down a row lands
+  // depends on the squeeze, and the squeeze on how the rows came out, so settle it in a few passes.
+  const bl = area.blocked;
+  const room = (y, h) => (bl && y < bl.y + bl.h + pad ? bl.x - area.x - 3 * pad : area.w - 2 * pad);
   const avail = area.h - 2 * pad - 12; // leave room for the area's name
-  const last = rows.length ? rows[rows.length - 1].h : 0;
-  const total = rows.reduce((t, r) => t + r.h + pad, -pad);
-  const squeeze = rows.length > 1 && total > avail ? Math.max(0.15, (avail - last) / (total - last)) : 1;
+  let rows = [], squeeze = 1;
+  for (let pass = 0; pass < (bl ? 5 : 1); pass++) {
+    rows = [];
+    let row = null, rowY = area.y + pad;
+    for (const it of list) {
+      const b = itemBox(S, it), w = b.x1 - b.x0, h = b.y1 - b.y0 + (b.z1 - b.z0) * LIFT;
+      if (!row || (row.items.length && row.w + w > row.room)) {
+        if (row) rowY += (row.h + pad) * squeeze;
+        row = { items: [], w: 0, h: 0, room: room(rowY) }; rows.push(row);
+      }
+      row.items.push({ it, b, w });
+      row.w += w + pad;
+      row.h = Math.max(row.h, h);
+    }
+    const last = rows.length ? rows[rows.length - 1].h : 0;
+    const total = rows.reduce((t, r) => t + r.h + pad, -pad);
+    const next = rows.length > 1 && total > avail ? Math.max(0.15, (avail - last) / (total - last)) : 1;
+    if (Math.abs(next - squeeze) < 1e-6) break;
+    squeeze = next;
+  }
   let y = area.y + pad;
   for (const r of rows) {
-    let x = area.x + pad + Math.max(0, (area.w - 2 * pad - (r.w - pad)) / 2);
+    let x = area.x + pad + Math.max(0, (r.room - (r.w - pad)) / 2);
     const ground = y + r.h; // everything in a row stands on the same line
     for (const q of r.items) {
       const dx = x - q.b.x0, dy = ground - q.b.y1;
@@ -251,8 +294,19 @@ function layout(S, area, list) {
   }
   return out;
 }
-export const readyLayout = (S) => layout(S, S.ready, shelfItems(S));
-export const buildingItems = (S) => S.items.filter((it) => it.status === 'building');
+// Where each piece in the ready area is drawn: in order (or, picking pieces yourself, wherever it
+// was set down).
+export function readyLayout(S) {
+  if (!S.settings.freeStaging) return layout(S, S.ready, shelfItems(S));
+  const out = new Map();
+  for (const it of shelfItems(S)) {
+    const b = itemBox(S, it), p = it.pos || { x: S.ready.x + 20, y: S.ready.y + S.ready.h - 20 };
+    out.set(it, { dx: p.x - (b.x0 + b.x1) / 2, dy: p.y - (b.y0 + b.y1) / 2, dz: -b.z0, x: p.x, y: p.y });
+  }
+  return out;
+}
+export const buildingItems = (S) => S.items.filter((it) => it.status === 'building' || it.status === 'made');
+export const madeItem = (S) => S.items.find((it) => it.status === 'made') || null;
 export const benchLayout = (S) => layout(S, S.assembly, buildingItems(S));
 export const shelfSlot = (S, item) => readyLayout(S).get(item);
 export const benchSlot = (S, item) => benchLayout(S).get(item);
@@ -506,13 +560,28 @@ function passer(S, a) {
 // Anywhere in or near the ready area, grabbing takes the next item in the build order.
 const inReady = (S, a) => distToRect(a.x, a.y, S.ready) <= STATION_REACH;
 function shelfPick(S, a) {
-  return inReady(S, a) ? shelfItems(S)[0] || null : null;
+  if (!inReady(S, a)) return null;
+  if (!S.settings.freeStaging) return shelfItems(S)[0] || null;
+  // Picking pieces yourself: the one nearest you.
+  let best = null, bd = 40;
+  for (const it of shelfItems(S)) { const p = it.pos; if (!p) continue; const d = dist(p.x, p.y, a.x, a.y); if (d < bd) { bd = d; best = it; } }
+  return best;
+}
+const onBench = (S, a) => distToRect(a.x, a.y, S.assembly) <= STATION_REACH;
+// A spot in the ready area where a piece can be set down (not on the bench).
+function canSetDown(S, a) {
+  return inReady(S, a) && distToRect(a.x, a.y, S.ready) === 0 && distToRect(a.x, a.y, S.assembly) > 2;
 }
 // In the assembly area, X works on: what you were making, else one someone left half made, else
 // the next assembly in the order, else helps someone with theirs.
 function assemblyFor(S, a) {
   if (distToRect(a.x, a.y, S.assembly) > STATION_REACH) return null;
   if (a.work?.kind === 'assemble' && a.work.target.status === 'building') return a.work.target;
+  if (S.settings.freeStaging) {
+    // One at a time on the bench, and not until the last one is moved off.
+    if (madeItem(S)) return null;
+    return S.items.find((it) => it.status === 'building') || S.items.find((it) => it.multi && it.status === 'waiting') || null;
+  }
   const busy = new Set(S.actors.filter((o) => o !== a && o.work?.kind === 'assemble').map((o) => o.work.target));
   const building = buildingItems(S);
   return building.find((it) => !busy.has(it)) || S.items.find((it) => it.multi && it.status === 'waiting') || building[0] || null;
@@ -523,11 +592,14 @@ export function actionA(S, a) {
   if (a.carrying) {
     const item = S.items.find((it) => it.id === a.carrying);
     if (canPlace(S, a, item)) return { kind: 'place', label: item.buddy ? 'Set in place' : 'Place + bolt' };
-    if (inReady(S, a)) return { kind: 'putback', label: 'Put back' };
+    if (S.settings.freeStaging) { if (canSetDown(S, a)) return { kind: 'putdown', label: 'Set down' }; }
+    else if (inReady(S, a)) return { kind: 'putback', label: 'Put back' };
     return { kind: 'extend', label: 'Hold to pass' };
   }
   const o = passer(S, a);
   if (o) return { kind: 'take', label: 'Take from ' + o.name, target: o };
+  const made = S.settings.freeStaging && onBench(S, a) && madeItem(S);
+  if (made) return { kind: 'grab', label: 'Take #' + (made.idx + 1) + ' off the bench', target: made };
   const it = shelfPick(S, a);
   if (it) return { kind: 'grab', label: 'Grab #' + (it.idx + 1), target: it };
   const b = nearestBolt(S, a, 'needed');
@@ -564,6 +636,14 @@ function doA(S, a, act) {
   if (!act) return;
   if (act.kind === 'place') placeItem(S, a);
   else if (act.kind === 'putback') { const it = S.items.find((x) => x.id === a.carrying); it.status = 'shelf'; a.carrying = null; }
+  else if (act.kind === 'putdown') {
+    // Set it down just in front of you.
+    const it = S.items.find((x) => x.id === a.carrying);
+    const r0 = S.ready;
+    it.pos = { x: Math.max(r0.x + 4, Math.min(r0.x + r0.w - 4, a.x + a.face[0] * 10)), y: Math.max(r0.y + 4, Math.min(r0.y + r0.h - 4, a.y + a.face[1] * 10)) };
+    it.status = 'shelf'; a.carrying = null; a.extending = false;
+    S.events.push({ kind: 'putdown', item: it.id, by: a.id });
+  }
   else if (act.kind === 'extend') a.extending = true;
   else if (act.kind === 'take') {
     const o = act.target;
@@ -571,7 +651,7 @@ function doA(S, a, act) {
     S.items.find((x) => x.id === a.carrying).status = 'carried';
     o.stats.handoffs++;
     S.events.push({ kind: 'pass', from: o.id, to: a.id });
-  } else if (act.kind === 'grab') { a.carrying = act.target.id; act.target.status = 'carried'; S.events.push({ kind: 'grab', by: a.id }); }
+  } else if (act.kind === 'grab') { a.carrying = act.target.id; act.target.status = 'carried'; act.target.pos = null; S.events.push({ kind: 'grab', by: a.id }); }
   else if (act.kind === 'bolt') placeBolt(S, a, act.target);
 }
 
@@ -602,7 +682,8 @@ function work(S, a, dt) {
   if (it.status === 'waiting') it.status = 'building';
   it.progress += dt * pace(S, a);
   if (it.progress >= it.time) {
-    it.status = 'shelf';
+    // Picking pieces yourself, it stays on the bench until someone moves it.
+    it.status = S.settings.freeStaging ? 'made' : 'shelf';
     a.work = null;
     a.stats.assemblies++;
     S.events.push({ kind: 'ready', item: it.id, made: true });
@@ -692,7 +773,7 @@ export function stepGame(S, inputs, dt) {
   if (S.done) return;
   S.t += dt;
   for (const a of S.actors) {
-    const inp = a.npc ? npcThink(S, a, dt) : inputs.get(a.id) || { mx: 0, my: 0, a: false, x: false, lb: false };
+    const inp = a.npc ? steer(S, a, npcThink(S, a, dt)) : inputs.get(a.id) || { mx: 0, my: 0, a: false, x: false, lb: false };
     a.npcInput = a.npc ? inp : null;
     move(S, a, inp.mx || 0, inp.my || 0, dt);
 
@@ -829,7 +910,9 @@ function stillOn(S, a, job) {
     case 'take': return !a.carrying && !!job.from.carrying;
     case 'bolt': return !a.carrying && job.bolt.state === 'needed' && !S.support.fallen;
     case 'fasten': return !a.carrying && job.bolt.state === 'placed' && !S.support.fallen;
-    case 'grab': return !a.carrying && shelfItems(S).length > 0;
+    case 'grab': return !a.carrying && (job.item ? job.item.status === 'shelf' : shelfItems(S).length > 0);
+    case 'clear': return !a.carrying && !!madeItem(S);
+    case 'stow': return a.carrying === job.item.id;
     case 'hold': return !S.support.holders.size && (S.support.needed || S.support.fallen) && !S.support.standing;
     case 'assemble': return !a.carrying && S.items.some((it) => it.multi && (it.status === 'waiting' || it.status === 'building'));
   }
@@ -870,7 +953,9 @@ function jobs(S, a) {
   if (item) {
     // Deliver it: to its spot if it goes in on this side, else to the river to pass it over.
     const spot = itemSpot(S, a.side, item, a);
-    if (spot) out.push({ kind: 'deliver', key: 'item:' + item.id, item, spot, cost: -500 });
+    // Picking pieces yourself: something that can't go in yet goes back in the ready area.
+    if (S.settings.freeStaging && !placeableNow(S, item) && a.side === S.stagingSide) out.push({ kind: 'stow', key: 'item:' + item.id, item, spot: freeSpot(S, a), cost: -500 });
+    else if (spot) out.push({ kind: 'deliver', key: 'item:' + item.id, item, spot, cost: -500 });
     else out.push({ kind: 'pass', key: 'item:' + item.id, item, spot: edgeSpot(S, a.side, itemBox(S, item) ? (itemBox(S, item).y0 + itemBox(S, item).y1) / 2 : a.y), cost: -500 });
     return out;
   }
@@ -889,8 +974,23 @@ function jobs(S, a) {
   }
   const bj = boltJob(S, a, taken);
   if (bj) out.push(bj);
+  // Picking pieces yourself: take a made assembly off the bench (the assembler's job first).
+  if (S.settings.freeStaging && a.side === S.stagingSide && madeItem(S) && !taken.has('clear')) {
+    const z = S.assembly;
+    const q = clampPos(S, a.side, Math.max(z.x + 4, Math.min(z.x + z.w - 4, a.x)), Math.max(z.y + 4, Math.min(z.y + z.h - 4, a.y)));
+    out.push({ kind: 'clear', key: 'clear', spot: q, cost: dist(q.x, q.y, a.x, a.y) + (a.npc === 'assembler' ? -1200 : -100) });
+  }
+  // Picking pieces yourself: fetch the next piece in build order, wherever it was set down.
+  if (S.settings.freeStaging && a.side === S.stagingSide && !taken.has('grab')) {
+    const firstOpen = S.items.find((it) => it.status !== 'placed' && it.status !== 'carried');
+    const next = shelfItems(S).filter((it) => placeableNow(S, it) || it === firstOpen).sort((p, q) => p.idx - q.idx)[0];
+    if (next && next.pos) {
+      const q = clampPos(S, a.side, next.pos.x, next.pos.y);
+      out.push({ kind: 'grab', key: 'grab', item: next, spot: q, cost: dist(q.x, q.y, a.x, a.y) + 30 });
+    }
+  }
   // Run the next ready piece, in build order, if it can go in now (or it's simply next).
-  if (a.side === S.stagingSide && !taken.has('grab')) {
+  else if (a.side === S.stagingSide && !taken.has('grab')) {
     const next = shelfItems(S)[0];
     const firstOpen = S.items.find((it) => it.status !== 'placed' && it.status !== 'carried');
     if (next && (placeableNow(S, next) || next === firstOpen)) {
@@ -900,12 +1000,47 @@ function jobs(S, a) {
     }
   }
   // Make assemblies (the assembler's main job; others pitch in when nothing's closer).
-  if (a.side === S.stagingSide && S.items.some((it) => it.multi && (it.status === 'waiting' || it.status === 'building'))) {
+  if (a.side === S.stagingSide && S.items.some((it) => it.multi && (it.status === 'waiting' || it.status === 'building')) && !(S.settings.freeStaging && madeItem(S))) {
     const z = S.assembly;
     const q = clampPos(S, a.side, Math.max(z.x + 8, Math.min(z.x + z.w - 8, a.x)), Math.max(z.y + 8, Math.min(z.y + z.h - 8, a.y)));
     out.push({ kind: 'assemble', key: 'asm:' + a.id, spot: q, cost: dist(q.x, q.y, a.x, a.y) + (a.npc === 'assembler' ? -1000 : 60) });
   }
   return out.sort((p, q) => p.cost - q.cost);
+}
+
+// Step around anyone standing in the way (someone holding the bridge can't be pushed aside).
+function steer(S, a, inp) {
+  const m = Math.hypot(inp.mx || 0, inp.my || 0);
+  if (m < 0.1 || a.anchor) return inp;
+  const ux = inp.mx / m, uy = inp.my / m;
+  for (const o of S.actors) {
+    if (o === a) continue;
+    const dx = o.x - a.x, dy = o.y - a.y;
+    const ahead = dx * ux + dy * uy, side = -dx * uy + dy * ux;
+    if (ahead <= 0 || ahead > 3 * R || Math.abs(side) > 2.2 * R) continue;
+    // Turn away from them, toward whichever side is open.
+    let px = -uy, py = ux;
+    if (side > 0) { px = -px; py = -py; }
+    const q = clampPos(S, a.side, a.x + px * 2 * R, a.y + py * 2 * R);
+    if (dist(q.x, q.y, a.x, a.y) < R) { px = -px; py = -py; }
+    return { ...inp, mx: ux * 0.4 + px, my: uy * 0.4 + py };
+  }
+  return inp;
+}
+
+// A clear spot in the ready area to set a piece down, near the NPC.
+function freeSpot(S, a) {
+  const r0 = S.ready;
+  let best = null, bd = Infinity;
+  for (let x = r0.x + 12; x < r0.x + r0.w - 8; x += 12) {
+    for (let y = r0.y + 12; y < r0.y + r0.h - 8; y += 12) {
+      if (distToRect(x, y, S.assembly) < 14) continue;
+      const crowd = shelfItems(S).reduce((t, it) => t + (it.pos && dist(it.pos.x, it.pos.y, x, y) < 26 ? 1 : 0), 0);
+      const d = dist(x, y, a.x, a.y) + crowd * 200;
+      if (d < bd) { bd = d; best = { x, y }; }
+    }
+  }
+  return best || { x: r0.x + 10, y: r0.y + r0.h - 10 };
 }
 
 // Where an NPC waits with nothing to do: a staging yard once it's all built, else somewhere handy.
@@ -985,8 +1120,19 @@ function npcThink(S, a, dt) {
     }
     case 'bolt': case 'fasten': return doBolt(S, a, job);
     case 'grab':
+      if (job.item) {
+        // Stand by that piece, so it's the nearest one when grabbing.
+        if (inReady(S, a) && shelfPick(S, a) === job.item) return { ...NONE, a: tapA(a) };
+        return { ...NONE, ...goTo(S, a, job.spot.x, job.spot.y, 2) };
+      }
       if (inReady(S, a)) return { ...NONE, a: tapA(a) };
       return { ...NONE, ...goTo(S, a, job.spot.x, job.spot.y, 3) };
+    case 'clear':
+      if (onBench(S, a)) return { ...NONE, a: tapA(a) };
+      return { ...NONE, ...goTo(S, a, job.spot.x, job.spot.y, 3) };
+    case 'stow':
+      if (canSetDown(S, a) && dist(job.spot.x, job.spot.y, a.x, a.y) < 6) return { ...NONE, a: tapA(a) };
+      return { ...NONE, ...goTo(S, a, job.spot.x, job.spot.y, 2) };
     case 'assemble':
       if (distToRect(a.x, a.y, S.assembly) <= STATION_REACH - 2 && assemblyFor(S, a)) return { ...NONE, x: true };
       return { ...NONE, ...goTo(S, a, job.spot.x, job.spot.y, 3) };

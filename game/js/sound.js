@@ -261,6 +261,8 @@ export function stopMusic() { fadeOut(); songName = null; }
 export const nowPlaying = () => (timer ? songName : null);
 // For checking: is the music holding because the page isn't drawing?
 export const musicHeld = () => held;
+// Setting a piece down in the ready area: a lighter clank.
+SFX.putdown = () => { noise(0.08, { vol: 0.14, freq: 1400, q: 5 }); tone(200, 0.12, { type: 'triangle', vol: 0.06, slide: -50 }); };
 // Countdown: three beeps then a higher one for GO.
 SFX.count = () => tone(660, 0.18, { type: 'square', vol: 0.09 });
 SFX.go = () => { tone(1320, 0.4, { type: 'square', vol: 0.1 }); tone(990, 0.4, { type: 'triangle', vol: 0.08 }); };

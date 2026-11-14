@@ -305,17 +305,17 @@ export function draw(g, S, V, ui) {
   // Staging: a workshop floor with hazard stripes for assembling, a timber deck for what's ready.
   {
     const a = S.assembly, rd = S.ready;
-    poly(g, ground(a.x + 2, a.y + 2, a.w - 4, a.h - 4)); g.fillStyle = '#b9c4d3'; g.fill();
-    g.beginPath();
-    for (const [x0, y0, w, h] of [[a.x + 2, a.y + 2, a.w - 4, a.h - 4], [a.x + 6, a.y + 6, a.w - 12, a.h - 12]]) { const q = ground(x0, y0, w, h); g.moveTo(...q[0]); q.slice(1).forEach((pt) => g.lineTo(...pt)); g.closePath(); }
-    g.fillStyle = hazardFor(g); g.fill('evenodd');
     poly(g, ground(rd.x + 2, rd.y + 2, rd.w - 4, rd.h - 4)); g.fillStyle = '#c99a62'; g.fill();
     g.strokeStyle = 'rgba(92,58,24,0.45)'; g.lineWidth = 1;
     for (let yy = rd.y + 2 + 7; yy < rd.y + rd.h - 2; yy += 7) { g.beginPath(); g.moveTo(...P(rd.x + 2, yy)); g.lineTo(...P(rd.x + rd.w - 2, yy)); g.stroke(); }
     for (let yy = rd.y + 2, row = 0; yy < rd.y + rd.h - 2; yy += 7, row++) for (let xx = rd.x + 2 + (row % 2 ? 18 : 36); xx < rd.x + rd.w - 2; xx += 36) { g.beginPath(); g.moveTo(...P(xx, yy)); g.lineTo(...P(xx, Math.min(yy + 7, rd.y + rd.h - 2))); g.stroke(); }
     box(g, P, rd.x + 2, rd.y + rd.h - 4, rd.x + rd.w - 2, rd.y + rd.h - 2, 0, 1.5, '#d8aa70', '#8a5a2b');
+    poly(g, ground(a.x + 2, a.y + 2, a.w - 4, a.h - 4)); g.fillStyle = '#b9c4d3'; g.fill();
+    g.beginPath();
+    for (const [x0, y0, w, h] of [[a.x + 2, a.y + 2, a.w - 4, a.h - 4], [a.x + 6, a.y + 6, a.w - 12, a.h - 12]]) { const q = ground(x0, y0, w, h); g.moveTo(...q[0]); q.slice(1).forEach((pt) => g.lineTo(...pt)); g.closePath(); }
+    g.fillStyle = hazardFor(g); g.fill('evenodd');
     g.textAlign = 'center'; g.font = `900 ${Math.max(11, k * 4.6)}px system-ui`;
-    for (const [r, c, name] of [[a, '#1e3a8a', 'ASSEMBLY'], [rd, '#7c4a14', 'READY']]) {
+    for (const [r, c, name] of [[a, '#1e3a8a', S.settings.freeStaging ? 'BENCH' : 'ASSEMBLY'], [rd, '#7c4a14', 'READY']]) {
       const [x, y] = P(r.x + r.w / 2, r.y + r.h - 9);
       g.fillStyle = c; g.globalAlpha = 0.55; g.fillText(name, x, y); g.globalAlpha = 1;
     }
@@ -333,7 +333,7 @@ export function draw(g, S, V, ui) {
 
   // Pieces at full size in the ready and assembly areas.
   const ready = readyLayout(S), building = benchLayout(S);
-  const next = shelfItems(S)[0];
+  const next = S.settings.freeStaging ? null : shelfItems(S)[0]; // picking pieces yourself: no hints
 
   // Shadows first (under everything), then pieces and builders back to front.
   const sag = S.support.fallen ? 3 + Math.sin(now * 20) * 0.6 : 0;
@@ -367,7 +367,7 @@ export function draw(g, S, V, ui) {
     } else if (d.it) {
       const isNext = d.it === next;
       const ms = d.it.memberIds.map((id) => S.members.get(id)).filter(Boolean).sort((a, b) => a.m.centroid[1] - b.m.centroid[1]);
-      if (d.where === 'bench') g.globalAlpha = 0.45 + 0.4 * (d.it.progress / d.it.time);
+      if (d.where === 'bench' && d.it.status !== 'made') g.globalAlpha = 0.45 + 0.4 * (d.it.progress / d.it.time);
       for (const mm of ms) drawMember(g, P, mm, { color: PLANE[mm.m.plane], shift: d.sl, outline: isNext ? `rgba(250,204,21,${0.6 + 0.4 * Math.sin(now * 6)})` : null });
       g.globalAlpha = 1;
     } else drawActor(g, S, V, d.a, ui);
@@ -387,6 +387,11 @@ export function draw(g, S, V, ui) {
   for (const [it, sl] of building) {
     const b = itemBox(S, it);
     const [x, y] = P(sl.x, sl.y, b.z1 - b.z0 + 6);
+    if (it.status === 'made') {
+      // Made, waiting on the bench for someone to move it.
+      chip(g, x, y - 13 + Math.sin(now * 6) * 1.5, '#' + (it.idx + 1) + ' made: move it!', '#7c3aed', k);
+      continue;
+    }
     const w = Math.max(30, (b.x1 - b.x0) * k * 0.7);
     rrect(g, x - w / 2, y - 4, w, 8, 4); g.fillStyle = 'rgba(15,23,42,0.75)'; g.fill();
     rrect(g, x - w / 2 + 1, y - 3, Math.max(0, (w - 2) * Math.min(1, it.progress / it.time)), 6, 3); g.fillStyle = '#22c55e'; g.fill();
@@ -742,7 +747,7 @@ function drawHud(g, S, V, ui) {
   const n = S.items.length;
   const cw = Math.min(30, (W - 32) / n);
   const x0 = W / 2 - (cw * n) / 2;
-  const COL = { waiting: '#334155', building: '#1d4ed8', shelf: '#16a34a', carried: '#ca8a04', placed: '#0f172a' };
+  const COL = { waiting: '#334155', building: '#1d4ed8', made: '#7c3aed', shelf: '#16a34a', carried: '#ca8a04', placed: '#0f172a' };
   S.items.forEach((it, i) => {
     const x = x0 + i * cw;
     g.fillStyle = it.loose ? '#f59e0b' : COL[it.status];

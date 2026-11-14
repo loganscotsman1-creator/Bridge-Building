@@ -120,7 +120,7 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart }) {
         for (const e of S.events.splice(0)) {
           SFX[e.kind]?.();
           effect(e);
-          const text = e.kind === 'fall' ? `Bridge fell! +${S.settings.fallPenalty} s` : e.kind === 'stands' ? 'The bridge stands on its own!' : e.kind === 'ready' && e.made ? itemLabel(e.item) + ' is ready' : e.kind === 'held' ? 'Holding again: back to work' : null;
+          const text = e.kind === 'fall' ? `Bridge fell! +${S.settings.fallPenalty} s` : e.kind === 'stands' ? 'The bridge stands on its own!' : e.kind === 'ready' && e.made ? itemLabel(e.item) + (S.settings.freeStaging ? ' is made: move it off the bench' : ' is ready') : e.kind === 'held' ? 'Holding again: back to work' : null;
           if (text) ui.banners.push({ text, color: e.kind === 'fall' ? '#dc2626' : e.kind === 'ready' ? '#2563eb' : '#16a34a', t0: ui.now });
           if (e.kind === 'done') { finished = true; finishedAt = ui.now; }
         }

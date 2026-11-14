@@ -40,6 +40,11 @@ takes to fasten.
   appears in the ready area when it's made; a single piece as soon as every assembly before it
   is made. Grabbing from anywhere in the ready area always takes the next item in the order
   (marked NEXT). Keyboard players see their keys over their heads instead of controller buttons.
+- **Pick pieces yourself** (a setup option): every single piece waits in the ready area from
+  the start and grabbing takes the one nearest you; there's no NEXT marker, so runners keep track
+  of the order. Assemblies are made one at a time on a small bench in the yard's top-right corner
+  (the ready area is the rest of the yard), and each must be taken off (set it down in the ready
+  area with A, or run it to the bridge) before the next can be made. Computers do the same.
 - **Pace:** the game runs quicker than real life by default: nuts take 60% of the sequencer's
   time, every assembly takes 4 s (set it in the setup screen; 0 uses the sequencer's times),
   builders walk and carry faster, and a fall costs 20 s. Each run opens with a window showing

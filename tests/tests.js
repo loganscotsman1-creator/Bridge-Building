@@ -974,11 +974,11 @@ await test('site zones snap to the site edges and to each other, and lengths can
 });
 
 // ---------- Over Engineered (the game) ----------
-function game({ players = [['p1', 'west'], ['p2', 'east']], npcs = {}, edit } = {}) {
+function game({ players = [['p1', 'west'], ['p2', 'east']], npcs = {}, edit, settings: extra = {} } = {}) {
   const project = normalizeProject(createExampleProject());
   const order = defaultOrder(project);
   if (edit) edit(order);
-  const settings = { ...defaultSettings(project, 2), fallPenalty: 30 };
+  const settings = { ...defaultSettings(project, 2), fallPenalty: 30, ...extra };
   const S = createGame({ project, order, settings, players: players.map(([id, side]) => ({ id, name: id, color: '#000', side })), npcs });
   const input = new Map(players.map(([id]) => [id, { mx: 0, my: 0 }]));
   const tick = (secs = 1 / 60) => { for (let i = 0; i < Math.round(secs * 60); i++) stepGame(S, input, 1 / 60); };
@@ -1224,6 +1224,42 @@ await test('game: computers build the whole bridge by themselves, working down t
   assert(com.some((a) => a.stats.piecesPlaced > 0) && com.some((a) => a.stats.handoffs > 0), 'COMs placed pieces and passed them across the river');
   const holder = S.actors.find((a) => a.npc === 'holder');
   assert(holder.stats.holdTotal > 5 && holder.stats.boltsPlaced + holder.stats.nutsFastened > 0, 'the holder held the bridge and bolted while holding');
+});
+
+await test('game: picking pieces yourself: a corner bench, the nearest piece, and one assembly at a time', () => {
+  const { S, press, hold, put, tick, actor } = game({ players: [['p1', 'east'], ['p2', 'east']], settings: { freeStaging: true } });
+  const y = S.yard, z = S.assembly;
+  assert(Math.abs(z.x + z.w - (y.x + y.w)) < 1e-9 && z.y === y.y && z.w < y.w * 0.75 && z.h < y.h * 0.65, 'a small bench in the top-right corner: ' + JSON.stringify(z));
+  assert(S.ready.w === y.w && S.ready.h === y.h, 'the ready area is the rest of the yard');
+  const singles = S.items.filter((it) => !it.multi);
+  assert(singles.every((it) => it.status === 'shelf' && it.pos), 'every single piece is out from the start');
+  assert(singles.every((it) => !(it.pos.x > z.x && it.pos.y < z.y + z.h)), 'none sits on the bench');
+  // Grab takes the nearest piece, not the next in order.
+  const later = singles[4];
+  put('p1', later.pos.x, later.pos.y);
+  press('p1', 'a');
+  assert(actor('p1').carrying === later.id, 'grabbed the piece nearest me, #' + (later.idx + 1));
+  // Set it down somewhere else in the ready area.
+  put('p1', y.x + 30, y.y + y.h - 30);
+  press('p1', 'a');
+  assert(later.status === 'shelf' && Math.hypot(later.pos.x - (y.x + 30), later.pos.y - (y.y + y.h - 30)) < 14 && !actor('p1').carrying, 'set down where I stood');
+  // One assembly at a time, and it stays on the bench until moved.
+  put('p2', z.x + z.w / 2, z.y + z.h / 2);
+  hold('p2', 'x', true); tick(S.items[0].time + 0.3); tick(2);
+  assert(S.items[0].status === 'made' && S.items[1].status === 'waiting', 'made, and the next waits for the bench: ' + S.items[0].status + '/' + S.items[1].status);
+  hold('p2', 'x', false); tick();
+  press('p2', 'a');
+  assert(actor('p2').carrying === S.items[0].id, 'took it off the bench');
+  put('p1', z.x + z.w / 2, z.y + z.h / 2);
+  hold('p1', 'x', true); tick(0.5);
+  assert(S.items[1].status === 'building', 'bench clear: the next one starts');
+});
+
+await test('game: computers build the whole bridge picking pieces themselves', () => {
+  const { S, tick } = game({ players: [['p1', 'west']], settings: { freeStaging: true }, npcs: { holder: true, helpers: [{ side: 'east' }, { side: 'east' }, { side: 'west' }] } });
+  for (let i = 0; i < 300 && !S.done; i++) tick(5);
+  const placed = S.items.filter((it) => it.status === 'placed').length;
+  assert(S.done, `finished: ${placed}/${S.items.length} placed, t=${S.t.toFixed(0)}, ${S.items.filter((it) => it.status !== 'placed').map((it) => '#' + (it.idx + 1) + ':' + it.status).join(' ')}; ` + S.actors.filter((a) => a.npc).map((a) => a.id + ':' + (a.task?.kind || '-') + (a.carrying ? '*' : '')).join(' '));
 });
 
 await test('game: roaming computers work at the computer speed factor (80% by default)', () => {

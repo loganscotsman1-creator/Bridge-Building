@@ -30,6 +30,7 @@ const isPad = (device) => !KEYBOARDS[device];
 // Player 1's list of things to move through with the stick, in screen order.
 function navList(setup) {
   return [
+    { id: 'staging' },
     { id: 'builders' },
     ...(setup.builders === 5 ? [{ id: 'npcRole' }] : []),
     ...npcList(setup).helpers.map((_, k) => ({ id: 'com' + k })),
@@ -39,6 +40,7 @@ function navList(setup) {
 }
 // Left/right on one of player 1's settings.
 function nudge(setup, id, dir) {
+  if (id === 'staging') return { ...setup, settings: { ...setup.settings, freeStaging: !setup.settings.freeStaging } };
   if (id === 'builders') return { ...setup, builders: Math.max(4, Math.min(6, setup.builders + dir)) };
   if (id === 'npcRole') return { ...setup, npcRole: setup.npcRole === 'holder' ? 'assembler' : 'holder' };
   if (id.startsWith('com')) {
@@ -240,6 +242,14 @@ export function Setup({ project, model, from, order, setOrder, setup, setSetup, 
           <button onClick=${openProject}>Open project file…</button>
           ${from !== 'example' && html`<button onClick=${() => onProject(createExampleProject(), 'example')}>Use the example bridge</button>`}
         </div>
+        <h3>Staging</h3>
+        <div class=${'oe-side' + (navId === 'staging' ? ' oe-navfocus' : '')}>
+          <button class=${!setup.settings.freeStaging ? 'on' : ''} onClick=${() => setS({ freeStaging: false })}>Pieces come out in order</button>
+          <button class=${setup.settings.freeStaging ? 'on' : ''} onClick=${() => setS({ freeStaging: true })}>Pick pieces yourself</button>
+        </div>
+        <p class="oe-hint">${setup.settings.freeStaging
+          ? 'Every piece waits in the ready area and grabbing takes the one nearest you. Assemblies are made one at a time on a small bench in the corner, and each has to be moved off (set down in the ready area, or run to the bridge) before the next. Runners keep track of what goes next.'
+          : 'Pieces appear in the ready area in build order, and grabbing always takes the next one.'}</p>
         <${OrderSummary} project=${project} model=${model} order=${order} settings=${setup.settings} />
         <div class="row wrap">
           <button class="primary" onClick=${onEditOrder}>Edit the order…</button>
