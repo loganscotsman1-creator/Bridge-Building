@@ -98,6 +98,13 @@ export const SFX = {
     [523, 659, 784, 1046, 784, 1046, 1318].forEach((f, i) => tone(f, i === 6 ? 0.8 : 0.22, { type: 'triangle', vol: 0.09, delay: i * 0.12 }));
     noise(1.2, { vol: 0.08, type: 'highpass', freq: 6000, delay: 0.72 });
   },
+  // Two builders run into each other: a cartoon boing.
+  bump: () => { tone(220, 0.35, { type: 'sine', vol: 0.12, slide: 520 }); tone(160, 0.12, { type: 'triangle', vol: 0.08 }); noise(0.05, { vol: 0.08, type: 'lowpass', freq: 800 }); },
+  // A piece clatters to the ground.
+  drop: () => { noise(0.18, { vol: 0.16, type: 'bandpass', freq: 1400, q: 1.2 }); tone(170, 0.18, { type: 'square', vol: 0.05, slide: -60 }); tone(2300, 0.12, { type: 'sine', vol: 0.02, delay: 0.03 }); },
+  // ...or into the river.
+  splash: () => { noise(0.45, { vol: 0.16, type: 'lowpass', freq: 1800, to: 400 }); tone(300, 0.12, { type: 'sine', vol: 0.05, slide: -180, delay: 0.05 }); },
+  returned: () => { tone(520, 0.14, { type: 'sine', vol: 0.06 }); tone(780, 0.18, { type: 'sine', vol: 0.06, delay: 0.1 }); },
   // A soft footstep.
   step: () => noise(0.04, { vol: 0.025, type: 'lowpass', freq: 500 }),
 };

@@ -87,6 +87,10 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart, quick
       else if (e.kind === 'pass') { const a = actorAt(e.from), b = actorAt(e.to); addFx(ui, 'swoosh', a.x, a.y, 0, { x2: b.x, y2: b.y, color: b.color }); }
       else if (e.kind === 'ready' && e.made) { const sl = shelfSlot(S, S.items.find((x) => x.id === e.item)); if (sl) { addFx(ui, 'ring', sl.x, sl.y, 0, { color: '#facc15', size: 24, life: 0.7 }); addFx(ui, 'dust', sl.x, sl.y, 0); } }
       else if (e.kind === 'fall') { const p = bridgeAt(); addFx(ui, 'splash', p.x, p.y, p.z); addFx(ui, 'text', p.x, p.y, p.z + 10, { text: '+' + S.settings.fallPenalty + ' s', color: '#f87171', life: 1.8 }); ui.shakeUntil = ui.now + 0.6; }
+      else if (e.kind === 'bump') { addFx(ui, 'ring', e.x, e.y, 18, { color: '#fde047', size: 14 }); addFx(ui, 'text', e.x, e.y, 24, { text: 'BONK!', color: '#fde047', life: 1 }); }
+      else if (e.kind === 'drop' && e.river) { addFx(ui, 'ring', e.x, e.y, 0, { color: '#bfdbfe', size: 16, life: 0.7 }); addFx(ui, 'dust', e.x, e.y, 0); addFx(ui, 'text', e.x, e.y, 12, { text: '+' + S.settings.bumpPenalty + ' s', color: '#f87171', life: 1.6 }); }
+      else if (e.kind === 'drop') { addFx(ui, 'dust', e.x, e.y, 0); addFx(ui, 'text', e.x, e.y, 12, { text: '+' + S.settings.bumpPenalty + ' s', color: '#f87171', life: 1.6 }); }
+      else if (e.kind === 'returned') { const it = S.items.find((x) => x.id === e.item); const sl = it && shelfSlot(S, it); if (sl) addFx(ui, 'ring', sl.x, sl.y, 0, { color: '#38bdf8', size: 20, life: 0.7 }); }
       else if (e.kind === 'held') { for (const id of S.support.holders.keys()) { const a = actorAt(id); addFx(ui, 'ring', a.x, a.y, 0, { color: '#22c55e', size: 14 }); } }
       else if (e.kind === 'stands') { const p = bridgeAt(); addFx(ui, 'confetti', p.x, p.y, p.z, { n: 90 }); addFx(ui, 'text', p.x, p.y, p.z + 14, { text: 'It stands!', color: '#4ade80', life: 2 }); }
       else if (e.kind === 'done') { const p = bridgeAt(); addFx(ui, 'confetti', p.x, p.y, p.z, { n: 200 }); addFx(ui, 'text', p.x, p.y, p.z + 16, { text: 'BUILT!', color: '#facc15', life: 2.4 }); }
@@ -150,10 +154,10 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart, quick
         if (stepped) endFrame(); // (a tap waits for the next step)
         if (stepped) loopSounds(dtReal);
         for (const e of S.events.splice(0)) {
-          SFX[e.kind]?.();
+          if (e.kind === 'drop' && e.river) SFX.splash(); else SFX[e.kind]?.();
           effect(e);
-          const text = e.kind === 'fall' ? `Bridge fell! +${S.settings.fallPenalty} s` : e.kind === 'stands' ? 'The bridge stands on its own!' : e.kind === 'ready' && e.made ? itemLabel(e.item) + (S.settings.freeStaging ? ' is made: move it off the bench' : ' is ready') : e.kind === 'held' ? 'Holding again: back to work' : null;
-          if (text) ui.banners.push({ text, color: e.kind === 'fall' ? '#dc2626' : e.kind === 'ready' ? '#2563eb' : '#16a34a', t0: ui.now });
+          const text = e.kind === 'drop' ? `${itemLabel(e.item)} dropped${e.river ? ' in the river' : ''}! +${S.settings.bumpPenalty} s` : e.kind === 'returned' ? `${itemLabel(e.item)} floated back to the ready area` : e.kind === 'fall' ? `Bridge fell! +${S.settings.fallPenalty} s` : e.kind === 'stands' ? 'The bridge stands on its own!' : e.kind === 'ready' && e.made ? itemLabel(e.item) + (S.settings.freeStaging ? ' is made: move it off the bench' : ' is ready') : e.kind === 'held' ? 'Holding again: back to work' : null;
+          if (text) ui.banners.push({ text, color: e.kind === 'fall' || e.kind === 'drop' ? '#dc2626' : e.kind === 'ready' || e.kind === 'returned' ? '#2563eb' : '#16a34a', t0: ui.now });
           if (e.kind === 'done') { finished = true; finishedAt = ui.now; }
         }
         if (ui.banners.length > 6) ui.banners.splice(0, ui.banners.length - 6);

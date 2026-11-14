@@ -53,6 +53,8 @@ export function defaultSettings(project, fastenTime) {
     reach: tm.maxReach || 40,
     comSpeed: 80, // % of players' speeds that computers work at once they're roaming (see pace)
     freeStaging: false, // pick pieces yourself (see the top of this file)
+    bumps: false, // running into each other leaves both dizzy, and drops what they carry (see bump)
+    bumpPenalty: 5, // s added for each piece dropped in a bump
     passReach: tm.passReach || 90,
   };
 }
@@ -598,6 +600,8 @@ export function actionA(S, a) {
   }
   const o = passer(S, a);
   if (o) return { kind: 'take', label: 'Take from ' + o.name, target: o };
+  const lying = droppedNear(S, a);
+  if (lying) return { kind: 'grab', label: 'Pick up #' + (lying.idx + 1), target: lying };
   const made = S.settings.freeStaging && onBench(S, a) && madeItem(S);
   if (made) return { kind: 'grab', label: 'Take #' + (made.idx + 1) + ' off the bench', target: made };
   const it = shelfPick(S, a);
@@ -754,6 +758,83 @@ function move(S, a, mx, my, dt) {
   const p = clampPos(S, a.side, x, y);
   a.x = p.x; a.y = p.y;
 }
+// ---------- bumping into each other (a setup option) ----------
+// Two builders who run into each other are both dizzy for a moment, bounce apart, and drop whatever
+// they're carrying where they stand (a time penalty for each piece). One dropped over the river
+// floats slowly downstream (north to south) and, at the end, turns up back in the ready area.
+const DIZZY = 1, BUMP_AGAIN = 1.2, BOUNCE = 7, FLOAT_SPEED = 10, PICKUP_REACH = 30;
+function bumps(S) {
+  const ready = (a) => !a.anchor && !(a.dizzyUntil > S.t) && !(a.bumpAgain > S.t);
+  for (let i = 0; i < S.actors.length; i++) {
+    for (let j = i + 1; j < S.actors.length; j++) {
+      const p = S.actors[i], q = S.actors[j];
+      const d = dist(p.x, p.y, q.x, q.y);
+      if (d >= 2 * R - 0.3 || d < 1e-6 || !ready(p) || !ready(q)) continue;
+      const ux = (q.x - p.x) / d, uy = (q.y - p.y) / d;
+      // Only running into someone counts, not standing next to them.
+      const into = (a, sx, sy) => a.moving && a.face[0] * sx + a.face[1] * sy > 0.3;
+      if (!into(p, ux, uy) && !into(q, -ux, -uy)) continue;
+      S.events.push({ kind: 'bump', x: (p.x + q.x) / 2, y: (p.y + q.y) / 2, who: [p.id, q.id] });
+      for (const [a, sx, sy] of [[p, -ux, -uy], [q, ux, uy]]) {
+        a.dizzyUntil = S.t + DIZZY;
+        a.bumpAgain = S.t + DIZZY + BUMP_AGAIN;
+        if (a.carrying) dropPiece(S, a);
+        const b = clampPos(S, a.side, a.x + sx * BOUNCE, a.y + sy * BOUNCE);
+        a.x = b.x; a.y = b.y;
+      }
+    }
+  }
+}
+// Drop what a builder carries where they stand (just in front, if they were holding it out).
+function dropPiece(S, a) {
+  const it = S.items.find((x) => x.id === a.carrying);
+  const x = a.x + (a.extending ? a.face[0] * 14 : 0), y = a.y;
+  a.carrying = null;
+  a.extending = false;
+  if (!it) return;
+  const rv = S.river;
+  const inRiver = rv && x > rv.x - 10 && x < rv.x + rv.w + 10;
+  it.status = inRiver ? 'floating' : 'dropped';
+  it.pos = inRiver ? { x: Math.max(rv.x + 4, Math.min(rv.x + rv.w - 4, x)), y: Math.max(rv.y, y) } : { x, y };
+  S.penalties += S.settings.bumpPenalty ?? 5;
+  a.stats.drops++;
+  S.events.push({ kind: 'drop', item: it.id, river: !!inRiver, by: a.id, x: it.pos.x, y: it.pos.y });
+}
+// Pieces in the river drift downstream; one that reaches the end turns up in the ready area.
+function floatPieces(S, dt) {
+  const rv = S.river;
+  for (const it of S.items) {
+    if (it.status !== 'floating') continue;
+    it.pos.y += FLOAT_SPEED * dt;
+    if (rv) it.pos.x += Math.max(-4 * dt, Math.min(4 * dt, rv.x + rv.w / 2 - it.pos.x)); // out into the current
+    if (!rv || it.pos.y > rv.y + rv.h + 8) {
+      it.status = 'shelf';
+      it.pos = S.settings.freeStaging ? openSpot(S) : null;
+      S.events.push({ kind: 'returned', item: it.id });
+    }
+  }
+}
+// Somewhere free in the ready area (away from the bench), for a piece that floated back.
+function openSpot(S) {
+  const r0 = S.ready, bl = r0.blocked;
+  for (let k = 0; k < 60; k++) {
+    const x = r0.x + 10 + Math.random() * (r0.w - 20), y = r0.y + 10 + Math.random() * (r0.h - 20);
+    if (bl && x > bl.x - 10 && y < bl.y + bl.h + 10) continue;
+    if (shelfItems(S).every((o) => !o.pos || dist(o.pos.x, o.pos.y, x, y) > 14)) return { x, y };
+  }
+  return { x: r0.x + 12, y: r0.y + r0.h - 12 };
+}
+// A dropped piece within reach on this builder's side of the river.
+function droppedNear(S, a) {
+  let best = null, bd = PICKUP_REACH;
+  for (const it of S.items) {
+    if (it.status !== 'dropped' || !it.pos || S.sideOfX(it.pos.x) !== a.side) continue;
+    const d = Math.min(dist(it.pos.x, it.pos.y, a.x, a.y), itemDist(S, it, a.x, a.y));
+    if (d <= bd) { bd = d; best = it; }
+  }
+  return best;
+}
+
 function separate(S) {
   for (let i = 0; i < S.actors.length; i++) {
     for (let j = i + 1; j < S.actors.length; j++) {
@@ -775,6 +856,14 @@ export function stepGame(S, inputs, dt) {
   for (const a of S.actors) {
     const inp = a.npc ? steer(S, a, npcThink(S, a, dt)) : inputs.get(a.id) || { mx: 0, my: 0, a: false, x: false, lb: false };
     a.npcInput = a.npc ? inp : null;
+    // Dizzy after a bump: no moving or working until it wears off.
+    if (a.dizzyUntil > S.t) {
+      a.moving = false; a.extending = false; a.work = null;
+      a.prev = { a: !!inp.a, x: !!inp.x, lb: !!inp.lb };
+      a.activity = 'idle';
+      a.stats.time.idle += dt;
+      continue;
+    }
     move(S, a, inp.mx || 0, inp.my || 0, dt);
 
     // A holder who walks out along the bridge keeps up with it.
@@ -801,7 +890,9 @@ export function stepGame(S, inputs, dt) {
     a.stats.time[a.activity] += dt;
     if (S.support.holders.has(a.id)) a.stats.holdTotal += dt;
   }
+  if (S.settings.bumps) bumps(S);
   separate(S);
+  floatPieces(S, dt);
 
   // Holding the bridge up.
   const sup = S.support;
@@ -911,6 +1002,7 @@ function stillOn(S, a, job) {
     case 'bolt': return !a.carrying && job.bolt.state === 'needed' && !S.support.fallen;
     case 'fasten': return !a.carrying && job.bolt.state === 'placed' && !S.support.fallen;
     case 'grab': return !a.carrying && (job.item ? job.item.status === 'shelf' : shelfItems(S).length > 0);
+    case 'pickup': return !a.carrying && job.item.status === 'dropped';
     case 'clear': return !a.carrying && !!madeItem(S);
     case 'stow': return a.carrying === job.item.id;
     case 'hold': return !S.support.holders.size && (S.support.needed || S.support.fallen) && !S.support.standing;
@@ -971,6 +1063,12 @@ function jobs(S, a) {
     if (!o.extending && (itemSpot(S, o.side, it, o) || !itemSpot(S, a.side, it, a))) continue;
     const q = edgeSpot(S, a.side, o.y);
     if (!taken.has('take:' + o.id)) out.push({ kind: 'take', key: 'take:' + o.id, from: o, spot: q, cost: dist(q.x, q.y, a.x, a.y) - 300 });
+  }
+  // Pick up a piece someone dropped on this side.
+  for (const it of S.items) {
+    if (it.status !== 'dropped' || !it.pos || S.sideOfX(it.pos.x) !== a.side || taken.has('drop:' + it.id)) continue;
+    const q = clampPos(S, a.side, it.pos.x, it.pos.y);
+    out.push({ kind: 'pickup', key: 'drop:' + it.id, item: it, spot: q, cost: dist(q.x, q.y, a.x, a.y) - 200 });
   }
   const bj = boltJob(S, a, taken);
   if (bj) out.push(bj);
@@ -1127,6 +1225,9 @@ function npcThink(S, a, dt) {
       }
       if (inReady(S, a)) return { ...NONE, a: tapA(a) };
       return { ...NONE, ...goTo(S, a, job.spot.x, job.spot.y, 3) };
+    case 'pickup':
+      if (droppedNear(S, a) === job.item) return { ...NONE, a: tapA(a) };
+      return { ...NONE, ...goTo(S, a, job.spot.x, job.spot.y, 2) };
     case 'clear':
       if (onBench(S, a)) return { ...NONE, a: tapA(a) };
       return { ...NONE, ...goTo(S, a, job.spot.x, job.spot.y, 3) };

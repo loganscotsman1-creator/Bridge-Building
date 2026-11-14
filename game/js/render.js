@@ -347,6 +347,13 @@ export function draw(g, S, V, ui) {
 
   // Pieces at full size in the ready and assembly areas.
   const ready = ui.readyLayout ? ui.readyLayout() : readyLayout(S), building = ui.replay ? new Map() : benchLayout(S);
+  // Pieces dropped in a bump: lying where they fell, or bobbing down the river.
+  for (const it of S.items) {
+    if ((it.status !== 'dropped' && it.status !== 'floating') || !it.pos) continue;
+    const b = itemBox(S, it);
+    const bob = it.status === 'floating' ? Math.sin(now * 3 + it.idx) * 0.8 - 2 : 0;
+    ready.set(it, { dx: it.pos.x - (b.x0 + b.x1) / 2, dy: it.pos.y - (b.y0 + b.y1) / 2, dz: -b.z0 + bob, x: it.pos.x, y: it.pos.y });
+  }
   const next = S.settings.freeStaging ? null : shelfItems(S)[0]; // picking pieces yourself: no hints
 
   // Shadows first (under everything), then pieces and builders back to front.
@@ -391,7 +398,7 @@ export function draw(g, S, V, ui) {
   for (const [it, sl] of ready) {
     const b = itemBox(S, it);
     const [x, y] = P(sl.x, sl.y, b.z1 - b.z0 + 5);
-    chip(g, x, y, '#' + (it.idx + 1) + (it.buddy ? '★' : ''), it === next ? '#ca8a04' : 'rgba(15,23,42,0.8)', k);
+    chip(g, x, y, '#' + (it.idx + 1) + (it.buddy ? '★' : '') + (it.status === 'dropped' ? ' dropped!' : it.status === 'floating' ? ' ≈' : ''), it === next ? '#ca8a04' : it.status === 'dropped' ? '#dc2626' : it.status === 'floating' ? '#0284c7' : 'rgba(15,23,42,0.8)', k);
     if (it === next) {
       const [nx, ny] = P(sl.x, sl.y, b.z1 - b.z0 + 13 + Math.sin(now * 5) * 1.5);
       g.fillStyle = '#facc15'; g.font = `900 ${Math.max(10, k * 3.6)}px system-ui`; g.textAlign = 'center';
@@ -481,6 +488,11 @@ export function draw(g, S, V, ui) {
   drawHud(g, S, V, ui);
 }
 
+function star(g, x, y, r) {
+  g.beginPath();
+  for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + (i * Math.PI) / 5, rr = i % 2 ? r * 0.45 : r; i ? g.lineTo(x + rr * Math.cos(a), y + rr * Math.sin(a)) : g.moveTo(x + rr * Math.cos(a), y + rr * Math.sin(a)); }
+  g.closePath(); g.fillStyle = '#fde047'; g.fill(); g.strokeStyle = '#a16207'; g.lineWidth = 1; g.stroke();
+}
 function hexagon(g, x, y, r) {
   g.beginPath();
   for (let i = 0; i < 6; i++) { const a = Math.PI / 6 + (i * Math.PI) / 3; const px = x + r * Math.cos(a), py = y + r * Math.sin(a) * 0.8; i ? g.lineTo(px, py) : g.moveTo(px, py); }
@@ -694,7 +706,15 @@ function drawActorTop(g, S, V, a, ui) {
     g.save(); g.translate(wx + 16, wy - 6); g.rotate(sw);
     g.fillStyle = '#92400e'; g.fillRect(-1, -2, 2.5, 11); g.fillStyle = '#475569'; g.fillRect(-4, -4, 9, 4); g.restore();
   }
-  if (a.npc || !a.prompt) return;
+  // Dizzy: stars circling their head.
+  if (a.dizzyUntil > S.t) {
+    const [hx, hy] = P(a.x, a.y, 26);
+    for (let i = 0; i < 3; i++) {
+      const ang = ui.now * 7 + (i * Math.PI * 2) / 3;
+      star(g, hx + Math.cos(ang) * 9 * k * 0.5, hy + Math.sin(ang) * 3.5 * k * 0.5, Math.max(3, k * 1.6));
+    }
+  }
+  if (a.npc || !a.prompt || a.dizzyUntil > S.t) return;
   const chips = [['A', a.prompt.A], ['X', a.prompt.X], ['LB', a.prompt.LB]].filter(([, p]) => p && p.kind !== 'holding');
   if (!chips.length) return;
   // Keyboard players see their keys; controller players see the buttons.
@@ -763,7 +783,7 @@ function drawHud(g, S, V, ui) {
   const n = S.items.length;
   const cw = Math.min(30, (W - 32) / n);
   const x0 = W / 2 - (cw * n) / 2;
-  const COL = { waiting: '#334155', building: '#1d4ed8', made: '#7c3aed', shelf: '#16a34a', carried: '#ca8a04', placed: '#0f172a' };
+  const COL = { waiting: '#334155', building: '#1d4ed8', made: '#7c3aed', shelf: '#16a34a', carried: '#ca8a04', placed: '#0f172a', dropped: '#dc2626', floating: '#0284c7' };
   S.items.forEach((it, i) => {
     const x = x0 + i * cw;
     g.fillStyle = it.loose ? '#f59e0b' : COL[it.status];
@@ -841,6 +861,7 @@ function banner(g, W, y, text, color, alpha, scale = 1) {
 }
 
 function activityText(S, a) {
+  if (a.dizzyUntil > S.t) return 'Dizzy!';
   if (a.anchor?.locked) return 'Holding a buddy piece: someone else bolts it';
   if (S.support.holders.has(a.id)) return 'Holding the bridge' + (a.work ? ' + fastening' : '');
   if (a.anchor?.kind === 'piece') return 'Holding a piece until it has its bolts';

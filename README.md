@@ -44,6 +44,11 @@ takes to fasten.
   appears in the ready area when it's made; a single piece as soon as every assembly before it
   is made. Grabbing from anywhere in the ready area always takes the next item in the order
   (marked NEXT). Keyboard players see their keys over their heads instead of controller buttons.
+- **Bumping into each other** (a setup option, off by default): run into a teammate and you're both
+  dizzy for a second (stars over your heads) and bounce apart. Anything either of you was carrying
+  drops where you stand, at a time penalty for each piece (5 s by default, set in the setup screen);
+  pick it back up with A, and computers pick up dropped pieces too. A piece dropped over the river
+  floats slowly downstream and, at the end of the river, turns up back in the ready area.
 - **Pick pieces yourself** (a setup option): every single piece waits in the ready area from
   the start and grabbing takes the one nearest you; there's no NEXT marker, so runners keep track
   of the order. Assemblies are made one at a time on a small bench in the yard's top-right corner

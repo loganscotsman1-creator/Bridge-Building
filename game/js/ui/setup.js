@@ -21,6 +21,7 @@ const TIMES = [
   { key: 'carrySpeed', label: 'Carrying speed', unit: 'in/s', step: 2 },
   { key: 'reach', label: 'Reach', unit: 'in', step: 2 },
   { key: 'passReach', label: 'Reach to pass a piece', unit: 'in', step: 5 },
+  { key: 'bumpPenalty', label: 'Penalty for a piece dropped in a bump', unit: 's', step: 1, title: 'Only with bumping on' },
   { key: 'comSpeed', label: 'Computer speed factor', unit: '%', step: 5, title: "How fast computers walk, carry, fasten and assemble, as a share of the speeds above, while they're roaming: COMs always, and the holder and assembler once their main job is done." },
 ];
 // The on-screen keyboard for typing a name with a controller.
@@ -35,6 +36,7 @@ function navList(setup) {
     { id: 'builders' },
     ...(setup.builders === 5 ? [{ id: 'npcRole' }] : []),
     ...npcList(setup).helpers.map((_, k) => ({ id: 'com' + k })),
+    { id: 'bumps' },
     ...TIMES.map((t) => ({ id: t.key, time: t })),
     { id: 'start' },
   ];
@@ -42,6 +44,7 @@ function navList(setup) {
 // Left/right on one of player 1's settings.
 function nudge(setup, id, dir) {
   if (id === 'staging') return { ...setup, settings: { ...setup.settings, freeStaging: !setup.settings.freeStaging } };
+  if (id === 'bumps') return { ...setup, settings: { ...setup.settings, bumps: !setup.settings.bumps } };
   if (id === 'builders') return { ...setup, builders: Math.max(4, Math.min(6, setup.builders + dir)) };
   if (id === 'npcRole') return { ...setup, npcRole: setup.npcRole === 'holder' ? 'assembler' : 'holder' };
   if (id.startsWith('com')) {
@@ -312,7 +315,15 @@ export function Setup({ project, model, from, order, setup, setSetup, onProject,
 
       <section class="oe-card">
         <h2>3 · Times</h2>
-        ${TIMES.map((t) => html`<${Num} step=${t.step} label=${t.label} unit=${t.unit} title=${t.title} focused=${navId === t.key} value=${setup.settings[t.key] ?? (t.key === 'assemblyTime' ? 4 : t.key === 'comSpeed' ? 80 : 0)} onChange=${(v) => setS({ [t.key]: Math.max(0, v) })} />`)}
+        <h3>Bumping into each other</h3>
+        <div class=${'oe-side' + (navId === 'bumps' ? ' oe-navfocus' : '')}>
+          <button class=${!setup.settings.bumps ? 'on' : ''} onClick=${() => setS({ bumps: false })}>Off</button>
+          <button class=${setup.settings.bumps ? 'on' : ''} onClick=${() => setS({ bumps: true })}>On</button>
+        </div>
+        <p class="oe-hint">${setup.settings.bumps
+          ? `Run into a teammate and you're both dizzy for a second. Anything you were carrying drops where you stand (+${setup.settings.bumpPenalty ?? 5} s each; pick it back up with A). Drop it over the river and it floats away downstream, turning up back in the ready area.`
+          : 'Builders just slide past each other.'}</p>
+        ${TIMES.map((t) => html`<${Num} step=${t.step} label=${t.label} unit=${t.unit} title=${t.title} focused=${navId === t.key} value=${setup.settings[t.key] ?? (t.key === 'assemblyTime' ? 4 : t.key === 'comSpeed' ? 80 : t.key === 'bumpPenalty' ? 5 : 0)} onChange=${(v) => setS({ [t.key]: Math.max(0, v) })} />`)}
         <p class="oe-hint">Defaults keep the game moving: quicker nuts and assemblies, brisker walking.</p>
         <details class="oe-how">
           <summary>How to play</summary>

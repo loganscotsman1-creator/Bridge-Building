@@ -16,7 +16,7 @@ import { orderProblems } from '../game/js/order.js';
 import { deriveOrder, planOrder, setOrder } from '../js/model/buildorder.js';
 import { activePlan } from '../js/model/schema.js';
 const defaultOrder = (project, model = buildModel(project)) => planOrder(model, activePlan(project)).map((it) => ({ ...it, time: null }));
-import { bridgeDist, clampPos, constructionCost, pace, createGame, defaultSettings, holdPoints, itemBox, itemDist, readyLayout, results as gameResults, shelfItems, shelfSlot, stepGame } from '../game/js/world.js';
+import { actionA, bridgeDist, clampPos, constructionCost, pace, createGame, defaultSettings, holdPoints, itemBox, itemDist, readyLayout, results as gameResults, shelfItems, shelfSlot, stepGame } from '../game/js/world.js';
 import { npcList } from '../game/js/ui/setup.js';
 import { applyAssembly, connectionChoices, dissolveAssembly, dropSlot, insertAtSlot, nextUp, onStagingSide, pieceChoices, planChecks, readyTime, removeTask, slotWhenReady, taskBlocks, taskGroup } from '../js/model/timeline.js';
 
@@ -1500,6 +1500,61 @@ await test('staging: an assembly laid out from its offsets touches where it bolt
   for (const id of a.memberIds) p.site.staging[id] = { x: 640 + off.get(id)[0], y: 60 + off.get(id)[1], rot: 0 };
   const c = assemblyConnections(p, model, p.plans[0]).find((x) => x.assembly.id === a.id);
   assert(c.joints.length && c.joints.every((j) => j.touching), c.joints.map((j) => j.touching).join());
+});
+
+await test('game: bumping on, running into each other makes both dizzy and drops what they carry', () => {
+  const g = game({ players: [['p1', 'east'], ['p2', 'east']], settings: { bumps: true, bumpPenalty: 5 } });
+  const { S, actor, put, tick, input } = g;
+  const p1 = actor('p1'), p2 = actor('p2');
+  const it = S.items.find((x) => !x.multi);
+  p1.carrying = it.id; it.status = 'carried';
+  put('p1', 460, 120); put('p2', 470, 120);
+  input.get('p1').mx = 1; // p1 walks into p2
+  tick(0.2);
+  input.get('p1').mx = 0;
+  assert(p1.dizzyUntil > S.t && p2.dizzyUntil > S.t, 'both dizzy');
+  assert(!p1.carrying && it.status === 'dropped' && it.pos, 'dropped where they stood: ' + it.status);
+  assert(S.penalties === 5, 'penalty ' + S.penalties);
+  assert(S.events.some((e) => e.kind === 'bump') && S.events.some((e) => e.kind === 'drop' && !e.river), 'events');
+  // Dizzy: can't move for a moment.
+  const x0 = p2.x;
+  input.get('p2').mx = 1; tick(0.3); input.get('p2').mx = 0;
+  assert(Math.abs(p2.x - x0) < 0.01, 'dizzy builders stay put');
+  tick(1);
+  // Picking it back up.
+  put('p2', it.pos.x, it.pos.y + 4);
+  const act = actionA(S, p2);
+  assert(act?.kind === 'grab' && act.target === it, JSON.stringify(act && { kind: act.kind, label: act.label }));
+  g.press('p2', 'a');
+  assert(p2.carrying === it.id && it.status === 'carried', 'picked back up');
+  // Standing next to each other isn't a bump.
+  const g2 = game({ players: [['p1', 'east'], ['p2', 'east']], settings: { bumps: true } });
+  g2.put('p1', 460, 120); g2.put('p2', 468, 120); g2.tick(0.5);
+  assert(!(g2.actor('p1').dizzyUntil > g2.S.t), 'no bump without running into them');
+  // Off by default.
+  const g3 = game({ players: [['p1', 'east'], ['p2', 'east']] });
+  g3.put('p1', 460, 120); g3.put('p2', 470, 120); g3.input.get('p1').mx = 1; g3.tick(0.3);
+  assert(!(g3.actor('p1').dizzyUntil > g3.S.t), 'off unless chosen');
+});
+
+await test('game: a piece dropped over the river floats downstream and turns up in the ready area', () => {
+  const g = game({ players: [['p1', 'east'], ['p2', 'east']], settings: { bumps: true } });
+  const { S, actor, put, tick, input } = g;
+  const rv = S.river;
+  const p1 = actor('p1');
+  const it = S.items.find((x) => !x.multi);
+  p1.carrying = it.id; it.status = 'carried';
+  put('p1', rv.x + rv.w + 4, 40); put('p2', rv.x + rv.w + 14, 40);
+  input.get('p2').mx = -1; // p2 runs into p1 at the water's edge
+  tick(0.2);
+  input.get('p2').mx = 0;
+  assert(it.status === 'floating', it.status);
+  const y0 = it.pos.y;
+  tick(1);
+  assert(it.pos.y > y0 + 5, 'drifts down the river');
+  tick(rv.h / 8 + 5);
+  assert(it.status === 'shelf', 'back in the ready area: ' + it.status);
+  assert(S.events.some((e) => e.kind === 'returned' && e.item === it.id), 'returned event');
 });
 
 await test('old (version 1) project files still open', () => {
