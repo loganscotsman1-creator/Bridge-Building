@@ -11,6 +11,7 @@ import { OrderEditor } from './ui/ordereditor.js';
 import { Play } from './ui/play.js';
 import { Results } from './ui/results.js';
 import { isMusicOn, playSong, setMusicOn, unlock } from './sound.js';
+import { PadCursor } from './ui/cursor.js';
 
 const SETUP_KEY = 'oe.setup.v1';
 const SETTINGS_VERSION = 3;
@@ -50,6 +51,7 @@ function App() {
   const [screen, setScreen] = useState('setup');
   const [result, setResult] = useState(null);
   const [runKey, setRunKey] = useState(0);
+  const [quick, setQuick] = useState(false); // building again from the results: skip the controls window
 
   const useProject = (p, src) => {
     const np = normalizeProject(p);
@@ -71,19 +73,20 @@ function App() {
     window.addEventListener('keydown', go);
     return () => { window.removeEventListener('pointerdown', go); window.removeEventListener('keydown', go); };
   }, []);
+  const cursor = html`<${PadCursor} device=${setup.players[0]?.device} />`;
   const musicButton = html`<button class="oe-music-btn" title="Music on or off (N during a run)" onClick=${() => { setMusicOn(!isMusicOn()); setMusicState(isMusicOn()); }}>${musicOn ? '♪ Music on' : '♪ Music off'}</button>`;
 
-  if (screen === 'order') return html`${musicButton}<${OrderEditor} project=${project} model=${model} order=${order} setOrder=${setOrder} settings=${setup.settings} onDone=${() => setScreen('setup')} />`;
+  if (screen === 'order') return html`${musicButton}${cursor}<${OrderEditor} project=${project} model=${model} order=${order} setOrder=${setOrder} settings=${setup.settings} onDone=${() => setScreen('setup')} />`;
   if (screen === 'play') {
-    return html`<${Play} key=${runKey} project=${project} order=${order} setup=${setup}
+    return html`<${Play} key=${runKey} quick=${quick} project=${project} order=${order} setup=${setup}
       onFinish=${(r) => { setResult(r); setScreen('results'); }} onQuit=${() => setScreen('setup')} onRestart=${() => setRunKey(runKey + 1)} />`;
   }
   if (screen === 'results') {
-    return html`${musicButton}<${Results} result=${result} project=${project} order=${order} setup=${setup}
-      onAgain=${() => { setRunKey(runKey + 1); setScreen('play'); }} onSetup=${() => setScreen('setup')} />`;
+    return html`${musicButton}${cursor}<${Results} result=${result} project=${project} order=${order} setup=${setup}
+      onAgain=${() => { setQuick(true); setRunKey(runKey + 1); setScreen('play'); }} onSetup=${() => setScreen('setup')} />`;
   }
-  return html`${musicButton}<${Setup} project=${project} model=${model} from=${from} order=${order} setOrder=${setOrder} setup=${setup} setSetup=${setSetup}
-    onProject=${useProject} onEditOrder=${() => setScreen('order')} onStart=${() => { setRunKey(runKey + 1); setScreen('play'); }} />`;
+  return html`${musicButton}${cursor}<${Setup} project=${project} model=${model} from=${from} order=${order} setOrder=${setOrder} setup=${setup} setSetup=${setSetup}
+    onProject=${useProject} onEditOrder=${() => setScreen('order')} onStart=${() => { setQuick(false); setRunKey(runKey + 1); setScreen('play'); }} />`;
 }
 
 const root = document.getElementById('app');

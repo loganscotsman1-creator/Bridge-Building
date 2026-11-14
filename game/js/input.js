@@ -42,6 +42,7 @@ export function readDevice(id) {
       mx: (keys.has(k.right) ? 1 : 0) - (keys.has(k.left) ? 1 : 0),
       my: (keys.has(k.down) ? 1 : 0) - (keys.has(k.up) ? 1 : 0),
       a: down(k.a), x: down(k.x), y: false, b: false, lb: down(k.lb), start: down(k.start),
+      get dx() { return this.mx; }, get dy() { return this.my; },
     };
   }
   const p = pads()[+id.slice(3)];
@@ -50,8 +51,10 @@ export function readDevice(id) {
   let mx = p.axes[0] || 0, my = p.axes[1] || 0;
   const m = Math.hypot(mx, my);
   if (m < 0.22) { mx = 0; my = 0; } else { const s = Math.min(1, (m - 0.22) / 0.7) / m; mx *= s; my *= s; }
+  // dx/dy: the d-pad alone (the menus use it apart from the stick, which moves player 1's pointer).
+  const dx = (btn(15) ? 1 : 0) - (btn(14) ? 1 : 0), dy = (btn(13) ? 1 : 0) - (btn(12) ? 1 : 0);
   if (btn(14)) mx = -1; if (btn(15)) mx = 1; if (btn(12)) my = -1; if (btn(13)) my = 1;
-  return { mx, my, a: btn(0), x: btn(2) || btn(1), y: btn(3), b: btn(1), lb: btn(4) || btn(6), start: btn(9) };
+  return { mx, my, dx, dy, a: btn(0), x: btn(2) || btn(1), y: btn(3), b: btn(1), lb: btn(4) || btn(6), start: btn(9) };
 }
 
 // Devices with A (or Space / slash) pressed right now, for joining.

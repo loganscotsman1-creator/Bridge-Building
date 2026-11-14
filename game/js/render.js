@@ -272,7 +272,7 @@ export function draw(g, S, V, ui) {
       g.strokeStyle = 'rgba(255,255,255,0.28)'; g.lineWidth = 2;
       for (let yy = z.y - 20; yy < z.y + z.h + 20; yy += 12) {
         g.beginPath();
-        for (let xx = z.x; xx <= z.x + z.w; xx += 4) { const p = P(xx, yy + Math.sin(xx / 9 + now * 2 + yy) * 2.5); xx === z.x ? g.moveTo(...p) : g.lineTo(...p); }
+        for (let xx = z.x; xx <= z.x + z.w; xx += 4) { const p = P(xx, yy + Math.sin(xx / 9 - now * 2 + yy) * 2.5); xx === z.x ? g.moveTo(...p) : g.lineTo(...p); }
         g.stroke();
       }
       // Glints

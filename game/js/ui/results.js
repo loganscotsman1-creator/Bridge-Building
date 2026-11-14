@@ -1,5 +1,6 @@
 // After a run: the time, what each builder spent their time on, and earlier runs to compare.
-import { html, useState } from '../../../js/lib/preact.js';
+import { html, useEffect, useState } from '../../../js/lib/preact.js';
+import { readDevice } from '../input.js';
 import { downloadJSON, safeFilename } from '../../../js/model/storage.js';
 import { ACTIVITIES, ACTIVITY_NAMES } from '../world.js';
 import { fmtMoney, fmtTime } from '../render.js';
@@ -22,6 +23,21 @@ export function Results({ result, project, order, setup, onAgain, onSetup }) {
   });
   // The score is the construction cost (lower is better); runs saved before costs, by time.
   const scoreOf = (r) => (r.cost != null ? r.cost : null);
+  // Start on player 1's controller, or Enter, builds again with the same settings.
+  useEffect(() => {
+    const dev = setup.players[0]?.device;
+    let raf, was = true;
+    const loop = () => {
+      const st = dev ? readDevice(dev).start : false;
+      if (st && !was) { onAgain(); return; }
+      was = st;
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    const key = (e) => { if (e.key === 'Enter' && !/INPUT|TEXTAREA|SELECT|BUTTON/.test(e.target?.tagName || '')) { e.preventDefault(); onAgain(); } };
+    window.addEventListener('keydown', key);
+    return () => { cancelAnimationFrame(raf); window.removeEventListener('keydown', key); };
+  }, []);
   const earlier = runs.slice(1).filter((r) => r.projectName === project.name && r.done && scoreOf(r) != null);
   const best = earlier.length ? Math.min(...earlier.map(scoreOf)) : null;
   const money = result.cost != null;
@@ -40,7 +56,7 @@ export function Results({ result, project, order, setup, onAgain, onSetup }) {
         ${best != null && money && html`<div class=${result.cost < best ? 'good' : ''}>${result.done && result.cost < best ? 'New best! ' : ''}Best before: ${fmtMoney(best)}</div>`}
         <div class="oe-sub">${result.falls.length} fall${result.falls.length === 1 ? '' : 's'} · ${result.neglected} bolt${result.neglected === 1 ? '' : 's'} left unfastened over ${setup.settings.neglect} s</div>
         <div class="row wrap center">
-          <button class="oe-go" onClick=${onAgain}>Play again</button>
+          <button class="oe-go" onClick=${onAgain} title="Same players, order and settings (Start or Enter)">Build again (same settings)</button>
           <button onClick=${onSetup}>Change setup</button>
           <button onClick=${() => downloadJSON({ kind: 'over-engineered-run', projectName: project.name, at: new Date().toISOString(), setup: { builders: setup.builders, npcRole: setup.npcRole, settings: setup.settings, players: setup.players.map((p) => ({ name: p.name, side: p.side })) }, order, result }, safeFilename(project.name + ' run', '.json'))}>Download results</button>
         </div>

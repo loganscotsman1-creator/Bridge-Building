@@ -9,7 +9,7 @@ import { npcList } from './setup.js';
 
 const DT = 1 / 60;
 
-export function Play({ project, order, setup, onFinish, onQuit, onRestart }) {
+export function Play({ project, order, setup, onFinish, onQuit, onRestart, quick = false }) {
   const canvasRef = useRef(null);
   const [paused, setPaused] = useState(false);
   const pausedRef = useRef(false);
@@ -17,7 +17,7 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart }) {
   const stateRef = useRef(null);
   const [soundOn, setSoundOn] = useState(!isMuted());
   const [musicState, setMusicState] = useState(isMusicOn());
-  const [briefing, setBriefing] = useState(true);
+  const [briefing, setBriefing] = useState(!quick); // building again: straight to the countdown
   const beginRef = useRef(null);
 
   useEffect(() => {
@@ -45,6 +45,7 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart }) {
       ui.countdown = 3; lastCount = 4;
     };
     beginRef.current = begin;
+    if (quick) begin();
     const onKey = (e) => {
       if (ui.briefing && (e.key === 'Enter' || e.code === 'Enter' || e.code === 'NumpadEnter')) { e.preventDefault(); begin(); return; }
       if (e.code === 'KeyM' || e.key === 'm' || e.key === 'M') { setMuted(!isMuted()); ui.muted = isMuted(); }

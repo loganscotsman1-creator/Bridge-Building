@@ -29,7 +29,10 @@ takes to fasten.
   PlayStation, Switch Pro…) or Space / slash for two players on one keyboard, and pick a side of
   the river. With a controller, X switches side and Y opens an on-screen keyboard for a name
   (A types, B deletes, Y is done). Player 1 can also set the builders and times from their
-  controller (stick up/down to pick, left/right to change) and press Start to begin. With 5 builders an NPC either holds the bridge or makes the assemblies; with 6 there
+  controller: the left stick moves a pointer and A clicks (LB/RB change a number under it, the
+  right stick scrolls), or the d-pad steps through the settings; Start begins. The pointer works on
+  the results screen too, where Build again (or Start / Enter) replays with the same settings,
+  straight into the countdown. With 5 builders an NPC either holds the bridge or makes the assemblies; with 6 there
   is one of each.
 - **Build order:** click pieces on the 3D bridge in the order they come in, grouping up to three
   into an assembly. The first item must be a three-piece assembly. Mark large or awkward items

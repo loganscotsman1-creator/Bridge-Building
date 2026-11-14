@@ -6,6 +6,7 @@ import { downloadJSON, pickFile, readJSONFile, safeFilename } from '../../../js/
 import { createExampleProject } from '../../../js/model/example.js';
 import { gameAssemblyTime, deleteSavedOrder, itemName, orderFile, orderProblems, readOrderFile, saveOrder, savedOrders, startFooting } from '../order.js';
 import { KEYBOARDS, deviceHelp, deviceName, endFrame, pressedDevices, readDevice } from '../input.js';
+import { cursorActive, suspendCursor } from './cursor.js';
 
 export const PLAYER_COLORS = ['#e11d48', '#2563eb', '#16a34a', '#d97706'];
 
@@ -152,6 +153,7 @@ export function Setup({ project, model, from, order, setOrder, setup, setSetup, 
       endFrame();
       const s0 = setupRef.current, L = live.current;
       let s = s0;
+      suspendCursor(!!(s0.players[0] && edRef.current[s0.players[0].device]));
       s.players.forEach((p, i) => {
         const st = states.get(p.device), pv = prev.get(p.device) || {};
         const tap = (b) => st[b] && !pv[b];
@@ -182,11 +184,13 @@ export function Setup({ project, model, from, order, setOrder, setup, setSetup, 
         if (tap('x')) s = { ...s, players: s.players.map((q, j) => (j === i ? { ...q, side: q.side === 'west' ? 'east' : 'west' } : q)) };
         if (tap('y') && isPad(p.device)) setEditing((e) => ({ ...e, [p.device]: { cursor: 0, fresh: /^Player \d$/.test(p.name) } }));
         if (i === 0) {
+          // Player 1 steps through the settings with the d-pad (the stick moves their pointer).
+          const mvn = isPad(p.device) ? stick(p.device + ':nav', { mx: st.dx, my: st.dy }, dt) : mv;
           const nav = navList(s);
-          if (mv && mv.dy) setNavAt((n) => Math.max(0, Math.min(nav.length - 1, (n < 0 ? (mv.dy > 0 ? -1 : nav.length) : n) + mv.dy)));
+          if (mvn && mvn.dy) setNavAt((n) => Math.max(0, Math.min(nav.length - 1, (n < 0 ? (mv.dy > 0 ? -1 : nav.length) : n) + mv.dy)));
           const item = nav[navRef.current];
-          if (mv && mv.dx && item && item.id !== 'start') s = nudge(s, item.id, mv.dx);
-          if ((tap('a') && item?.id === 'start') || tap('start')) { if (!L.problems.length) L.onStart(); }
+          if (mvn && mvn.dx && item && item.id !== 'start') s = nudge(s, item.id, mvn.dx);
+          if ((tap('a') && item?.id === 'start' && !cursorActive()) || tap('start')) { if (!L.problems.length) L.onStart(); }
         }
         prev.set(p.device, st);
       });
@@ -259,7 +263,7 @@ export function Setup({ project, model, from, order, setOrder, setup, setSetup, 
 
       <section class="oe-card">
         <h2>2 · Players</h2>
-        <p class="oe-hint">Press <kbd>A</kbd> on a controller to join (or <kbd>Space</kbd> / <kbd>/</kbd> for two players on one keyboard). Up to four. Player 1 can set everything below with their controller: stick up/down to pick a setting, left/right to change it, <kbd>Start</kbd> to begin.</p>
+        <p class="oe-hint">Press <kbd>A</kbd> on a controller to join (or <kbd>Space</kbd> / <kbd>/</kbd> for two players on one keyboard). Up to four. Player 1 can run this screen from their controller: the left stick moves a pointer and <kbd>A</kbd> clicks (<kbd>LB</kbd>/<kbd>RB</kbd> change a number under it, the right stick scrolls), or the d-pad steps through the settings (up/down to pick, left/right to change). <kbd>Start</kbd> begins.</p>
         <div class="oe-players">
           ${[0, 1, 2, 3].map((i) => {
             const p = setup.players[i];
@@ -308,7 +312,7 @@ export function Setup({ project, model, from, order, setOrder, setup, setSetup, 
 
       <section class="oe-card">
         <h2>3 · Times</h2>
-        ${TIMES.map((t) => html`<${Num} label=${t.label} unit=${t.unit} title=${t.title} focused=${navId === t.key} value=${setup.settings[t.key] ?? (t.key === 'assemblyTime' ? 4 : t.key === 'comSpeed' ? 80 : 0)} onChange=${(v) => setS({ [t.key]: Math.max(0, v) })} />`)}
+        ${TIMES.map((t) => html`<${Num} step=${t.step} label=${t.label} unit=${t.unit} title=${t.title} focused=${navId === t.key} value=${setup.settings[t.key] ?? (t.key === 'assemblyTime' ? 4 : t.key === 'comSpeed' ? 80 : 0)} onChange=${(v) => setS({ [t.key]: Math.max(0, v) })} />`)}
         <p class="oe-hint">An assembly's own time can be set in the order editor. Defaults keep the game moving: quicker nuts and assemblies, brisker walking.</p>
         <details class="oe-how">
           <summary>How to play</summary>
@@ -329,8 +333,8 @@ export function Setup({ project, model, from, order, setOrder, setup, setSetup, 
   </div>`;
 }
 
-function Num({ label, unit, value, onChange, title, focused }) {
-  return html`<label class=${'oe-num' + (focused ? ' oe-navfocus' : '')} title=${title}><span>${label}</span><input type="number" min="0" step="any" value=${value}
+function Num({ label, unit, value, onChange, title, focused, step }) {
+  return html`<label class=${'oe-num' + (focused ? ' oe-navfocus' : '')} title=${title}><span>${label}</span><input type="number" min="0" step="any" data-step=${step} value=${value}
     onInput=${(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v) && v >= 0) onChange(v); }} /><em>${unit}</em></label>`;
 }
 
