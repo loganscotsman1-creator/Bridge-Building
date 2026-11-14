@@ -17,6 +17,11 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart, quick
   const stateRef = useRef(null);
   const [soundOn, setSoundOn] = useState(!isMuted());
   const [musicState, setMusicState] = useState(isMusicOn());
+  // Whoever paused drives the pause menu: which player, and which button is highlighted.
+  const [pausedBy, setPausedBy] = useState(null);
+  const [pauseSel, setPauseSel] = useState(0);
+  const pauseItems = useRef([]);
+  const resumeRef = useRef(null);
   const [briefing, setBriefing] = useState(!quick); // building again: straight to the countdown
   const beginRef = useRef(null);
 
@@ -32,6 +37,12 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart, quick
     // startWas starts true: a Start press that began the game on the setup screen must be let go
     // before it counts here, or it would skip straight past the controls window.
     let raf, last = performance.now(), acc = 0, startWas = true, finished = false, finishedAt = 0;
+    // Pause menu driving: who paused, which button, stick repeat, last frame's buttons.
+    let pauser = null, pauseSel = 0, navRep = { dir: 0, t: 0 }, wasPaused = false;
+    let prevBtn = new Map(players.map((p) => [p.id, { start: true, a: true }])); // held at the start: let go first
+    const movePause = (dir) => { const n = pauseItems.current.length || 1; pauseSel = (pauseSel + dir + n) % n; setPauseSel(pauseSel); };
+    const resume = () => { pausedRef.current = false; pauser = null; setPaused(false); setPausedBy(null); };
+    resumeRef.current = resume;
     const itemLabel = (id) => '#' + (S.items.find((x) => x.id === id).idx + 1);
     unlock();
     let lastCount = 4;
@@ -94,10 +105,30 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart, quick
       const W = canvas.clientWidth, H = canvas.clientHeight, dpr = window.devicePixelRatio || 1;
       if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(H * dpr)) { canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr); }
       const inputs = new Map();
-      let start = false;
-      for (const p of players) { const d = readDevice(p.device); inputs.set(p.id, d); if (d.start) start = true; }
-      if (start && !startWas && !finished) { if (ui.briefing) begin(); else setPaused((x) => !x); }
-      startWas = start;
+      for (const p of players) inputs.set(p.id, readDevice(p.device));
+      // Start: begins from the controls window; otherwise pauses, and the one who paused drives the
+      // menu (up/down to pick, A to choose) and resumes with their own Start.
+      const tapped = (p, b) => inputs.get(p.id)[b] && !(prevBtn.get(p.id) || {})[b];
+      if (!finished) {
+        for (const p of players) {
+          if (!tapped(p, 'start')) continue;
+          if (ui.briefing) { begin(); break; }
+          if (!pausedRef.current) { pausedRef.current = true; pauser = p.id; setPaused(true); setPausedBy(p.id); setPauseSel(0); pauseSel = 0; break; }
+          if (p.id === pauser) { resume(); break; }
+        }
+        if (pausedRef.current && pauser) {
+          const d = inputs.get(pauser), dir = d.my > 0.6 ? 1 : d.my < -0.6 ? -1 : 0;
+          if (dir !== navRep.dir) { navRep = { dir, t: -0.35 }; if (dir) movePause(dir); }
+          else if (dir) { navRep.t += Math.min(0.1, (ts - last) / 1000); if (navRep.t >= 0.15) { navRep.t = 0; movePause(dir); } }
+          const me = players.find((q) => q.id === pauser);
+          if (me && tapped(me, 'a')) pauseItems.current[pauseSel]?.run();
+        }
+      }
+      startWas = false;
+      // Coming back from the pause menu: buttons still held then shouldn't act in the game.
+      if (wasPaused && !pausedRef.current) for (const a of S.actors) { const d = inputs.get(a.id); if (d) a.prev = { a: !!d.a, x: !!d.x, lb: a.prev.lb }; }
+      wasPaused = pausedRef.current;
+      prevBtn = new Map([...inputs].map(([id, d]) => [id, { start: d.start, a: d.a }]));
       if (pausedRef.current || finished || ui.briefing || ui.countdown > 0) endFrame();
       const dtReal = Math.min(0.1, (ts - last) / 1000);
       last = ts;
@@ -141,17 +172,14 @@ export function Play({ project, order, setup, onFinish, onQuit, onRestart, quick
   return html`<div class="oe-play">
     <canvas ref=${canvasRef} class="oe-canvas"></canvas>
     ${briefing && html`<${Controls} players=${setup.players} onStart=${() => beginRef.current?.()} onBack=${onQuit} />`}
-    ${paused && html`<div class="oe-pause">
-      <div class="oe-pause-card">
-        <h2>Paused</h2>
-        <button class="oe-go" onClick=${() => setPaused(false)}>Resume</button>
-        <button onClick=${() => { setMuted(!isMuted()); setSoundOn(!isMuted()); }}>Sound: ${soundOn ? 'on' : 'off'} (M)</button>
-        <button onClick=${() => { setMusicOn(!isMusicOn()); setMusicState(isMusicOn()); }}>Music: ${musicState ? 'on' : 'off'} (N)</button>
-        <button onClick=${onRestart}>Restart</button>
-        <button onClick=${() => onFinish(results(stateRef.current))}>End and see results</button>
-        <button onClick=${onQuit}>Back to setup</button>
-      </div>
-    </div>`}
+    ${paused && html`<${PauseMenu} items=${(pauseItems.current = [
+      { label: 'Resume', go: true, run: () => resumeRef.current?.() },
+      { label: `Sound: ${soundOn ? 'on' : 'off'} (M)`, run: () => { setMuted(!isMuted()); setSoundOn(!isMuted()); } },
+      { label: `Music: ${musicState ? 'on' : 'off'} (N)`, run: () => { setMusicOn(!isMusicOn()); setMusicState(isMusicOn()); } },
+      { label: 'Restart', run: onRestart },
+      { label: 'End and see results', run: () => onFinish(results(stateRef.current)) },
+      { label: 'Back to setup', run: onQuit },
+    ])} sel=${pauseSel} who=${setup.players[players0(pausedBy)]} pausedBy=${pausedBy} />`}
   </div>`;
 }
 
@@ -188,6 +216,21 @@ function Controls({ players, onStart, onBack }) {
         <span>or press <kbd>Start</kbd> on a controller, <kbd>Enter</kbd>, or your pause key</span>
       </div>
       <button class="oe-brief-back" onClick=${onBack}>Back to setup</button>
+    </div>
+  </div>`;
+}
+
+// Index into setup.players of a player id ('p1' -> 0).
+const players0 = (id) => (id ? +id.slice(1) - 1 : -1);
+
+// The pause menu: the buttons, with the one the pausing player has picked highlighted.
+function PauseMenu({ items, sel, who }) {
+  return html`<div class="oe-pause">
+    <div class="oe-pause-card">
+      <h2>Paused</h2>
+      ${who && html`<div class="oe-paused-by"><i style=${{ background: who.color }}></i>${who.name} has the menu</div>`}
+      ${items.map((it, i) => html`<button class=${(it.go ? 'oe-go' : '') + (i === sel ? ' oe-sel' : '')} onClick=${it.run}>${i === sel ? '▶ ' : ''}${it.label}</button>`)}
+      <small class="oe-pause-hint">Up / down to choose · A to select · Start to resume</small>
     </div>
   </div>`;
 }

@@ -58,6 +58,8 @@ takes to fasten.
   to turn music off.
 - **Sound:** every action has a sound (grab, pass, the clank of placing steel, bolt, ratchet,
   hammer, alarms, falls, fanfares). Press M, or use the pause menu, to turn sound off.
+- **Pausing:** any player's Start pauses; that player then drives the pause menu (up/down to
+  pick, A to choose) and resumes with their own Start. The mouse works on it too.
 - **Controls:** A grabs, places a piece where it goes (with its first bolt), places bolts, and,
   held while carrying, holds a piece out to pass it across the river. X (held) fastens a nut or
   makes an assembly. LB (held) holds the bridge up.

@@ -141,3 +141,9 @@ body.playing { overflow: hidden; }
 .oe-com-badge { width: 24px; height: 24px; border-radius: 50%; background: #64748b; color: #fff; display: grid; place-items: center; font: 900 10px system-ui; }
 
 .oe-cursor { position: fixed; left: 0; top: 0; z-index: 1000; pointer-events: none; transition: opacity 0.3s; opacity: 0; filter: drop-shadow(0 2px 2px rgba(0,0,0,0.5)); }
+
+.oe-pause-card button.oe-sel { outline: 3px solid #facc15; outline-offset: 2px; background: #334155; color: #fff; }
+.oe-pause-card button.oe-go.oe-sel { background: #fde047 !important; }
+.oe-paused-by { display: flex; align-items: center; gap: 8px; justify-content: center; color: #cbd5e1; font-size: 13px; margin-bottom: 4px; }
+.oe-paused-by i { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+.oe-pause-hint { color: #64748b; text-align: center; font-size: 11px; margin-top: 4px; }
