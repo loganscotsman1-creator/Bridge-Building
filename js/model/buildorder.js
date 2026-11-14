@@ -37,7 +37,9 @@ export function deriveOrder(model, plan) {
 // that no longer exist are dropped, an assembly's pieces come from the assembly itself, and (with
 // `fill`) anything left out is added at the end so the order is complete.
 export function planOrder(model, plan, { fill = true } = {}) {
-  if (!Array.isArray(plan.order)) return deriveOrder(model, plan);
+  // No order chosen yet: the game and the timeline get the automatic one; the order window starts
+  // empty, with every assembly and piece waiting to be picked.
+  if (!Array.isArray(plan.order)) return fill ? deriveOrder(model, plan) : [];
   const asm = new Map(plan.assemblies.map((a) => [a.id, a]));
   const used = new Set();
   const out = [];

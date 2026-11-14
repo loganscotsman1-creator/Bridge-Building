@@ -66,13 +66,15 @@ export function OrderPicker({ project, model, onClose }) {
     let items = strip(order), spares = strip(spare);
     if (isDraft) { spares.push({ id: target.id, memberIds: members, buddy: false }); setDraft(null); }
     else { items = items.map((it) => (it.id === target.id ? { ...it, memberIds: members } : it)); spares = spares.map((a) => (a.id === target.id ? { ...a, memberIds: members } : a)); }
-    // An assembly left with one piece in the order stays there as that piece; a spare one goes.
+    // An assembly left with one piece is no assembly: that piece goes back to the pool.
+    items = items.filter((it) => !(it.id === target.id && members.length < 2));
     commit(items, spares);
   };
   const takeApart = (a) => {
     if (cur === a.id) setCur(null);
     if (draft?.id === a.id) { setDraft(null); return; }
-    commit(copy(order).flatMap((it) => (it.id === a.id ? it.memberIds.map(single) : [it])), spare.filter((x) => x.id !== a.id));
+    // Its pieces go back to the pool (out of the order) to be picked one by one.
+    commit(copy(order).filter((it) => it.id !== a.id), spare.filter((x) => x.id !== a.id));
   };
 
   // ---- step 2: the order ----

@@ -1457,6 +1457,40 @@ await test('grab steps: a builder picks up a tool when the plan says, not automa
   assert(r2.segments.filter((s) => s.builderId === b.id && s.hardware).length === 1, 'nuts & bolts grabbed once, by the step');
 });
 
+await test('timeline: a step that needs another starts once that one is done', () => {
+  const p = taskProject();
+  const pl = p.plans[0];
+  const model = buildModel(p);
+  const order = planOrder(model, pl);
+  const [w1, w2, e1, e2] = p.builders.map((b) => b.id);
+  // Running an assembly, before anyone receives it: it starts when the assembly is made.
+  pl.tasks = [
+    { id: 'mk', kind: 'assembly', builder: e2, assemblyId: order[0].id },
+    { id: 'rn', kind: 'run', builder: e1, unit: { type: 'assembly', id: order[0].id } },
+  ];
+  let sim = simulate(p, pl);
+  assert(sim.taskTimes.rn.start >= sim.taskTimes.mk.end - 1e-6, `run starts ${sim.taskTimes.rn.start}, made ${sim.taskTimes.mk.end}`);
+  // A piece that bolts to the first one (and isn't on a footing) goes in after it, even if its
+  // builder is free sooner.
+  pl.tasks.push({ id: 'rc', kind: 'receive', builder: w1, unit: { type: 'assembly', id: order[0].id } });
+  const next = order.slice(1).find((it) => it.memberIds.length === 1 && !model.memberById.get(it.memberIds[0]).bearing
+    && model.contacts.some((c) => c.bolts && order[0].memberIds.includes(c.a) !== order[0].memberIds.includes(c.b) && [c.a, c.b].includes(it.memberIds[0])));
+  assert(next, 'a piece bolted to the first assembly');
+  pl.tasks.push({ id: 'pl', kind: 'receive', builder: w2, unit: { type: 'member', id: next.memberIds[0] } });
+  sim = simulate(p, pl);
+  assert(sim.taskTimes.pl.start >= sim.taskTimes.rc.end - 1e-6, `placed ${sim.taskTimes.pl.start}, first in at ${sim.taskTimes.rc.end}`);
+  assert(near(readyTime(pl.tasks.find((t) => t.id === 'pl'), pl, model, sim), sim.taskTimes.rc.end), 'ready when the first is in');
+});
+
+await test('build order window: with no order yet, everything waits to be picked', () => {
+  const p = normalizeProject(createExampleProject());
+  const pl = p.plans[0];
+  const model = buildModel(p);
+  delete pl.order;
+  assert(planOrder(model, pl, { fill: false }).length === 0, 'starts empty');
+  assert(planOrder(model, pl).length > 0, 'the game and timeline still get a full order');
+});
+
 await test('old (version 1) project files still open', () => {
   const v1 = { version: 1, design: { nodes: [{ id: 'a', plane: 'A', x: 0, y: 0, z: 0, bearing: true }, { id: 'b', plane: 'A', x: 30, y: 0, z: 0 }], members: [{ id: 'm', name: 'A-1', plane: 'A', segments: [['a', 'b']] }], bolts: [{ id: 'x', memberId: 'm', seg: 0, s: 0.1 }] } };
   const p = normalizeProject(v1);

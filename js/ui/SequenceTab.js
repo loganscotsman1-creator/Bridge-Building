@@ -177,11 +177,7 @@ export function SequenceTab({ project, model, sim, onOrderOpen }) {
   const [ordering, setOrdering] = useState(true);
   useEffect(() => { onOrderOpen?.(ordering); }, [ordering]);
   useEffect(() => () => onOrderOpen?.(false), []);
-  const closeOrder = () => {
-    // Keep the order as it was shown, so the game plays the same one.
-    if (!Array.isArray(plan.order)) setPlan((pl) => setOrder(pl, model, planOrder(model, pl)));
-    setOrdering(false);
-  };
+  const closeOrder = () => setOrdering(false);
   const order = useMemo(() => planOrder(model, plan), [model, plan]);
   const pool = useMemo(() => nextUp(project, model, plan, sim, order), [project, model, plan, sim, order]);
 
@@ -440,7 +436,12 @@ export function SequenceTab({ project, model, sim, onOrderOpen }) {
         </div>
         <${Timeline} project=${project} model=${model} plan=${plan} sim=${sim} checks=${checks} t=${t ?? 0} setT=${setT} selected=${sel} onSelect=${select}
           dragging=${drag} apiRef=${api}
-          onMove=${(id, slot) => setPlan((pl) => insertAtSlot(pl.tasks, taskGroup(pl.tasks, id), slot, startOf))}
+          onMove=${(id, slot) => {
+            const task = tasks.find((x) => x.id === id);
+            const blocks = taskBlocks({ ...plan, tasks: tasks.filter((x) => x.id !== id) }, sim, project);
+            const at = task ? slotWhenReady(blocks, slot, readyTime(task, plan, model, sim)) : slot;
+            setPlan((pl) => insertAtSlot(pl.tasks, taskGroup(pl.tasks, id), at, startOf));
+          }}
           onEdit=${(id, patch) => setPlan((pl) => { Object.assign(pl.tasks.find((x) => x.id === id) || {}, patch); })} />
       </div>
       <div class="seq-bottom">

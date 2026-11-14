@@ -462,6 +462,18 @@ export function readyTime(task, plan, model, sim) {
     const list = [];
     if (task.unit.type === 'assembly') list.push(end(tasks.find((t) => t.kind === 'assembly' && t.assemblyId === task.unit.id)));
     if (task.kind === 'receive') {
+      // Once something it bolts to is placed (a piece on a footing can go in any time).
+      const ids = task.unit.type === 'assembly' ? plan.assemblies.find((a) => a.id === task.unit.id)?.memberIds || [] : [task.unit.id];
+      const footed = ids.some((id) => model.memberById.get(id)?.bearing);
+      if (!footed) {
+        const near = new Set();
+        for (const c of model.contacts) {
+          if (!c.bolts || ids.includes(c.a) === ids.includes(c.b)) continue;
+          near.add(unitKeyOf(ids.includes(c.a) ? c.b : c.a));
+        }
+        const times = [...near].map((k) => placedAt(k)).filter((x) => x != null);
+        if (times.length) list.push(Math.min(...times));
+      }
       const run = tasks.find((t) => t.kind === 'run' && taskUnitKey(t) === key && t.builder !== task.builder);
       // Head for the river as the runner sets off with it.
       const carry = run && (sim?.segments || []).find((s) => s.taskId === run.id && s.kind === 'carry');

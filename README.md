@@ -225,8 +225,9 @@ so the other tabs stay a click away). It has two steps, both on the 3D bridge:
    that's already in an assembly picks that assembly to change; click one of its pieces again to
    take it out. **+ New assembly** starts another, and ✕ takes one apart.
 2. **Put in order:** click pieces in the order they go in; clicking any piece of an assembly puts
-   the whole assembly in. Assemblies and pieces not placed yet are listed underneath (click to add
-   at the end). Reorder with the arrows or by dragging, and tick **Needs a buddy** for large or
+   the whole assembly in. Nothing is in the order until you pick it: assemblies and loose pieces
+   wait in a pool underneath (click to add at the end). Taking an assembly apart sends its pieces
+   back to the pool. Reorder with the arrows or by dragging, and tick **Needs a buddy** for large or
    awkward items (used by the game). **Automatic order** fills it in footings first, west to east,
    keeping your assemblies.
 
@@ -254,10 +255,12 @@ in the build order; drag one onto a builder's row:
 start. Give someone a Grab step for one of those and they pick it up at that point in their row
 instead.
 
-**Dropped too early:** when a step has to wait for another (running an assembly that's still being
-made, receiving a piece someone else runs), it lands where it can start: in that builder's row
-after whatever they're doing when it's ready. A receiver sets off for the river as the runner picks
-the piece up.
+**Dropped too early:** when a step has to wait for another, it starts when that one is done:
+running an assembly starts once it's made (even before anyone is set to receive it), placing a piece
+waits until a piece it bolts to is in (unless it sits on a footing), a nut waits for its bolt, and a
+support for its piece. The step lands in that builder's row after whatever they're doing when it's
+ready, and dragging a bar somewhere too early does the same. A receiver sets off for the river as
+the runner picks the piece up.
 
 **Which piece:** when a task lands, a pop-up asks what it's about. A builder on the staging yard's
 side of the river sees the yard as you laid it out in tab 6, and a builder across the river sees the

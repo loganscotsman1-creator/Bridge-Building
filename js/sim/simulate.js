@@ -1323,9 +1323,17 @@ export class TaskSim extends Sim {
     ctx.group.started = true;
     const recv = this.plan.tasks.find((t) => t.kind === 'receive' && taskUnitKey(t) === u.key);
     const catcher = recv && this.builderById.get(recv.builder);
-    if (!catcher) { this.error(`${u.name} is run to the river, but no step has a builder receive it.`); return; }
+    if (!catcher) this.error(`${u.name} is run to the river, but no step has a builder receive it.`);
+    // Picking it up waits for it to be made, so the step starts then even before anyone receives it.
     if (!(yield* this.pickUp(ctx, u))) return;
     u.runStarted = true;
+    if (!catcher) {
+      // Put it back down, so the rest of this builder's steps still play out.
+      for (const id of u.memberIds) { const home = this.tracks.get(id)[0]; this.track([id], this.now, { kind: 'staging', x: home.x, y: home.y }); }
+      b.carrying = null;
+      u.runStarted = false;
+      return;
+    }
     const h = this.handoffFor(u, b, catcher);
     if (!h) { this.error(`${b.name} and ${catcher.name} can't hand ${u.name} to each other: they're on the same side of the river, or too far apart (hand-off distance ${this.T.passReach} in).`); return; }
     if (!(yield* this.walk(ctx, h.g, 'carry', { label: `Run ${u.name} to the river`, memberIds: u.memberIds }))) return;
@@ -1343,6 +1351,14 @@ export class TaskSim extends Sim {
     if (!u) return;
     if (u.installed) { this.warn(`${u.name} is placed more than once in the plan; extra step skipped.`); return; }
     this.checkHands(ctx, u);
+    // A piece goes in once something it bolts to is in (or it starts on a footing), when the plan
+    // places one of those at all.
+    const touches = () => u.joints.some((j) => this.unitOfMember.get(u.memberIds.includes(j.a) ? j.b : j.a)?.installed);
+    const footed = u.memberIds.some((m) => this.bearings.has('brg:' + m));
+    const neighbours = new Set(u.joints.map((j) => this.unitOfMember.get(u.memberIds.includes(j.a) ? j.b : j.a)?.key).filter(Boolean));
+    if (!footed && !touches() && this.plan.tasks.some((t) => t.kind === 'receive' && t.id !== task.id && neighbours.has(taskUnitKey(t)))) {
+      yield* this.waitFor(ctx, touches, `a piece ${u.name} bolts to to be placed`);
+    }
     ctx.group.started = true;
     const run = this.plan.tasks.find((t) => t.kind === 'run' && taskUnitKey(t) === u.key);
     const runner = run && this.builderById.get(run.builder);
