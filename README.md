@@ -315,8 +315,12 @@ The build time and construction cost update on every change. Problems are listed
 view; click one to jump to its step.
 
 ### 6 · Staging
-Plan where every member lies. Drag members from the list onto the yard, drag them around (they
-snap together; Shift places freely), and turn them with R. A member can sit any way up: rather than
+Plan where every member lies. The list is the **build order** from tab 5, numbered, with each
+assembly as one entry: drag an assembly or a piece onto the yard, in whatever order you like. An
+assembly comes in laid out the way it goes together (its pieces touching where they bolt), and on the
+yard it moves, turns (R, or the buttons) and goes back to the list as one; hold **Alt** to move or
+turn just one of its pieces. Single pieces snap together as you drag them (Shift places freely), and
+turn with R. A member can sit any way up: rather than
 a full 3D shape, it switches between three simple views as seen from above, with the buttons on the
 selected member or the V key (also while dragging it in):
 - **Side:** lying flat, showing its outline from tab 1.

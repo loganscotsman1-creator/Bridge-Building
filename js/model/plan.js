@@ -132,10 +132,9 @@ export function assemblyConnections(project, model, plan, spots = stagingSpots(p
 
 // Lay an assembly's members out in the yard the way they go together, touching where they bolt,
 // in the first free space of the members area. Mutates project.site.staging.
-export function layOutAssembly(project, model, assembly) {
-  const site = project.site;
-  const ids = assembly.memberIds.filter((id) => model.memberById.has(id));
-  if (!ids.length) return false;
+// Where each piece of an assembly sits, staged flat the way they go together (touching where they
+// bolt), relative to the middle of the group: Map id -> [x, y] (rot 0, each in its default view).
+export function assemblyOffsets(model, ids) {
   // Walk the connections out from the first member, lining up each next one on their shared point.
   const pos = new Map([[ids[0], [0, 0]]]);
   let grew = true;
@@ -159,6 +158,18 @@ export function layOutAssembly(project, model, assembly) {
   let spare = 0;
   for (const id of ids) if (!pos.has(id)) pos.set(id, [0, (spare += 8)]);
 
+  const shapes = ids.map((id) => stagedPoly(model.memberById.get(id), { x: pos.get(id)[0], y: pos.get(id)[1], rot: 0 }));
+  const xs = shapes.flat().map((q) => q[0]), ys = shapes.flat().map((q) => q[1]);
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  for (const [id, q] of pos) pos.set(id, [q[0] - cx, q[1] - cy]);
+  return pos;
+}
+
+export function layOutAssembly(project, model, assembly) {
+  const site = project.site;
+  const ids = assembly.memberIds.filter((id) => model.memberById.has(id));
+  if (!ids.length) return false;
+  const pos = assemblyOffsets(model, ids);
   const shapes = ids.map((id) => stagedPoly(model.memberById.get(id), { x: pos.get(id)[0], y: pos.get(id)[1], rot: 0 }));
   const xs = shapes.flat().map((p) => p[0]), ys = shapes.flat().map((p) => p[1]);
   const w = Math.max(...xs) - Math.min(...xs), h = Math.max(...ys) - Math.min(...ys);

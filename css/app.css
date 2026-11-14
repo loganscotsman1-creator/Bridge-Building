@@ -269,7 +269,7 @@ button.link:hover:not(:disabled) { background: none; color: var(--ink); }
 }
 
 /* Staging tab */
-.stage-list { list-style: none; margin: 6px 0 0; padding: 0; max-height: 300px; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; }
+.stage-list { list-style: none; margin: 6px 0 0; padding: 0; max-height: 440px; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; }
 .stage-list li { display: flex; align-items: center; gap: 6px; padding: 4px 8px; font-size: 13px; cursor: grab; border-bottom: 1px solid var(--line); user-select: none; touch-action: none; background: #fff; }
 .stage-list li:last-child { border-bottom: 0; }
 .stage-list li:hover { background: var(--accent-soft); }
@@ -455,3 +455,7 @@ button.link:hover:not(:disabled) { background: none; color: var(--ink); }
 .gameview.bare { position: relative; }
 .gameview.bare.big { position: fixed; }
 .gv-big { position: absolute; right: 8px; bottom: 8px; z-index: 2; display: flex; gap: 6px; opacity: .9; }
+.stage-list .num { flex: none; min-width: 22px; text-align: right; color: var(--muted); font-size: 11px; font-weight: 700; }
+.stage-list li.asm-row { background: #faf5ff; }
+.stage-list li.asm-row.sel { background: #fef3c7; }
+.stage-list li.asm-row .nm { font-weight: 400; }

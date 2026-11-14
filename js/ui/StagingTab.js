@@ -1,12 +1,14 @@
-// Staging tab: plan where every member lies in the yard. Pull members from the list onto the plan,
-// turn them, switch which way up they sit (side, top or front view), and for assemblies place the pieces touching where they bolt, which makes those
-// connections faster to make.
+// Staging tab: plan where every member lies in the yard. The list is the build order (tab 5): pull
+// an assembly or a piece from it onto the plan. An assembly comes in laid out the way it goes
+// together (pieces touching where they bolt, which makes those connections faster to make) and moves
+// and turns as one; Alt moves a single piece of it. Pieces can sit on their side, top or front.
 import { html, useEffect, useMemo, useRef, useState } from '../lib/preact.js';
 import { updateProject } from '../model/store.js';
 import { uid } from '../model/ids.js';
 import { activePlan, ZONE_TYPES } from '../model/schema.js';
 import { pointInPoly, polyArea, polyCentroid } from '../model/geometry.js';
-import { STAGED_VIEWS, assemblyConnections, defaultView, flatRot, layOutAssembly, membersArea, stagedPoly, stagingSpots, viewSizes } from '../model/plan.js';
+import { STAGED_VIEWS, assemblyConnections, assemblyOffsets, defaultView, flatRot, layOutAssembly, membersArea, stagedPoly, stagingSpots, viewSizes } from '../model/plan.js';
+import { isAssemblyItem, planOrder } from '../model/buildorder.js';
 import { jointLabel } from '../model/plan.js';
 import { fmt } from '../sim/simulate.js';
 import { useCamera, gridLines } from './camera.js';
@@ -21,7 +23,7 @@ export function StagingTab({ project, model, sim }) {
   const T = project.timing;
   const [sel, setSel] = useState(null);
   const [filter, setFilter] = useState('');
-  const [pulling, setPulling] = useState(null); // {id, x, y}: a member being dragged from the list
+  const [pulling, setPulling] = useState(null); // {id, ids?, x, y}: a piece (or an assembly's pieces) being dragged from the list
   const [guides, setGuides] = useState([]);
   const dragRef = useRef(null);
 
@@ -39,7 +41,39 @@ export function StagingTab({ project, model, sim }) {
   plan.assemblies.forEach((a, i) => { for (const id of a.memberIds) asmOf.set(id, { a, color: ASM_COLORS[i % ASM_COLORS.length] }); });
   const conns = assemblyConnections(project, model, plan, spots);
   const selMember = sel ? model.memberById.get(sel) : null;
+  const selAsm = sel ? asmOf.get(sel)?.a : null;
   const polyOf = (m, spot = spots.get(m.id)) => stagedPoly(m, spot);
+  const order = useMemo(() => planOrder(model, plan), [model, plan]);
+  const isPlaced = (id) => !!site.staging[id];
+
+  // An assembly's pieces as a group: already placed, they keep how they lie relative to each other;
+  // otherwise they're laid out the way they go together. Spots for the group centered at (x, y).
+  const groupSpots = (ids, x, y) => {
+    const out = new Map();
+    if (ids.every(isPlaced)) {
+      const all = ids.map((id) => spots.get(id));
+      const cx = all.reduce((t, q) => t + q.x, 0) / all.length, cy = all.reduce((t, q) => t + q.y, 0) / all.length;
+      ids.forEach((id, i) => out.set(id, { ...keepOf(all[i]), x: x + all[i].x - cx, y: y + all[i].y - cy }));
+    } else {
+      const off = assemblyOffsets(model, ids);
+      for (const id of ids) out.set(id, { x: x + off.get(id)[0], y: y + off.get(id)[1], rot: 0 });
+    }
+    return out;
+  };
+  const placeMany = (map, key) => updateProject((p) => { for (const [id, sp] of map) p.site.staging[id] = roundSpot(sp); }, { key });
+  // Turn a placed group about its middle.
+  const turnGroup = (ids, by) => {
+    const all = ids.filter(isPlaced).map((id) => [id, spots.get(id)]);
+    if (!all.length) return;
+    const cx = all.reduce((t, [, q]) => t + q.x, 0) / all.length, cy = all.reduce((t, [, q]) => t + q.y, 0) / all.length;
+    const a = (by * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a);
+    placeMany(new Map(all.map(([id, q]) => {
+      const m = model.memberById.get(id);
+      const rot = (q.rot ?? flatRot(m, q.view || defaultView(m))) + by;
+      return [id, { ...keepOf(q), x: cx + (q.x - cx) * c - (q.y - cy) * s, y: cy + (q.x - cx) * s + (q.y - cy) * c, rot: ((rot % 360) + 360) % 360 }];
+    })));
+  };
+  const unplaceMany = (ids) => { updateProject((p) => { for (const id of ids) delete p.site.staging[id]; }); setSel(null); };
 
   const place = (id, spot, key) => updateProject((p) => { p.site.staging[id] = spot; }, { key });
   const unplace = (id) => { updateProject((p) => { delete p.site.staging[id]; }); setSel(null); };
@@ -69,6 +103,7 @@ export function StagingTab({ project, model, sim }) {
     const r = cam.svgRef.current.getBoundingClientRect();
     if (!cam.ready || p.x < r.left || p.x > r.right || p.y < r.top || p.y > r.bottom) return null;
     const w = toWorld(p.x - r.left, p.y - r.top);
+    if (p.ids) return { group: groupSpots(p.ids, w.u, w.v), lines: [] };
     const m = model.memberById.get(p.id);
     const view = p.view || defaultView(m);
     return snapped(m, { x: w.u, y: w.v, rot: flatRot(m, view), view }, p.shift);
@@ -83,13 +118,14 @@ export function StagingTab({ project, model, sim }) {
     // V changes which way up it'll sit, before it's even dropped.
     const key = (e) => {
       if (e.key.toLowerCase() !== 'v') return;
-      setPulling((p) => p && { ...p, view: nextView(p.view || defaultView(model.memberById.get(p.id))) });
+      setPulling((p) => p && !p.ids && { ...p, view: nextView(p.view || defaultView(model.memberById.get(p.id))) });
     };
     window.addEventListener('keydown', key);
     const up = (e) => {
-      const p = { id: pulling.id, x: e.clientX, y: e.clientY, shift: e.shiftKey, view: viewRef.current };
+      const p = { id: pulling.id, ids: pulling.ids, x: e.clientX, y: e.clientY, shift: e.shiftKey, view: viewRef.current };
       const hit = pullRef.current(p);
-      if (hit) { place(p.id, roundSpot(hit.spot)); setSel(p.id); }
+      if (hit?.group) { placeMany(hit.group); setSel(p.ids[0]); }
+      else if (hit) { place(p.id, roundSpot(hit.spot)); setSel(p.id); }
       setPulling(null);
       setGuides([]);
     };
@@ -103,9 +139,9 @@ export function StagingTab({ project, model, sim }) {
     const onKey = (e) => {
       if (isTyping(e) || !sel || pulling) return; // (while dragging one in, keys are for that one)
       const key = e.key.toLowerCase();
-      if (key === 'r') turn(sel, e.shiftKey ? -15 : 90);
+      if (key === 'r') { if (selAsm && !e.altKey) turnGroup(selAsm.memberIds, e.shiftKey ? -15 : 90); else turn(sel, e.shiftKey ? -15 : 90); }
       else if (key === 'v') setView(sel, nextView(viewOf(sel)));
-      else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); unplace(sel); }
+      else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); if (selAsm && !e.altKey) unplaceMany(selAsm.memberIds); else unplace(sel); }
       else if (e.key === 'Escape') setSel(null);
     };
     window.addEventListener('keydown', onKey);
@@ -131,7 +167,9 @@ export function StagingTab({ project, model, sim }) {
     if (m) {
       setSel(m.id);
       const s = spots.get(m.id);
-      dragRef.current = { id: m.id, orig: keepOf(s), start: w, key: 'stage-' + uid() };
+      const a = asmOf.get(m.id)?.a;
+      const group = a && !e.altKey ? a.memberIds.filter(isPlaced) : null;
+      dragRef.current = { id: m.id, orig: keepOf(s), start: w, key: 'stage-' + uid(), group: group && group.length > 1 ? new Map(group.map((id) => [id, keepOf(spots.get(id))])) : null };
       return;
     }
     if (e.button === 0) setSel(null);
@@ -143,6 +181,10 @@ export function StagingTab({ project, model, sim }) {
     if (!d) return;
     const { sx, sy } = eventPos(e);
     const w = toWorld(sx, sy);
+    if (d.group) {
+      placeMany(new Map([...d.group].map(([id, q]) => [id, { ...q, x: q.x + w.u - d.start.u, y: q.y + w.v - d.start.v }])), d.key);
+      return;
+    }
     const m = model.memberById.get(d.id);
     const s = snapped(m, { ...d.orig, x: d.orig.x + w.u - d.start.u, y: d.orig.y + w.v - d.start.v }, e.shiftKey);
     setGuides(s.lines);
@@ -157,7 +199,7 @@ export function StagingTab({ project, model, sim }) {
   return html`<div class="tab-layout">
     <div class="main">
       <div class="toolbar">
-        <span class="muted">Drag members from the list onto the yard. Drag to move (they snap together; Shift places freely), V switches between its side, top and front views, R turns 90°, Shift+R turns 15°, Delete sends one back to the list. Scroll to zoom, drag empty space to pan.</span>
+        <span class="muted">Drag assemblies and pieces from the build order onto the yard. An assembly comes in laid out the way it goes together, and moves and turns as one (hold Alt to move or turn just one of its pieces). Drag to move (pieces snap together; Shift places freely), V switches a piece between its side, top and front views, R turns 90°, Shift+R turns 15°, Delete sends it back to the list. Scroll to zoom, drag empty space to pan.</span>
         <span class="spacer"></span>
         <button onClick=${() => cam.fit(bounds)}>Members area</button>
         <button onClick=${() => cam.fit({ minU: 0, maxU: site.width, minV: 0, maxV: site.depth })}>Whole site</button>
@@ -174,7 +216,7 @@ export function StagingTab({ project, model, sim }) {
           })}
           ${placed.map((m) => {
             const q = polyOf(m);
-            const on = sel === m.id;
+            const on = sel === m.id || (selAsm && selAsm.memberIds.includes(m.id) && asmOf.get(m.id)?.a === selAsm);
             const color = asmOf.get(m.id)?.color || '#475569';
             const c = spots.get(m.id);
             const s = toScreen(c.x, c.y);
@@ -190,7 +232,8 @@ export function StagingTab({ project, model, sim }) {
             return html`<circle key=${'t' + j.joint.id} cx=${s.x} cy=${s.y} r="6" fill="#16a34a" stroke="#fff" stroke-width="1.5" pointer-events="none"><title>${jointLabel(model, j.joint)}: touching where it bolts</title></circle>`;
           }))}
           ${guides.map(([a, b], i) => { const p = toScreen(a[0], a[1]), q = toScreen(b[0], b[1]); return html`<line key=${'g' + i} x1=${p.x} y1=${p.y} x2=${q.x} y2=${q.y} stroke="#ec4899" stroke-width="3" pointer-events="none" />`; })}
-          ${ghost && html`<polygon points=${stagedPoly(model.memberById.get(pulling.id), ghost.spot).map(S).join(' ')} fill="#f59e0b" fill-opacity="0.3" stroke="#f59e0b" stroke-width="2" stroke-dasharray="6 4" pointer-events="none" />`}
+          ${ghost && !ghost.group && html`<polygon points=${stagedPoly(model.memberById.get(pulling.id), ghost.spot).map(S).join(' ')} fill="#f59e0b" fill-opacity="0.3" stroke="#f59e0b" stroke-width="2" stroke-dasharray="6 4" pointer-events="none" />`}
+          ${ghost?.group && [...ghost.group].map(([id, sp]) => html`<polygon key=${'gh' + id} points=${stagedPoly(model.memberById.get(id), sp).map(S).join(' ')} fill="#f59e0b" fill-opacity="0.3" stroke="#f59e0b" stroke-width="2" stroke-dasharray="6 4" pointer-events="none" />`)}
         </svg>
       </div>
       <div class="hint-bar">${unplaced.length ? `${unplaced.length} member${unplaced.length === 1 ? ' is' : 's are'} not placed yet; until they are, the simulation stacks them in the members area.` : 'Every member has its own spot.'}
@@ -198,24 +241,42 @@ export function StagingTab({ project, model, sim }) {
     </div>
     <aside class="side">
       <div data-tour="staging-list">
-      <${Section} title=${`Members (${placed.length} of ${model.members.length} placed)`}>
-        <input type="search" placeholder="Filter members" value=${filter} onInput=${(e) => setFilter(e.target.value)} />
-        <ul class="stage-list">${shown.map((m) => {
-          const a = asmOf.get(m.id);
-          const on = !!site.staging[m.id];
-          return html`<li key=${m.id} class=${(on ? 'placed ' : '') + (sel === m.id ? 'sel' : '')}
-            onPointerDown=${(e) => { if (e.button !== 0) return; e.preventDefault(); setPulling({ id: m.id, x: e.clientX, y: e.clientY }); }}
-            onClick=${() => on && setSel(m.id)} title="Drag onto the yard">
+      <${Section} title=${`Build order (${placed.length} of ${model.members.length} pieces placed)`}>
+        <${Hint}>In the order they go in (tab 5 → Build order). Drag one onto the yard; an assembly brings all its pieces, laid out the way they go together.<//>
+        <input type="search" placeholder="Filter" value=${filter} onInput=${(e) => setFilter(e.target.value)} />
+        <ul class="stage-list">${order.map((it, i) => {
+          const multi = isAssemblyItem(it);
+          const a = multi ? asmOf.get(it.memberIds[0]) : null;
+          const names = it.memberIds.map((id) => model.memberById.get(id)?.name || '?');
+          const title = multi ? a?.a.name || 'Assembly' : names[0];
+          if (filter && ![title, ...names].some((x) => x.toLowerCase().includes(filter.toLowerCase()))) return null;
+          const n = it.memberIds.filter(isPlaced).length;
+          const on = n === it.memberIds.length;
+          const m0 = model.memberById.get(it.memberIds[0]);
+          const isSel = it.memberIds.includes(sel);
+          return html`<li key=${it.id} class=${(on ? 'placed ' : '') + (isSel ? 'sel ' : '') + (multi ? 'asm-row' : '')} data-stage-item=${i}
+            onPointerDown=${(e) => { if (e.button !== 0) return; e.preventDefault(); setPulling(multi ? { id: it.memberIds[0], ids: [...it.memberIds], x: e.clientX, y: e.clientY } : { id: it.memberIds[0], x: e.clientX, y: e.clientY }); }}
+            onClick=${() => n && setSel(it.memberIds.find(isPlaced))} title="Drag onto the yard">
             <span class="grip">⋮⋮</span>
+            <span class="num">${i + 1}</span>
             ${a && html`<span class="dot" style=${{ background: a.color }}></span>`}
-            <span class="nm">${m.name}</span>
-            ${on && viewOf(m.id) !== 'side' && html`<span class="view-tag">${STAGED_VIEWS[viewOf(m.id)].label}</span>`}
-            <span class="muted small">${m.long.toFixed(0)} × ${m.wide.toFixed(0)} in</span>
-            <span class=${on ? 'ok small' : 'muted small'}>${on ? '✔' : ''}</span></li>`;
+            <span class="nm">${multi ? html`<b>${title}</b> <span class="muted small">${names.join(' + ')}</span>` : title}</span>
+            ${!multi && on && viewOf(m0.id) !== 'side' && html`<span class="view-tag">${STAGED_VIEWS[viewOf(m0.id)].label}</span>`}
+            ${!multi && html`<span class="muted small">${m0.long.toFixed(0)} × ${m0.wide.toFixed(0)} in</span>`}
+            <span class=${on ? 'ok small' : 'muted small'}>${on ? '✔' : n ? `${n}/${it.memberIds.length}` : ''}</span></li>`;
         })}</ul>
       <//>
       </div>
-      ${selMember && html`<${Section} title=${'Member · ' + selMember.name}>
+      ${selAsm && html`<${Section} title=${'Assembly · ' + selAsm.name}>
+        <div class="row">
+          <button onClick=${() => turnGroup(selAsm.memberIds, -90)}>⟲ 90°</button>
+          <button onClick=${() => turnGroup(selAsm.memberIds, 90)}>⟳ 90°</button>
+          <button title="Lay its pieces out again the way they go together, in a free spot" onClick=${() => updateProject((p) => { layOutAssembly(p, model, p.plans.find((x) => x.id === p.activePlanId).assemblies.find((x) => x.id === selAsm.id)); })}>Lay out</button>
+          <button onClick=${() => unplaceMany(selAsm.memberIds)}>Back to the list</button>
+        </div>
+        <${Hint}>It moves and turns as one. Hold Alt to move or turn just ${selMember?.name}.<//>
+      <//>`}
+      ${selMember && html`<${Section} title=${'Piece · ' + selMember.name}>
         <div class="row">
           <button onClick=${() => turn(sel, -90)}>⟲ 90°</button>
           <button onClick=${() => turn(sel, 90)}>⟳ 90°</button>

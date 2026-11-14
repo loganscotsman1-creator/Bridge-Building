@@ -8,7 +8,7 @@ import { emptyProject, normalizeProject } from '../js/model/schema.js';
 import { site2027, RULES_2027 } from '../js/model/rules2027.js';
 import { autoBolts, clampBox, newBox, removeMember } from '../js/model/edit.js';
 import { snapBox, snapPoint, snapSize } from '../js/ui/snap.js';
-import { assemblyConnections, defaultView, layOutAssembly, membersArea, stagedPoly, stagingSpots, viewSizes } from '../js/model/plan.js';
+import { assemblyConnections, assemblyOffsets, defaultView, layOutAssembly, membersArea, stagedPoly, stagingSpots, viewSizes } from '../js/model/plan.js';
 import { stateAt } from '../js/sim/playback.js';
 import { TOURS, dueTour } from '../js/ui/Tour.js';
 import { feetInches, parseLength, snapZoneEdge, snapZoneMove } from '../js/model/zonesnap.js';
@@ -1489,6 +1489,17 @@ await test('build order window: with no order yet, everything waits to be picked
   delete pl.order;
   assert(planOrder(model, pl, { fill: false }).length === 0, 'starts empty');
   assert(planOrder(model, pl).length > 0, 'the game and timeline still get a full order');
+});
+
+await test('staging: an assembly laid out from its offsets touches where it bolts', () => {
+  const p = normalizeProject(createExampleProject());
+  const model = buildModel(p);
+  const a = p.plans[0].assemblies[0];
+  const off = assemblyOffsets(model, a.memberIds);
+  assert(a.memberIds.every((id) => off.has(id)), 'every piece has a spot');
+  for (const id of a.memberIds) p.site.staging[id] = { x: 640 + off.get(id)[0], y: 60 + off.get(id)[1], rot: 0 };
+  const c = assemblyConnections(p, model, p.plans[0]).find((x) => x.assembly.id === a.id);
+  assert(c.joints.length && c.joints.every((j) => j.touching), c.joints.map((j) => j.touching).join());
 });
 
 await test('old (version 1) project files still open', () => {
