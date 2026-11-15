@@ -3,9 +3,9 @@
 //   2 · game play: the bridge and its build order, staging, bumping, boost
 //   3 · timing: how long things take, speeds, penalties
 // Player 1 runs them all from a controller (or their keys), with no pointer: the stick or d-pad
-// moves a highlight over the settings and buttons; A on a button presses it, A on a setting starts
-// changing it (up/down, then A or B when done); Start goes on (and starts the game from the last
-// screen), B goes back.
+// moves a highlight to the button or setting beside, above or below it on screen (every element
+// marked data-nav); A presses a button, or starts changing a number (up/down within its range, then
+// A or B when done); Start goes on (and starts the game from the last screen), B goes back.
 import { html, useEffect, useRef, useState } from '../../../js/lib/preact.js';
 import { bridgeToSite, footingRanges } from '../../../js/model/geometry.js';
 import { membersArea, sideOf } from '../../../js/model/plan.js';
@@ -16,63 +16,68 @@ import { KEYBOARDS, deviceHelp, deviceName, endFrame, pressedDevices, readDevice
 
 export const PLAYER_COLORS = ['#e11d48', '#2563eb', '#16a34a', '#d97706'];
 
-// The time settings, and how far one press of left/right moves each on a controller.
+// The time settings, each with how far one press moves it and the range it can be set to.
 const TIMES = [
-  { key: 'fastenTime', label: 'Fasten one nut (hold X)', unit: 's', step: 0.1 },
-  { key: 'assemblyTime', label: 'Make an assembly (hold X)', unit: 's', step: 0.5, title: "Every assembly takes this long. 0 uses each assembly's time from the sequencer." },
-  { key: 'fallPenalty', label: 'Penalty when the bridge falls', unit: 's', step: 5 },
-  { key: 'grace', label: 'Time to take hold of the bridge', unit: 's', step: 0.5 },
-  { key: 'neglect', label: 'Unfastened bolts flash after', unit: 's', step: 1 },
-  { key: 'walkSpeed', label: 'Walking speed', unit: 'in/s', step: 2 },
-  { key: 'carrySpeed', label: 'Carrying speed', unit: 'in/s', step: 2 },
-  { key: 'reach', label: 'Reach', unit: 'in', step: 2 },
-  { key: 'passReach', label: 'Reach to pass a piece', unit: 'in', step: 5 },
-  { key: 'bumpPenalty', label: 'Penalty for a piece dropped in a bump', unit: 's', step: 1, title: 'Only with bumping on' },
-  { key: 'unplaceablePenalty', label: 'Penalty for each piece nobody can reach to place', unit: 's', step: 10, title: 'Added at the end' },
-  { key: 'unreachablePenalty', label: 'Penalty for each bolt nobody can reach', unit: 's', step: 1, title: 'Added at the end' },
+  { key: 'fastenTime', label: 'Fasten one nut (hold X)', unit: 's', step: 0.1, min: 0.2, max: 10 },
+  { key: 'assemblyTime', label: 'Make an assembly (hold X)', unit: 's', step: 0.5, min: 0, max: 30, title: "Every assembly takes this long. 0 uses each assembly's time from the sequencer." },
+  { key: 'fallPenalty', label: 'Penalty when the bridge falls', unit: 's', step: 5, min: 0, max: 120 },
+  { key: 'grace', label: 'Time to take hold of the bridge', unit: 's', step: 0.5, min: 0.5, max: 10 },
+  { key: 'neglect', label: 'Unfastened bolts flash after', unit: 's', step: 1, min: 1, max: 30 },
+  { key: 'walkSpeed', label: 'Walking speed', unit: 'in/s', step: 2, min: 20, max: 150 },
+  { key: 'carrySpeed', label: 'Carrying speed', unit: 'in/s', step: 2, min: 10, max: 120 },
+  { key: 'reach', label: 'Reach', unit: 'in', step: 2, min: 20, max: 80 },
+  { key: 'passReach', label: 'Reach to pass a piece', unit: 'in', step: 5, min: 60, max: 150 },
+  { key: 'bumpPenalty', label: 'Penalty for a piece dropped in a bump', unit: 's', step: 1, min: 0, max: 30, title: 'Only with bumping on' },
+  { key: 'unplaceablePenalty', label: 'Penalty for each piece nobody can reach to place', unit: 's', step: 10, min: 0, max: 300, title: 'Added at the end' },
+  { key: 'unreachablePenalty', label: 'Penalty for each bolt nobody can reach', unit: 's', step: 1, min: 0, max: 60, title: 'Added at the end' },
 ];
-const COM_SPEED = { key: 'comSpeed', label: 'Computer speed factor', unit: '%', step: 5, title: "How fast every computer (COMs, the holder and the assembler) walks, carries, fastens and assembles, as a share of the players' speeds." };
+const COM_SPEED = { key: 'comSpeed', label: 'Computer speed factor', unit: '%', step: 5, min: 10, max: 150, title: "How fast every computer (COMs, the holder and the assembler) walks, carries, fastens and assembles, as a share of the players' speeds." };
+const NUMBERS = new Map([...TIMES, COM_SPEED].map((t) => [t.key, t]));
 const DEFAULTS = { assemblyTime: 4, comSpeed: 80, bumpPenalty: 5, unplaceablePenalty: 60, unreachablePenalty: 10 };
 export const STEPS = ['Players', 'Game play', 'Timing'];
-// Highlighted items that are buttons (A presses them); everything else is a setting (A edits it).
-const BUTTONS = new Set(['next', 'back', 'start', 'src:example', 'src:mine']);
+
+// A number kept to its range and to its step (so 0.1 steps don't drift to 0.30000004).
+export function clampSetting(key, v) {
+  const t = NUMBERS.get(key);
+  if (!t) return v;
+  const r = Math.round(Math.min(t.max, Math.max(t.min, v)) / t.step) * t.step;
+  return Math.round(Math.min(t.max, Math.max(t.min, r)) * 1000) / 1000;
+}
+// Up / down on a number being changed.
+function nudgeNumber(setup, key, dir) {
+  const t = NUMBERS.get(key);
+  const v = setup.settings[key] ?? DEFAULTS[key] ?? t.min;
+  return { ...setup, settings: { ...setup.settings, [key]: clampSetting(key, v + dir * t.step) } };
+}
+// From one highlighted element, the nearest one in a direction on screen: to the side of it (in
+// its row first), or above or below it (in its column first).
+export function nextNav(els, cur, dx, dy) {
+  const r = cur.getBoundingClientRect();
+  const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+  let best = null, bs = Infinity;
+  for (const e of els) {
+    if (e === cur) continue;
+    const q = e.getBoundingClientRect();
+    const ex = q.left + q.width / 2, ey = q.top + q.height / 2;
+    let ahead, off;
+    if (dx) {
+      ahead = (ex - cx) * dx;
+      off = q.bottom > r.top + 2 && q.top < r.bottom - 2 ? 0 : Math.abs(ey - cy); // same row: no offset
+    } else {
+      ahead = (ey - cy) * dy;
+      off = q.right > r.left + 2 && q.left < r.right - 2 ? 0 : Math.abs(ex - cx); // same column
+    }
+    if (ahead < 4) continue;
+    const score = ahead + off * 3;
+    if (score < bs) { bs = score; best = e; }
+  }
+  return best;
+}
 // The on-screen keyboard for typing a name with a controller.
 const KEYS = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', ' ', '-', '⌫', '✓'];
 const KEY_COLS = 6;
 const isPad = (device) => !KEYBOARDS[device];
 
-// Player 1's list of things to move through with the d-pad on each screen, in screen order.
-function navList(setup, step) {
-  if (step === 0) {
-    return [
-      { id: 'builders' },
-      ...(setup.builders === 5 ? [{ id: 'npcRole' }] : []),
-      ...npcList(setup).helpers.map((_, k) => ({ id: 'com' + k })),
-      ...(npcCount(npcList(setup)) ? [{ id: 'comSpeed' }] : []), // (only with computers playing)
-      { id: 'next' },
-    ];
-  }
-  if (step === 1) return [...(setup.sources || []).map((id) => ({ id })), { id: 'staging' }, { id: 'bumps' }, { id: 'boost' }, { id: 'back' }, { id: 'next' }];
-  return [...TIMES.map((t) => ({ id: t.key, time: t })), { id: 'back' }, { id: 'start' }];
-}
-// Left/right on one of player 1's settings.
-function nudge(setup, id, dir) {
-  if (id === 'staging') return { ...setup, settings: { ...setup.settings, freeStaging: !setup.settings.freeStaging } };
-  if (id === 'bumps') return { ...setup, settings: { ...setup.settings, bumps: !setup.settings.bumps } };
-  if (id === 'boost') return { ...setup, settings: { ...setup.settings, boost: !setup.settings.boost } };
-  if (id === 'builders') return { ...setup, builders: Math.max(4, Math.min(6, setup.builders + dir)) };
-  if (id === 'npcRole') return { ...setup, npcRole: setup.npcRole === 'holder' ? 'assembler' : 'holder' };
-  if (id.startsWith('com')) {
-    const k = +id.slice(3), hs = npcList(setup).helpers;
-    const cs = hs.map((h) => h.side);
-    cs[k] = cs[k] === 'west' ? 'east' : 'west';
-    return { ...setup, comSides: cs };
-  }
-  const t = id === 'comSpeed' ? COM_SPEED : TIMES.find((x) => x.key === id);
-  if (!t) return setup;
-  const v = Math.max(0, Math.round(((setup.settings[id] ?? 0) + dir * t.step) * 100) / 100);
-  return { ...setup, settings: { ...setup.settings, [id]: v } };
-}
 // Typing one key into a name: capitals at the start of a word, small letters after.
 function typeKey(name, key, fresh) {
   if (key === '⌫') return fresh ? '' : name.slice(0, -1);
@@ -130,26 +135,26 @@ export function Setup({ project, model, from, order, setup, setSetup, onProject,
   const setupRef = useRef(setup);
   setupRef.current = setup;
   const [flash, setFlash] = useState(null);
-  // Player 1 moves through the settings with the stick: which one is highlighted.
-  // (Both are kept in refs the controller loop reads and writes right away, mirrored into state to
-  // redraw, so a quick press never acts on an out-of-date screen.)
-  const [navAt, setNavAtState] = useState(0);
-  const navRef = useRef(0);
-  const setNavAt = (fn) => { navRef.current = fn(navRef.current); setNavAtState(navRef.current); };
+  // What player 1 has highlighted: the data-nav id of a button or setting on screen.
+  // (Kept in a ref the controller loop reads and writes right away, mirrored into state to redraw,
+  // so a quick press never acts on an out-of-date screen.)
+  const [navId, setNavIdState] = useState(null);
+  const navRef = useRef(null);
+  const setNavId = (id) => { navRef.current = id; setNavIdState(id); };
   // Name editors open with Y: device -> {cursor, fresh}.
   const [editing, setEditingState] = useState({});
   const edRef = useRef({});
   const setEditing = (fn) => { edRef.current = fn(edRef.current); setEditingState(edRef.current); };
-  // The setting player 1 is changing (up/down changes it, A or B is done), if any.
+  // The number player 1 is changing (up/down changes it, A or B is done), if any.
   const [navEdit, setNavEditState] = useState(null);
   const navEditRef = useRef(null);
   const setNavEdit = (id) => { navEditRef.current = id; setNavEditState(id); };
   // Which screen: 0 title and players, 1 game play, 2 timing.
   const [step, setStepState] = useState(0);
   const stepRef = useRef(0);
-  const setStep = (n) => { stepRef.current = n; setStepState(n); navRef.current = 0; setNavAtState(0); setNavEdit(null); window.scrollTo(0, 0); };
+  const setStep = (n) => { stepRef.current = n; setStepState(n); setNavId(null); setNavEdit(null); window.scrollTo(0, 0); };
   const live = useRef({});
-  live.current = { problems, onStart, setStep, onProject };
+  live.current = { problems, onStart, setStep };
 
   // Press A (or Space / slash) to join. Joined players: X switches side, Y types a name (with a
   // controller). Player 1 also moves through the settings (stick up/down, left/right to change,
@@ -210,26 +215,21 @@ export function Setup({ project, model, from, order, setup, setSetup, onProject,
         if (step === 0 && tap('x') && !tap('b')) s = { ...s, players: s.players.map((q, j) => (j === i ? { ...q, side: q.side === 'west' ? 'east' : 'west' } : q)) };
         if (step === 0 && tap('y') && isPad(p.device)) setEditing((e) => ({ ...e, [p.device]: { cursor: 0, fresh: /^Player \d$/.test(p.name) } }));
         if (i === 0) {
-          // Player 1 moves the highlight (stick or d-pad), presses buttons and changes settings.
-          const nav = navList(s, step);
-          const editingId = navEditRef.current;
-          if (editingId && nav.some((n) => n.id === editingId)) {
-            // Changing a setting: up (or right) raises it or flips it, down (or left) lowers it.
+          // Player 1 moves the highlight (stick or d-pad), presses buttons and changes numbers.
+          const els = [...document.querySelectorAll('.oe-setup [data-nav]')].filter((e) => e.offsetParent && !e.disabled);
+          let cur = els.find((e) => e.dataset.nav === navRef.current);
+          if (!cur && els.length) { cur = els.find((e) => !e.dataset.nav.startsWith('tab')) || els[0]; setNavId(cur.dataset.nav); }
+          const changing = navEditRef.current;
+          if (changing) {
+            // Changing a number: up (or right) raises it, down (or left) lowers it, within its range.
             const dir = mv ? (mv.dy ? -mv.dy : mv.dx) : 0;
-            if (dir) s = nudge(s, editingId, dir);
+            if (dir) s = nudgeNumber(s, changing, dir);
             if (tap('a') || tap('b') || tap('start')) setNavEdit(null);
           } else {
-            if (editingId) setNavEdit(null);
-            const d = mv ? mv.dy || mv.dx : 0;
-            if (d) setNavAt((n) => Math.max(0, Math.min(nav.length - 1, (n < 0 ? 0 : n) + d)));
-            const item = nav[Math.max(0, navRef.current)];
-            const pressed = tap('a') ? item?.id : null;
-            if (pressed && !BUTTONS.has(pressed)) setNavEdit(pressed);
-            else if (pressed === 'back' || (tap('b') && step > 0)) L.setStep(step - 1);
-            else if (pressed === 'next' || (tap('start') && step < 2)) L.setStep(step + 1);
-            else if (pressed === 'start' || (tap('start') && step === 2)) { if (!L.problems.length) L.onStart(); }
-            else if (pressed === 'src:example') L.onProject(createExampleProject(), 'example');
-            else if (pressed === 'src:mine') { const saved = loadAutosave(); if (saved) L.onProject(saved, 'sequencer'); }
+            if (mv && cur) { const nx = nextNav(els, cur, mv.dx, mv.dy); if (nx) setNavId(nx.dataset.nav); }
+            if (tap('a') && cur) { if (cur.dataset.num) setNavEdit(cur.dataset.num); else cur.click(); }
+            else if (tap('b') && step > 0) L.setStep(step - 1);
+            else if (tap('start')) { if (step < 2) L.setStep(step + 1); else if (!L.problems.length) L.onStart(); }
           }
         }
         prev.set(p.device, st);
@@ -255,12 +255,10 @@ export function Setup({ project, model, from, order, setup, setSetup, onProject,
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  useEffect(() => { document.querySelector('.oe-navfocus')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }, [navAt]);
-  // The project buttons on the game play screen are in the highlight list too.
-  const sources = [...(from !== 'example' ? ['src:example'] : []), ...(from !== 'sequencer' && loadAutosave() ? ['src:mine'] : [])];
-  setupRef.current = { ...setup, sources }; // (the controller loop reads the list from here)
-  const navId = navList({ ...setup, sources }, step)[navAt]?.id;
+  useEffect(() => { document.querySelector('.oe-navfocus')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }, [navId]);
   const on = (id) => (navId === id ? (navEdit === id ? ' oe-navfocus oe-editing' : ' oe-navfocus') : '');
+  // A button player 1 can highlight and press with A.
+  const nb = (id, chosen, onClick, label, cls = '') => html`<button data-nav=${id} class=${(chosen ? 'on' : '') + cls + on(id)} onClick=${onClick}>${label}</button>`;
 
   const setPlayer = (i, patch) => setSetup({ ...setup, players: setup.players.map((p, j) => (j === i ? { ...p, ...patch } : p)) });
   const setS = (patch) => setSetup({ ...setup, settings: { ...setup.settings, ...patch } });
@@ -273,16 +271,16 @@ export function Setup({ project, model, from, order, setup, setSetup, onProject,
     try { onProject(await readJSONFile(f), 'file'); } catch (e) { alert('Could not open that file: ' + e.message); }
   };
 
-  const toggle = (id, key, offLabel, onLabel) => html`<div class=${'oe-side' + on(id)}>
-    <button class=${!setup.settings[key] ? 'on' : ''} onClick=${() => setS({ [key]: false })}>${offLabel}</button>
-    <button class=${setup.settings[key] ? 'on' : ''} onClick=${() => setS({ [key]: true })}>${onLabel}</button>
+  const toggle = (id, key, offLabel, onLabel) => html`<div class="oe-side">
+    ${nb(id + ':off', !setup.settings[key], () => setS({ [key]: false }), offLabel)}
+    ${nb(id + ':on', !!setup.settings[key], () => setS({ [key]: true }), onLabel)}
   </div>`;
-  const num = (t) => html`<${Num} step=${t.step} label=${t.label} unit=${t.unit} title=${t.title} focus=${on(t.key)} value=${setup.settings[t.key] ?? DEFAULTS[t.key] ?? 0} onChange=${(v) => setS({ [t.key]: Math.max(0, v) })} />`;
+  const num = (t) => html`<${Num} t=${t} focus=${on(t.key)} value=${setup.settings[t.key] ?? DEFAULTS[t.key] ?? t.min} onChange=${(v) => setS({ [t.key]: clampSetting(t.key, v) })} />`;
   const who = `${setup.players.length} player${setup.players.length === 1 ? '' : 's'}${npcCount(npcs) ? ' + ' + npcCount(npcs) + ' computer' + (npcCount(npcs) === 1 ? '' : 's') : ''}`;
 
   return html`<div class=${'oe oe-setup step' + step}>
     <nav class="oe-steps">
-      ${STEPS.map((name, i) => html`<button class=${(i === step ? 'on' : '') + (i < step ? ' done' : '')} onClick=${() => setStep(i)}><b>${i + 1}</b> ${name}</button>`)}
+      ${STEPS.map((name, i) => nb('tab' + i, i === step, () => setStep(i), html`<b>${i + 1}</b> ${name}`, i < step ? ' done' : ''))}
       <span class="spacer"></span>
       <a class="oe-link" href="../">← Build Sequencer</a>
     </nav>
@@ -296,7 +294,7 @@ export function Setup({ project, model, from, order, setup, setSetup, onProject,
       <div class="oe-grid two">
         <section class="oe-card">
           <h2>Players</h2>
-          <p class="oe-hint">Up to four. With a controller, <kbd>X</kbd> switches side and <kbd>Y</kbd> edits your name. Player 1 runs the menus: move the highlight with the stick or d-pad, <kbd>A</kbd> to press a button or change a setting (up/down to change it, <kbd>A</kbd> when done); <kbd>Start</kbd> goes on, <kbd>B</kbd> goes back.</p>
+          <p class="oe-hint">Up to four. With a controller, <kbd>X</kbd> switches side and <kbd>Y</kbd> edits your name. Player 1 runs the menus: move the highlight with the stick or d-pad (left/right to what's beside, up/down to what's above or below), <kbd>A</kbd> to press a button or change a number (up/down to change it, <kbd>A</kbd> when done); <kbd>Start</kbd> goes on, <kbd>B</kbd> goes back.</p>
           <div class="oe-players">
             ${[0, 1, 2, 3].map((i) => {
               const p = setup.players[i];
@@ -304,10 +302,10 @@ export function Setup({ project, model, from, order, setup, setSetup, onProject,
               if (!p && k < npcs.helpers.length) {
                 const side = npcs.helpers[k].side;
                 const setSide = (v) => { const cs = [...(setup.comSides || [])]; for (let j = 0; j < npcs.helpers.length; j++) cs[j] = cs[j] || npcs.helpers[j].side; cs[k] = v; setSetup({ ...setup, comSides: cs }); };
-                return html`<div class=${'oe-slot com' + on('com' + k)} style=${{ '--c': '#64748b' }}>
+                return html`<div class="oe-slot com" style=${{ '--c': '#64748b' }}>
                   <div class="row"><span class="oe-com-badge">C${k + 1}</span><b>COM ${k + 1}</b><small class="oe-dev">computer</small></div>
                   <div class="oe-side">
-                    ${['west', 'east'].map((s2) => html`<button class=${side === s2 ? 'on' : ''} onClick=${() => setSide(s2)}>${s2 === 'west' ? 'West side' : 'East side'}</button>`)}
+                    ${['west', 'east'].map((s2) => nb('com' + k + ':' + s2, side === s2, () => setSide(s2), s2 === 'west' ? 'West side' : 'East side'))}
                   </div>
                   <small class="oe-padhint">Does the nearest job. Press <kbd>A</kbd> to take this spot.</small>
                 </div>`;
@@ -320,7 +318,7 @@ export function Setup({ project, model, from, order, setup, setSetup, onProject,
                   <button class="small" title="Leave" onClick=${() => setSetup({ ...setup, players: setup.players.filter((_, j) => j !== i) })}>✕</button>
                 </div>
                 <div class="oe-side">
-                  ${['west', 'east'].map((s) => html`<button class=${p.side === s ? 'on' : ''} onClick=${() => setPlayer(i, { side: s })}>${s === 'west' ? 'West side' : 'East side'}</button>`)}
+                  ${['west', 'east'].map((s) => nb('p' + i + ':' + s, p.side === s, () => setPlayer(i, { side: s }), s === 'west' ? 'West side' : 'East side'))}
                 </div>
                 <small class="oe-dev" title=${deviceHelp(p.device)}>${deviceName(p.device)}</small>
                 ${editing[p.device] ? html`<div class="oe-osk">
@@ -334,13 +332,13 @@ export function Setup({ project, model, from, order, setup, setSetup, onProject,
         <section class="oe-card">
           <h2>Computers</h2>
           <h3>Builders on the site</h3>
-          <div class=${'oe-side' + on('builders')}>
-            ${[4, 5, 6].map((n) => html`<button class=${setup.builders === n ? 'on' : ''} onClick=${() => setSetup({ ...setup, builders: n })}>${n}</button>`)}
+          <div class="oe-side">
+            ${[4, 5, 6].map((n) => nb('b' + n, setup.builders === n, () => setSetup({ ...setup, builders: n }), String(n)))}
           </div>
           <p class="oe-hint">Spots not taken by a player are filled by computer builders (COM) up to this number. Each COM's side is set on its card; COMs take whatever job is nearest on their side.</p>
-          ${setup.builders === 5 && html`<div class=${'oe-side' + on('npcRole')}>
-            <button class=${setup.npcRole === 'holder' ? 'on' : ''} onClick=${() => setSetup({ ...setup, npcRole: 'holder' })}>NPC holds the bridge</button>
-            <button class=${setup.npcRole === 'assembler' ? 'on' : ''} onClick=${() => setSetup({ ...setup, npcRole: 'assembler' })}>NPC makes assemblies</button>
+          ${setup.builders === 5 && html`<div class="oe-side">
+            ${nb('role:holder', setup.npcRole === 'holder', () => setSetup({ ...setup, npcRole: 'holder' }), 'NPC holds the bridge')}
+            ${nb('role:assembler', setup.npcRole === 'assembler', () => setSetup({ ...setup, npcRole: 'assembler' }), 'NPC makes assemblies')}
           </div>`}
           ${npcs.holder && html`<p class="oe-hint">The holder (${sides.holder} side) holds the bridge, walking out along it as it grows and bolting what it can reach, until it stands; then it does the nearest job.</p>`}
           ${npcs.assembler && html`<p class="oe-hint">The assembler (${sides.assembler} side) makes every assembly (at the computer speed below), then runs pieces. Players can make assemblies alongside it to get ahead.</p>`}
@@ -359,8 +357,8 @@ export function Setup({ project, model, from, order, setup, setSetup, onProject,
           </div>
           <div class="row wrap">
             <button onClick=${openProject}>Open project file…</button>
-            ${from !== 'example' && html`<button class=${on('src:example')} onClick=${() => onProject(createExampleProject(), 'example')}>Use the example bridge</button>`}
-            ${from !== 'sequencer' && loadAutosave() && html`<button class=${on('src:mine')} onClick=${() => onProject(loadAutosave(), 'sequencer')}>Use my Build Sequencer bridge</button>`}
+            ${from !== 'example' && nb('src:example', false, () => onProject(createExampleProject(), 'example'), 'Use the example bridge')}
+            ${from !== 'sequencer' && loadAutosave() && nb('src:mine', false, () => onProject(loadAutosave(), 'sequencer'), 'Use my Build Sequencer bridge')}
           </div>
           <${OrderSummary} project=${project} model=${model} order=${order} settings=${setup.settings} />
           <p class="oe-hint">${from === 'sequencer'
@@ -408,22 +406,32 @@ export function Setup({ project, model, from, order, setup, setSetup, onProject,
         </section>
       </div>`}
 
-    ${navEdit && html`<div class="oe-edit-hint">Changing a setting: <kbd>▲</kbd> <kbd>▼</kbd> to change it · <kbd>A</kbd> done</div>`}
+    ${navEdit && NUMBERS.get(navEdit) && html`<div class="oe-edit-hint">${NUMBERS.get(navEdit).label}: <kbd>▲</kbd> <kbd>▼</kbd> to change (${NUMBERS.get(navEdit).min} to ${NUMBERS.get(navEdit).max} ${NUMBERS.get(navEdit).unit}) · <kbd>A</kbd> done</div>`}
     <footer class="oe-start">
-      ${step > 0 && html`<button class=${'oe-back' + on('back')} onClick=${() => setStep(step - 1)}>← Back</button>`}
+      ${step > 0 && nb('back', false, () => setStep(step - 1), '← Back', 'oe-back')}
       ${step === 2
         ? (problems.length ? html`<ul class="oe-problems">${problems.map((p) => html`<li>${p}</li>`)}</ul>` : html`<span class="oe-ready">Ready: ${who}</span>`)
         : html`<span class="oe-ready muted">${step === 0 ? (setup.players.length ? `${who} · next: game play` : 'Join to play') : 'Next: timing'}</span>`}
       ${step < 2
-        ? html`<button class=${'oe-go' + on('next')} onClick=${() => setStep(step + 1)}>Next →</button>`
-        : html`<button class=${'oe-go' + on('start')} disabled=${problems.length > 0} onClick=${onStart}>Start building</button>`}
+        ? nb('next', false, () => setStep(step + 1), 'Next →', 'oe-go')
+        : html`<button data-nav="start" class=${'oe-go' + on('start')} disabled=${problems.length > 0} onClick=${onStart}>Start building</button>`}
     </footer>
   </div>`;
 }
 
-function Num({ label, unit, value, onChange, title, focus = '', step }) {
-  return html`<label class=${'oe-num' + focus} title=${title}><span>${label}</span><input type="number" min="0" step="any" data-step=${step} value=${value}
-    onInput=${(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v) && v >= 0) onChange(v); }} /><em>${unit}</em></label>`;
+// A number setting: − and + step it within its range (with a controller, highlight it, press A,
+// then up/down); typing works too, kept to the range.
+function Num({ t, value, onChange, focus = '' }) {
+  return html`<div class=${'oe-num' + focus} data-nav=${t.key} data-num=${t.key} title=${(t.title ? t.title + ' ' : '') + `(${t.min} to ${t.max} ${t.unit})`}>
+    <span>${t.label}</span>
+    <span class="oe-stepper">
+      <button tabindex="-1" disabled=${value <= t.min} onClick=${() => onChange(value - t.step)}>−</button>
+      <input type="number" min=${t.min} max=${t.max} step=${t.step} value=${value}
+        onChange=${(e) => { const v = parseFloat(e.target.value); onChange(Number.isFinite(v) ? v : value); }} />
+      <button tabindex="-1" disabled=${value >= t.max} onClick=${() => onChange(value + t.step)}>+</button>
+    </span>
+    <em>${t.unit}</em>
+  </div>`;
 }
 
 function OrderSummary({ project, model, order, settings }) {

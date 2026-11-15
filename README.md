@@ -36,8 +36,10 @@ takes to fasten.
   3. **Timing:** how long things take, speeds, reach, and penalties.
 
   Player 1 runs the menus from their controller (or keys), with no pointer: the stick or d-pad
-  moves a highlight over the settings and buttons; A on a button presses it, and A on a setting
-  starts changing it (up/down changes it, A when done). Start goes on to the next screen (and starts
+  moves a highlight to the button or setting beside it (left/right) or above or below it
+  (up/down), as they're laid out on screen. A presses a button; A on a number starts changing it:
+  up/down steps it within a sensible range for that setting (shown while changing it), A when
+  done. With a mouse, − and + do the same. Start goes on to the next screen (and starts
   building from the last), B goes back. On the results screen, left / right highlights Build again,
   Change setup or Download results; A or Enter picks it, and Start builds again with the same
   settings, straight into the countdown. With 5 builders an NPC either holds the bridge or makes the
