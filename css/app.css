@@ -459,3 +459,9 @@ button.link:hover:not(:disabled) { background: none; color: var(--ink); }
 .stage-list li.asm-row { background: #faf5ff; }
 .stage-list li.asm-row.sel { background: #fef3c7; }
 .stage-list li.asm-row .nm { font-weight: 400; }
+
+/* A two-way switch in a toolbar (Simulate: game look / classic) */
+.seg { display: inline-flex; border: 1px solid #cbd5e1; border-radius: 7px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; background: #fff; padding: 4px 10px; }
+.seg button + button { border-left: 1px solid #cbd5e1; }
+.seg button.on { background: var(--accent); color: #fff; }

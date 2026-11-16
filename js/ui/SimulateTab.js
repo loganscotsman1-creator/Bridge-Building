@@ -1,4 +1,5 @@
-// Simulate tab: play back the build in the game's look (GameView), see who's doing what, and how
+// Simulate tab: play back the build, either in the game's look (GameView) or the classic site plan
+// (PlanView, with its status colors), as chosen in the toolbar; see who's doing what, and how
 // long pieces are held.
 import { html, useEffect, useMemo, useRef, useState } from '../lib/preact.js';
 import { activePlan } from '../model/schema.js';
@@ -26,6 +27,10 @@ export function SimulateTab({ project, model, sim }) {
   const raf = useRef(null);
   const end = sim.endTime;
   const order = useMemo(() => planOrder(model, activePlan(project)), [model, project]);
+  const spots = useMemo(() => stagingSpots(project, model), [project]);
+  // Which playback: 'game' (the game's look) or 'classic' (the site plan). Remembered in this browser.
+  const [look, setLookState] = useState(() => { try { return localStorage.getItem('bss.simLook') === 'classic' ? 'classic' : 'game'; } catch { return 'game'; } });
+  const setLook = (v) => { setLookState(v); try { localStorage.setItem('bss.simLook', v); } catch { /* private mode */ } };
 
   const tRef = useRef(t);
   tRef.current = t;
@@ -83,13 +88,24 @@ export function SimulateTab({ project, model, sim }) {
       </select>
       <input class="scrub" type="range" min="0" max=${end} step="0.1" value=${t} onInput=${(e) => { setPlaying(false); setT(parseFloat(e.target.value)); }} />
       <span class="clock">${fmt(t)} / ${fmt(end)}</span>
+      <span class="seg" data-tour="sim-look" title="How the playback looks">
+        <button class=${look === 'game' ? 'on' : ''} data-look="game" onClick=${() => setLook('game')}>Game look</button>
+        <button class=${look === 'classic' ? 'on' : ''} data-look="classic" onClick=${() => setLook('classic')}>Classic</button>
+      </span>
       <span class="bolt-count" title="Fastened bolts, and bolts inserted but waiting for their nut">${state.boltCounts.fastened} / ${totalBolts} bolts fastened${state.boltCounts.inserted ? html` · <b>${state.boltCounts.inserted} only inserted</b>` : ''}</span>
       <span class="muted">${placed} / ${model.members.length} members placed · ${sim.handoffs} handed across · construction cost ${fmtCost(sim.cost)} · plan "${plan.name}"</span>
     </div>
     <div class="sim-views">
       <div class="sim-plan">
-        <${GameView} project=${project} model=${model} sim=${sim} order=${order} t=${t} setT=${setT} bare=${true}
-          outerPlaying=${playing} onPlay=${() => { if (t >= end) setT(0); setPlaying(!playing); }} />
+        ${look === 'game' ? html`<${GameView} project=${project} model=${model} sim=${sim} order=${order} t=${t} setT=${setT} bare=${true}
+          outerPlaying=${playing} onPlay=${() => { if (t >= end) setT(0); setPlaying(!playing); }} />` : html`
+          <${PlanView} project=${project} model=${model} spots=${spots} state=${state} sel=${sel} setSel=${setSel} />
+          <div class="sim-legend">
+            ${Object.entries({ held: 'Being held', working: 'Being aligned / fastened', stable: 'Stable', unstable: 'Unstable' }).map(([k, l]) => html`<span><i style=${{ background: STATUS_COLORS[k] }}></i>${l}</span>`)}
+            <span class="bolt-key"><i class="round" style=${{ background: BOLT_COLORS.moving }}></i>Bolt on its way</span>
+            <span class="bolt-key"><i class="round" style=${{ background: BOLT_COLORS.fastened }}></i>Fastened</span>
+            <span class="bolt-key"><i class="round ring" style=${{ borderColor: BOLT_COLORS.inserted }}></i>Inserted, nut not on (partly connected)</span>
+          </div>`}
       </div>
       <div class="sim-side">
         <${IsoView} model=${model} styleOf=${styleOf} supports=${state.supports} bolts=${boltDots} label="Bridge at this moment" />

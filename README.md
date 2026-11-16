@@ -367,7 +367,9 @@ and per-bolt time here.
 
 ### 7 · Simulate
 The build plays back in the game's look (see Playback above): press play, change the speed, or
-scrub, and **⛶ Big** fills the window. Beside it, the 3D view shows the bridge at that moment with
+scrub, and **⛶ Big** fills the window. **Classic** in the toolbar switches to the original site-plan
+view instead (builders as dots on the plan, pieces colored held / being fastened / stable /
+unstable, with its legend); **Game look** switches back. The choice is remembered in this browser. Beside it, the 3D view shows the bridge at that moment with
 every bolt: green dots are fastened, amber rings are only inserted (and their members get an amber
 outline, since they're only partly connected), and small gray rings aren't in yet. The toolbar keeps
 a running count, and each builder shows how many bolts they have left.
